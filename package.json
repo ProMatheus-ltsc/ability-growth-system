@@ -11,7 +11,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@shared/core": "file:./packages/shared-core",
+    "@shared/core": "git+https://github.com/ProMatheus-ltsc/shared-core.git",
     "clsx": "^2.1.1",
     "date-fns": "^4.1.0",
     "idb": "^8.0.0",

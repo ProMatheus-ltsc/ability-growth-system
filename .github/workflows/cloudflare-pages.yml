@@ -22,6 +22,13 @@ jobs:
           node-version: 20
           cache: npm
 
+      - name: Force HTTPS for git dependencies
+        # @shared/core 通过 git 依赖引入（lock 中 resolved 为 git+ssh://，runner 无 SSH key），
+        # 重写为 https 拉取（仓库为 public，无需凭据）
+        run: |
+          git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+
       - name: Install dependencies
         run: npm ci
 
