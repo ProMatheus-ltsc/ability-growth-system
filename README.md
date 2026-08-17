@@ -1,8 +1,22 @@
 # 通用能力增长系统
 
 > **副标题**: 覆盖小学 · 初中 · 高中 · 公考等多学段多学科的能力增长与教学管理系统
-> **版本**: V5.1 (交互体验增强版)
-> **PRD 覆盖**: P0 / P1 / P2 全需求
+> **项目版本**: v0.1.0 ｜ **PRD 版本**: V5.1 (交互体验增强版) ｜ **PRD 覆盖**: P0 / P1 / P2 全需求
+
+---
+
+## 技术栈
+
+| 类别 | 选型 |
+|------|------|
+| 框架 | React 19 + TypeScript + Vite 8 |
+| 样式 | Tailwind CSS 3 |
+| 路由 | react-router-dom 6 |
+| 本地存储 | IndexedDB（idb），按账户隔离 15 张 store |
+| 远程备份 | Cloudflare D1（可选，Worker + REST 网关） |
+| 图表 | recharts |
+| 共享基座 | [`@shared/core`](https://github.com/ProMatheus-ltsc/shared-core)（GitHub git 依赖，复用表单引擎/认证/工具层） |
+| 部署 | Cloudflare Pages（GitHub 集成自动构建） |
 
 ---
 
@@ -119,7 +133,7 @@
 ### 4.1 目录结构
 
 ```
-sessionfcab9592950d4331b3/
+ability-growth-system/
 ├── src/
 │   ├── App.tsx                     # 路由 + 身份感知导航 + RoleGuard
 │   ├── main.tsx                    # 入口: BrowserRouter + Providers
@@ -128,7 +142,7 @@ sessionfcab9592950d4331b3/
 │   │   ├── abilityTags.ts          # 三级能力标签体系
 │   │   └── abilityTransfer.ts      # 能力迁移矩阵
 │   ├── services/                   # 服务层
-│   │   ├── localDB.ts              # IndexedDB 抽象
+│   │   ├── localDB.ts              # IndexedDB 抽象（15 store，复用 @shared/core configureDB）
 │   │   ├── remoteSync.ts           # Cloudflare D1 同步
 │   │   ├── analytics.ts            # 基础分析引擎
 │   │   ├── insights.ts             # P2 深度洞察引擎
@@ -139,7 +153,7 @@ sessionfcab9592950d4331b3/
 │   │   ├── useAppSession.tsx       # 身份/学段/学科/当前学生偏好
 │   │   └── useSyncStatus.tsx       # 云端同步状态
 │   ├── components/
-│   │   ├── RoleGuard.tsx           # 路由权限守卫
+│   │   ├── RoleGuard.tsx           # 路由权限守卫（教师专属）
 │   │   ├── Toaster.tsx / MasteryBar.tsx / RadarChart.tsx ...
 │   ├── pages/                      # 学生端页面
 │   │   ├── DashboardPage.tsx
@@ -166,16 +180,16 @@ sessionfcab9592950d4331b3/
 │       ├── TeachingEffectPage.tsx
 │       ├── AIAssistPage.tsx
 │       └── WarningPage.tsx
-├── packages/shared-core/           # 共享基座包 (vendored)
-│   ├── src/services/db.ts          # IndexedDB 基础
-│   ├── src/services/auth.ts        # 账户/密码
-│   ├── src/hooks/useAuth.tsx       # 认证
-│   └── src/components/Layout.tsx   # 应用壳
+├── .github/workflows/              # CI（当前无，部署走 Cloudflare Pages 集成）
 ├── package.json
 ├── vite.config.ts                  # host 0.0.0.0 · port 3000 · strictPort
 ├── tailwind.config.js
 └── tsconfig.app.json
 ```
+
+> **共享基座 @shared/core**：通过 `git+https://github.com/ProMatheus-ltsc/shared-core.git` 引入（见 package.json），
+> 安装到 `node_modules/@shared/core`，提供表单引擎（RHF 增强版）、认证、Layout、PasswordInput、图表等基础能力；
+> tailwind.config.js 已将其 `src` 纳入 content 扫描。
 
 ---
 
@@ -337,22 +351,25 @@ for each week:
 ### 8.1 环境要求
 
 - Node.js ≥ 20
-- tnpm ≥ 10 (或 npm --legacy-peer-deps)
+- npm ≥ 10（依赖从官方 npm 源安装）
 
-### 8.2 启动
+### 8.2 安装与启动
 
 ```bash
-tnpm i --yes --legacy-peer-deps
-tnpm run dev
+npm install
+npm run dev
 # 访问 http://localhost:3000
 ```
+
+> 若本机网络代理导致 GitHub tarball 下载证书校验失败，可临时用 `NPM_CONFIG_STRICT_SSL=false npm install`；
+> `@shared/core` 为 git 依赖，首次安装会从 GitHub 拉取。
 
 ### 8.3 类型检查 & 构建
 
 ```bash
-tnpm run typecheck    # 独立类型检查 (不生成文件)
-tnpm run build        # Vite 构建 (不含 tsc)
-tnpm run preview      # 本地预览生产构建
+npm run typecheck    # 独立类型检查 (不生成文件)
+npm run build        # Vite 构建 (不含 tsc)
+npm run preview      # 本地预览生产构建
 ```
 
 ### 8.4 Vite 服务器配置
@@ -361,7 +378,22 @@ tnpm run preview      # 本地预览生产构建
 
 ---
 
-## 9. 部署 Cloudflare D1
+## 9. 部署
+
+### 9.1 前端：Cloudflare Pages（GitHub 集成）
+
+项目通过 Cloudflare Pages 的 **GitHub 集成**部署：在 Cloudflare Dashboard 创建 Pages 项目并连接本仓库后，
+每次 push 到 `main` 自动构建：
+
+| 配置项 | 值 |
+|--------|-----|
+| 构建命令 | `npm ci && npm run build` |
+| 输出目录 | `dist` |
+| Node 版本 | 20 |
+
+构建时 `npm ci` 会从 GitHub 拉取 `@shared/core`（public 仓库，无需凭据）。
+
+### 9.2 远程备份：Cloudflare D1
 
 见 §5.2 章节的 Worker 骨架示例。 建议按如下步骤:
 
@@ -375,7 +407,7 @@ tnpm run preview      # 本地预览生产构建
 
 ## 10. 版本演进路线
 
-- **v0.1 (当前)**: P0 + P1 + P2 全需求覆盖,单账户 IndexedDB + 可选 D1 同步
+- **v0.1.0 (当前)**: P0 + P1 + P2 全需求覆盖,单账户 IndexedDB + 可选 D1 同步；接入 `@shared/core` 共享基座包
 - v0.2 (规划): 语文/英语/化学/生物 能力标签库补齐
 - v0.3 (规划): 教师端多设备协同、批改照片上传、语音批改
 - v1.0 (规划): 移动端 PWA、离线优先架构完善、多语言
@@ -385,7 +417,7 @@ tnpm run preview      # 本地预览生产构建
 ## 11. 引用
 
 - PRD 版本: V5.1 (交互体验增强版)
-- 共享基座: [`@shared/core`](./packages/shared-core) — 复用 root-cause-analysis / personal_review_system 的表单/账户/工具基础层
+- 共享基座: [`@shared/core`](https://github.com/ProMatheus-ltsc/shared-core)（GitHub git 依赖，复用 root-cause-analysis / personal_review_system 的表单/账户/工具基础层）
 - 图表: recharts
 - 图标: lucide-react
 - 存储: idb (Jake Archibald)
