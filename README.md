@@ -375,22 +375,39 @@ npm run preview      # 本地预览生产构建
 接入步骤：
 
 ```bash
-# 1. 创建 D1 数据库（记下输出的 database_id）
+cd worker
+
+# 1. 安装依赖（含 wrangler）
+npm install
+
+# 2. 登录 Cloudflare（浏览器授权）
+npx wrangler login
+
+# 3. 创建 D1 数据库，记下输出的 database_id
 npx wrangler d1 create ability-growth
 
-# 2. 把 database_id 填入 worker/wrangler.toml
+# 4. 配置 database_id（不写进 wrangler.toml，用环境变量注入，避免明文提交）
+cp .dev.vars.example .dev.vars      # 然后编辑 .dev.vars，填入 D1_DATABASE_ID=<database_id>
 
-# 3. 建表（15 张业务表 + 备份版本表）
-npx wrangler d1 execute ability-growth --remote --file=./worker/schema.sql
+# 5. 建表（15 张业务表 + 备份版本表）
+npm run db:init
 
-# 4. 部署 Worker
-npx wrangler deploy
+# 6. （可选）设置鉴权 Token——用 wrangler secret，不落盘
+npx wrangler secret put SYNC_AUTH_TOKEN   # 输入一个随机串，前端同步页 authToken 填同一个值
+
+# 7. 部署 Worker（自动从 .dev.vars 读取 D1_DATABASE_ID）
+npm run deploy
 ```
+
+> **安全说明**：
+> - `database_id` 通过 `.dev.vars`（已 gitignore）或环境变量 `D1_DATABASE_ID` 注入（wrangler 的 `{VAR}` 插值语法），不提交明文；
+> - 鉴权 Token 用 `wrangler secret put SYNC_AUTH_TOKEN` 设置，运行时读取 `env.SYNC_AUTH_TOKEN`，不进代码库；
+> - 未设置 `D1_DATABASE_ID` 时部署会缺少 D1 绑定，务必先完成第 4 步。
 
 然后在应用「云端同步」页填入：
 - **Worker URL**（如 `https://ability-growth-sync.<你的子域>.workers.dev`）
 - **accountId**（任意账户标识，用于多账户数据隔离，请求头 `X-Sync-Account`）
-- **authToken**（可选；若在 `wrangler.toml` 的 `SYNC_AUTH_TOKEN` 中配置了，则此处必须一致）
+- **authToken**（可选；与第 6 步 secret 设置的值一致，若未设置则留空）
 
 Worker 端点说明见 §5.2，冲突策略为 Last-Write-Wins。
 

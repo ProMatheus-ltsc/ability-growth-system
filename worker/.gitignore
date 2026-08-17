@@ -1,0 +1,2 @@
+# 本地敏感配置（含 D1 database_id、本地 dev token），不提交
+.dev.vars

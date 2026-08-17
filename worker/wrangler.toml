@@ -2,12 +2,15 @@ name = "ability-growth-sync"
 main = "src/index.ts"
 compatibility_date = "2025-01-01"
 
-# D1 数据库绑定（先在 Cloudflare 创建：wrangler d1 create ability-growth）
+# D1 数据库绑定
+# database_id 不写在文件里，通过环境变量 {D1_DATABASE_ID} 注入（wrangler 支持 {} 插值语法）：
+#   - 本地部署：在 worker/.dev.vars 中写 D1_DATABASE_ID=<你的id>（该文件已 gitignore，不会提交）
+#   - CI/云端：在 CI secrets 或 shell 环境变量中设置 D1_DATABASE_ID
 [[d1_databases]]
 binding = "DB"
 database_name = "ability_growth"
-database_id = "<your-d1-id>"   # ← 替换为 wrangler d1 create 输出或 dashboard 中的 database_id
+database_id = "{D1_DATABASE_ID}"
 
-# 可选：设置后前端必须携带相同 Bearer Token（与前端「云端同步」页配置的 authToken 一致）
-[vars]
-SYNC_AUTH_TOKEN = ""
+# 可选鉴权 Token：请勿写在 [vars] 里！
+# 用 `npx wrangler secret put SYNC_AUTH_TOKEN` 设置（运行时通过 env.SYNC_AUTH_TOKEN 读取，不进代码库）。
+# 前端「云端同步」页的 authToken 必须与此一致。
