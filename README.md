@@ -232,31 +232,7 @@ ability-growth-system/
 
 **冲突策略**: Last-Write-Wins,合并时对每个实体按 `updatedAt / createdAt / evaluationTime` 逐条比对; 冲突数会上报便于教师端知情。
 
-**Worker 骨架** (需部署方实现):
-
-```ts
-// wrangler.toml
-[[d1_databases]]
-binding = "DB"
-database_name = "ability_growth"
-database_id  = "<your-d1-id>"
-
-// worker.ts
-export default {
-  async fetch(request, env) {
-    const url = new URL(request.url);
-    const account = request.headers.get('X-Sync-Account');
-    if (url.pathname === '/api/sync/health') return new Response('ok');
-    if (url.pathname === '/api/sync/push') {
-      const { snapshot } = await request.json();
-      // 展开 15 类实体, 按 upsert 写入 D1
-      // ...
-      return Response.json({ conflicts: 0 });
-    }
-    // ... 其他端点
-  },
-};
-```
+**完整 Worker 实现**：见 [`worker/`](./worker) 目录（`wrangler.toml` + `schema.sql` + `src/index.ts`），六个端点全部实现，部署步骤见 §9.2。
 
 ---
 
@@ -395,13 +371,28 @@ npm run preview      # 本地预览生产构建
 
 ### 9.2 远程备份：Cloudflare D1
 
-见 §5.2 章节的 Worker 骨架示例。 建议按如下步骤:
+仓库已提供可直接部署的 Worker 实现（`worker/` 目录），与前端 `src/services/remoteSync.ts` 的 API 契约一一对应。
+接入步骤：
 
-1. `wrangler d1 create ability-growth`
-2. 编写 15 张表的 CREATE TABLE 迁移 (建议每张表附 `id TEXT PRIMARY KEY, updated_at TEXT, ...`)
-3. 实现 `/api/sync/push · pull · backup · restore · health · backups` 六个端点
-4. 部署 Worker: `wrangler deploy`
-5. 在应用「云端同步」页面填入 Worker URL + accountId + 可选 Bearer Token,保存后即可开始双向同步
+```bash
+# 1. 创建 D1 数据库（记下输出的 database_id）
+npx wrangler d1 create ability-growth
+
+# 2. 把 database_id 填入 worker/wrangler.toml
+
+# 3. 建表（15 张业务表 + 备份版本表）
+npx wrangler d1 execute ability-growth --remote --file=./worker/schema.sql
+
+# 4. 部署 Worker
+npx wrangler deploy
+```
+
+然后在应用「云端同步」页填入：
+- **Worker URL**（如 `https://ability-growth-sync.<你的子域>.workers.dev`）
+- **accountId**（任意账户标识，用于多账户数据隔离，请求头 `X-Sync-Account`）
+- **authToken**（可选；若在 `wrangler.toml` 的 `SYNC_AUTH_TOKEN` 中配置了，则此处必须一致）
+
+Worker 端点说明见 §5.2，冲突策略为 Last-Write-Wins。
 
 ---
 

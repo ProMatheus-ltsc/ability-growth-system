@@ -1,0 +1,13 @@
+name = "ability-growth-sync"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+
+# D1 数据库绑定（先在 Cloudflare 创建：wrangler d1 create ability-growth）
+[[d1_databases]]
+binding = "DB"
+database_name = "ability_growth"
+database_id = "<your-d1-id>"   # ← 替换为 wrangler d1 create 输出或 dashboard 中的 database_id
+
+# 可选：设置后前端必须携带相同 Bearer Token（与前端「云端同步」页配置的 authToken 一致）
+[vars]
+SYNC_AUTH_TOKEN = ""
