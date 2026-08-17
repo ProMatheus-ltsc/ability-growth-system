@@ -1,0 +1,14 @@
+{
+  "name": "ability-growth-sync-worker",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "db:init": "wrangler d1 execute ability-growth --remote --file=./schema.sql",
+    "dev": "wrangler dev"
+  },
+  "devDependencies": {
+    "wrangler": "^4.14.0"
+  }
+}
