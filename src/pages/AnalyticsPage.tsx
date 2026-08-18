@@ -213,7 +213,14 @@ export function AnalyticsPage() {
               </ResponsiveContainer>
 
               <div className="mt-4">
-                <div className="font-medium text-slate-800 mb-2">周维度增长趋势</div>
+                <div className="font-medium text-slate-800 mb-2 flex items-center gap-2">
+                  周维度增长趋势
+                  {growthSeries.some((p) => p.emergence) && (
+                    <span className="badge bg-purple-50 text-purple-700 text-[10px]">
+                      ✨ 检出涌现点 {growthSeries.filter((p) => p.emergence).length} 个
+                    </span>
+                  )}
+                </div>
                 <ResponsiveContainer width="100%" height={200}>
                   <LineChart data={growthSeries}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
@@ -221,10 +228,34 @@ export function AnalyticsPage() {
                     <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} />
                     <Tooltip />
                     <Legend />
-                    <Line type="monotone" dataKey="score" stroke="#2563eb" name="整体正确率" />
+                    <Line
+                      type="monotone"
+                      dataKey="score"
+                      stroke="#2563eb"
+                      name="整体正确率"
+                      dot={(props: { cx?: number; cy?: number; payload?: { emergence?: boolean } }) => {
+                        const { cx = 0, cy = 0, payload } = props;
+                        if (payload?.emergence) {
+                          return (
+                            <g key={`em-${cx}-${cy}`}>
+                              <circle cx={cx} cy={cy} r={6} fill="#a855f7" stroke="#fff" strokeWidth={2} />
+                              <text x={cx} y={cy - 10} textAnchor="middle" fontSize={10} fill="#7e22ce">
+                                涌现
+                              </text>
+                            </g>
+                          );
+                        }
+                        return <circle key={`d-${cx}-${cy}`} cx={cx} cy={cy} r={3} fill="#2563eb" />;
+                      }}
+                    />
                     <Line type="monotone" dataKey="unfamiliar" stroke="#f59e0b" name="陌生题正确率" strokeDasharray="4 4" />
                   </LineChart>
                 </ResponsiveContainer>
+                {growthSeries.some((p) => p.emergence) && (
+                  <div className="text-[10px] text-slate-500 mt-1">
+                    ✨ 涌现点:比前 5 周均值跃升 ≥ 12 分——九段心法·涌现的产品挂载(长期积累后的非线性跃迁)
+                  </div>
+                )}
               </div>
             </>
           )}

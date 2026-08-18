@@ -1,22 +1,8 @@
 # 通用能力增长系统
 
 > **副标题**: 覆盖小学 · 初中 · 高中 · 公考等多学段多学科的能力增长与教学管理系统
-> **项目版本**: v0.1.0 ｜ **PRD 版本**: V5.1 (交互体验增强版) ｜ **PRD 覆盖**: P0 / P1 / P2 全需求
-
----
-
-## 技术栈
-
-| 类别 | 选型 |
-|------|------|
-| 框架 | React 19 + TypeScript + Vite 8 |
-| 样式 | Tailwind CSS 3 |
-| 路由 | react-router-dom 6 |
-| 本地存储 | IndexedDB（idb），按账户隔离 15 张 store |
-| 远程备份 | Cloudflare D1（可选，Worker + REST 网关） |
-| 图表 | recharts |
-| 共享基座 | [`@shared/core`](https://github.com/ProMatheus-ltsc/shared-core)（GitHub git 依赖，复用表单引擎/认证/工具层） |
-| 部署 | Cloudflare Pages（GitHub 集成自动构建） |
+> **版本**: V5.8 (AI 接入范围决策版)
+> **PRD 覆盖**: P0 / P1 / P2 全需求 + §30 PDCA 问题跟进 + §31 职业选择 + §18A 学习素养 + §32A A 类 AI 接入
 
 ---
 
@@ -96,6 +82,62 @@
 
 学科枚举已扩展支持: 数学 / 物理 / 行测 / 申论 / 面试 / **语文 / 英语 / 化学 / 生物**。 后 4 科在 v1 中作为占位接口, 用户可自建模块与训练记录, 能力标签库随版本迭代补充。
 
+### 3.6 PRD V5.8 · 问题跟进 PDCA (成年人学段, §30)
+
+| 模块 | 页面 | 说明 |
+|------|------|------|
+| 问题清单 | `/pdca` | 六阶段状态机(P1/P2/P3/D/C/A) · 三种问题类型 · 生活域分类 · 停滞风险排序 |
+| 问题详情 | `/pdca/detail` | 状态轴 + 根因 + 对策(5W1H) + ORID 检查 + **内嵌 iframe 工具** + **产出物归档** + **拉伸区自查** + A 阶段三出口 |
+| 问题日历 | `/pdca-calendar` | 月/周/日视图 · 甘特事件条 · 三色域 · **拖拽改期** · 公考时间线并存 |
+| 周检查清单 | `/pdca-weekly` | 循环衔接触发器: 每周固定推送 D/C/A 阶段问题, 强制填写检查结果 |
+| PDCA 工具箱 | `/pdca-tools` | 自定义工具注册: 名称 + 链接 + 适用阶段 + 嵌入方式 |
+| PDCA 效率分析 | `/pdca-efficiency` | 循环周期统计 · 停滞瓶颈识别 · 成功经验复用池 |
+
+**下一轮 P 计划预生成草稿**: A 阶段选择"下一轮" 时, 系统自动延续高影响根因, 清空对策等待重制。
+
+### 3.7 PRD V5.8 · 职业选择 (初中/高中/成年人, §31)
+
+| 模块 | 页面 | 说明 |
+|------|------|------|
+| 职业测评 | `/career` | 简短版 15+28+20 + 完整版 45+93+60 双题库支持 |
+| 报告页 | `/career` (报告 tab) | 兴趣×能力四象限 + 一票否决 + 三定 + 双路线 + **成就动机细分** + **差异提示** + **AI 拓展** |
+| 学段化输出 | 自动切换 | 初中: 不显示避坑清单 · 高中: 双路线 + 大学专业 · 成年人: 完整三定 |
+| 一票否决可解除 | 报告页 | 二次确认 + 理由留档到 IndexedDB |
+| AI 拓展 (§31.10) | 报告页 | 复制提示词 → 外部 AI → JSON 粘贴回系统 → 价值观否决校验后合并 |
+| 高中专业变体 | 报告页(自动) | 大学专业名称 / 选科要求 / 就业去向 |
+| 教师班级汇总 | `/career-class` | 匿名统计: MBTI 分布 + 四象限分布 + 底线价值分布 |
+
+### 3.8 PRD V5.8 · 学习素养 (K12 通用, §18A)
+
+| 模块 | 页面 | 说明 |
+|------|------|------|
+| 素养五维雷达 | `/literacy` | 元认知 / 时间管理 / 信息检索 / 批判性思维 / 协作沟通 |
+| 行为锚点 | 页面内 | L1/L2/L3 分级, 数据来自训练/复盘/能力缺口 |
+| 协作行为录入 | `/literacy-collab` | 讲题 / 小组任务 / 互助修复 专项行为记录 |
+| 学期报告 | (数据服务) | `buildTermReport` 可派生学期成长报告(每学期) |
+| 与职业选择联动 | 自动 | 高中素养数据校准职业选择·能力检测的自评偏差 |
+
+### 3.9 PRD V5.8 · A 类外部 AI 接入 (§27, §32A)
+
+| 场景 | 页面 | 说明 |
+|------|------|------|
+| 岗位表 AI 解析 | `/ai-job-parse` | 岗位表 CSV/文本 → 结构化 + 硬性条件筛查 |
+| 时政热点素材中心 | `/politics-hotspots` | 按月整理时政 + 行测/申论/面试三科映射 |
+| 职业信息 AI 拓展 | `/career` (报告页) | Plan B/C 备选路线 + 价值观否决校验 |
+| 高中专业变体 | `/career` (报告页) | 学科门类 + 大学专业 + 选科组合 + 就业去向 |
+
+**AI 边界原则**: 严格遵守 §32A A 类准入 - 时效性强 / 本地库无法维护 / 仅信息处理。 B 类推理决策与 C 类核心判定不接入。
+
+### 3.10 P1 补齐 · 特殊学科能力
+
+| 模块 | 页面 | 说明 |
+|------|------|------|
+| 申论作答版本管理 (§14.4) | `/subjective-answers` | 原始答案 → 教师批改 → 二次修改 版本链 |
+| 面试专项训练 (§15.1) | `/interview` | 音频录制 · 思考时间 · 答题时间 · 自评+他评 |
+| 学生 CSV 批量导入 (§29.2) | `/students/import` | CSV/表格粘贴 · 学段/学科自动校验 |
+| 模考诊断→修复任务 | `/exams` | 一键把 <60% 模块转为能力缺口 + 修复任务 |
+| 键盘快捷键 (§29.5) | 全局 | Ctrl+N 新建训练 · Ctrl+R 日复盘 · Ctrl+M 快速标记 |
+
 ---
 
 ## 4. 技术架构
@@ -133,7 +175,7 @@
 ### 4.1 目录结构
 
 ```
-ability-growth-system/
+sessionfcab9592950d4331b3/
 ├── src/
 │   ├── App.tsx                     # 路由 + 身份感知导航 + RoleGuard
 │   ├── main.tsx                    # 入口: BrowserRouter + Providers
@@ -142,7 +184,7 @@ ability-growth-system/
 │   │   ├── abilityTags.ts          # 三级能力标签体系
 │   │   └── abilityTransfer.ts      # 能力迁移矩阵
 │   ├── services/                   # 服务层
-│   │   ├── localDB.ts              # IndexedDB 抽象（15 store，复用 @shared/core configureDB）
+│   │   ├── localDB.ts              # IndexedDB 抽象
 │   │   ├── remoteSync.ts           # Cloudflare D1 同步
 │   │   ├── analytics.ts            # 基础分析引擎
 │   │   ├── insights.ts             # P2 深度洞察引擎
@@ -153,7 +195,7 @@ ability-growth-system/
 │   │   ├── useAppSession.tsx       # 身份/学段/学科/当前学生偏好
 │   │   └── useSyncStatus.tsx       # 云端同步状态
 │   ├── components/
-│   │   ├── RoleGuard.tsx           # 路由权限守卫（教师专属）
+│   │   ├── RoleGuard.tsx           # 路由权限守卫
 │   │   ├── Toaster.tsx / MasteryBar.tsx / RadarChart.tsx ...
 │   ├── pages/                      # 学生端页面
 │   │   ├── DashboardPage.tsx
@@ -180,16 +222,16 @@ ability-growth-system/
 │       ├── TeachingEffectPage.tsx
 │       ├── AIAssistPage.tsx
 │       └── WarningPage.tsx
-├── .github/workflows/              # CI（当前无，部署走 Cloudflare Pages 集成）
+├── packages/shared-core/           # 共享基座包 (vendored)
+│   ├── src/services/db.ts          # IndexedDB 基础
+│   ├── src/services/auth.ts        # 账户/密码
+│   ├── src/hooks/useAuth.tsx       # 认证
+│   └── src/components/Layout.tsx   # 应用壳
 ├── package.json
 ├── vite.config.ts                  # host 0.0.0.0 · port 3000 · strictPort
 ├── tailwind.config.js
 └── tsconfig.app.json
 ```
-
-> **共享基座 @shared/core**：通过 `git+https://github.com/ProMatheus-ltsc/shared-core.git` 引入（见 package.json），
-> 安装到 `node_modules/@shared/core`，提供表单引擎（RHF 增强版）、认证、Layout、PasswordInput、图表等基础能力；
-> tailwind.config.js 已将其 `src` 纳入 content 扫描。
 
 ---
 
@@ -232,7 +274,31 @@ ability-growth-system/
 
 **冲突策略**: Last-Write-Wins,合并时对每个实体按 `updatedAt / createdAt / evaluationTime` 逐条比对; 冲突数会上报便于教师端知情。
 
-**完整 Worker 实现**：见 [`worker/`](./worker) 目录（`wrangler.toml` + `schema.sql` + `src/index.ts`），六个端点全部实现，部署步骤见 §9.2。
+**Worker 骨架** (需部署方实现):
+
+```ts
+// wrangler.toml
+[[d1_databases]]
+binding = "DB"
+database_name = "ability_growth"
+database_id  = "<your-d1-id>"
+
+// worker.ts
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+    const account = request.headers.get('X-Sync-Account');
+    if (url.pathname === '/api/sync/health') return new Response('ok');
+    if (url.pathname === '/api/sync/push') {
+      const { snapshot } = await request.json();
+      // 展开 15 类实体, 按 upsert 写入 D1
+      // ...
+      return Response.json({ conflicts: 0 });
+    }
+    // ... 其他端点
+  },
+};
+```
 
 ---
 
@@ -327,25 +393,22 @@ for each week:
 ### 8.1 环境要求
 
 - Node.js ≥ 20
-- npm ≥ 10（依赖从官方 npm 源安装）
+- tnpm ≥ 10 (或 npm --legacy-peer-deps)
 
-### 8.2 安装与启动
+### 8.2 启动
 
 ```bash
-npm install
-npm run dev
+tnpm i --yes --legacy-peer-deps
+tnpm run dev
 # 访问 http://localhost:3000
 ```
-
-> 若本机网络代理导致 GitHub tarball 下载证书校验失败，可临时用 `NPM_CONFIG_STRICT_SSL=false npm install`；
-> `@shared/core` 为 git 依赖，首次安装会从 GitHub 拉取。
 
 ### 8.3 类型检查 & 构建
 
 ```bash
-npm run typecheck    # 独立类型检查 (不生成文件)
-npm run build        # Vite 构建 (不含 tsc)
-npm run preview      # 本地预览生产构建
+tnpm run typecheck    # 独立类型检查 (不生成文件)
+tnpm run build        # Vite 构建 (不含 tsc)
+tnpm run preview      # 本地预览生产构建
 ```
 
 ### 8.4 Vite 服务器配置
@@ -354,68 +417,21 @@ npm run preview      # 本地预览生产构建
 
 ---
 
-## 9. 部署
+## 9. 部署 Cloudflare D1
 
-### 9.1 前端：Cloudflare Pages（GitHub 集成）
+见 §5.2 章节的 Worker 骨架示例。 建议按如下步骤:
 
-项目通过 Cloudflare Pages 的 **GitHub 集成**部署：在 Cloudflare Dashboard 创建 Pages 项目并连接本仓库后，
-每次 push 到 `main` 自动构建：
-
-| 配置项 | 值 |
-|--------|-----|
-| 构建命令 | `npm ci && npm run build` |
-| 输出目录 | `dist` |
-| Node 版本 | 20 |
-
-构建时 `npm ci` 会从 GitHub 拉取 `@shared/core`（public 仓库，无需凭据）。
-
-### 9.2 远程备份：Cloudflare D1
-
-仓库已提供可直接部署的 Worker 实现（`worker/` 目录），与前端 `src/services/remoteSync.ts` 的 API 契约一一对应。
-接入步骤：
-
-```bash
-cd worker
-
-# 1. 安装依赖（含 wrangler）
-npm install
-
-# 2. 登录 Cloudflare（浏览器授权）
-npx wrangler login
-
-# 3. 创建 D1 数据库，记下输出的 database_id
-npx wrangler d1 create ability-growth
-
-# 4. 配置 database_id（不写进 wrangler.toml，用环境变量注入，避免明文提交）
-cp .dev.vars.example .dev.vars      # 然后编辑 .dev.vars，填入 D1_DATABASE_ID=<database_id>
-
-# 5. 建表（15 张业务表 + 备份版本表）
-npm run db:init
-
-# 6. （可选）设置鉴权 Token——用 wrangler secret，不落盘
-npx wrangler secret put SYNC_AUTH_TOKEN   # 输入一个随机串，前端同步页 authToken 填同一个值
-
-# 7. 部署 Worker（自动从 .dev.vars 读取 D1_DATABASE_ID）
-npm run deploy
-```
-
-> **安全说明**：
-> - `database_id` 通过 `.dev.vars`（已 gitignore）或环境变量 `D1_DATABASE_ID` 注入（wrangler 的 `{VAR}` 插值语法），不提交明文；
-> - 鉴权 Token 用 `wrangler secret put SYNC_AUTH_TOKEN` 设置，运行时读取 `env.SYNC_AUTH_TOKEN`，不进代码库；
-> - 未设置 `D1_DATABASE_ID` 时部署会缺少 D1 绑定，务必先完成第 4 步。
-
-然后在应用「云端同步」页填入：
-- **Worker URL**（如 `https://ability-growth-sync.<你的子域>.workers.dev`）
-- **accountId**（任意账户标识，用于多账户数据隔离，请求头 `X-Sync-Account`）
-- **authToken**（可选；与第 6 步 secret 设置的值一致，若未设置则留空）
-
-Worker 端点说明见 §5.2，冲突策略为 Last-Write-Wins。
+1. `wrangler d1 create ability-growth`
+2. 编写 15 张表的 CREATE TABLE 迁移 (建议每张表附 `id TEXT PRIMARY KEY, updated_at TEXT, ...`)
+3. 实现 `/api/sync/push · pull · backup · restore · health · backups` 六个端点
+4. 部署 Worker: `wrangler deploy`
+5. 在应用「云端同步」页面填入 Worker URL + accountId + 可选 Bearer Token,保存后即可开始双向同步
 
 ---
 
 ## 10. 版本演进路线
 
-- **v0.1.0 (当前)**: P0 + P1 + P2 全需求覆盖,单账户 IndexedDB + 可选 D1 同步；接入 `@shared/core` 共享基座包
+- **v0.1 (当前)**: P0 + P1 + P2 全需求覆盖,单账户 IndexedDB + 可选 D1 同步
 - v0.2 (规划): 语文/英语/化学/生物 能力标签库补齐
 - v0.3 (规划): 教师端多设备协同、批改照片上传、语音批改
 - v1.0 (规划): 移动端 PWA、离线优先架构完善、多语言
@@ -425,7 +441,7 @@ Worker 端点说明见 §5.2，冲突策略为 Last-Write-Wins。
 ## 11. 引用
 
 - PRD 版本: V5.1 (交互体验增强版)
-- 共享基座: [`@shared/core`](https://github.com/ProMatheus-ltsc/shared-core)（GitHub git 依赖，复用 root-cause-analysis / personal_review_system 的表单/账户/工具基础层）
+- 共享基座: [`@shared/core`](./packages/shared-core) — 复用 root-cause-analysis / personal_review_system 的表单/账户/工具基础层
 - 图表: recharts
 - 图标: lucide-react
 - 存储: idb (Jake Archibald)

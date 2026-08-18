@@ -17,6 +17,9 @@ export interface AppPreferences {
   subjects: Subject[];
   currentStudentId?: string;
   onboardingDone?: boolean;
+  /** §25 能力基线是否已建立(至少完成第一次训练) */
+  baselineEstablished?: boolean;
+  baselineEstablishedAt?: string;
 }
 
 const DEFAULT_PREFS: AppPreferences = {

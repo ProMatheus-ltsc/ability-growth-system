@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useAuth, PasswordInput } from '@shared/core';
+import { useAuth } from '@shared/core';
 import { useNavigate } from 'react-router-dom';
 import { Sparkles, LogIn, UserPlus } from 'lucide-react';
 
@@ -9,7 +9,6 @@ export function LoginPage() {
   const [mode, setMode] = useState<'login' | 'register'>(state === 'firstTime' ? 'register' : 'login');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const submit = async (e: React.FormEvent) => {
@@ -56,12 +55,13 @@ export function LoginPage() {
           </div>
           <div>
             <label className="label">密码（≥4位）</label>
-            <PasswordInput
+            <input
+              className="input"
+              type="password"
               value={password}
-              onChange={setPassword}
-              showPassword={showPassword}
-              onToggleVisibility={() => setShowPassword(!showPassword)}
-              maxLength={20}
+              onChange={(e) => setPassword(e.target.value)}
+              minLength={4}
+              required
             />
           </div>
 

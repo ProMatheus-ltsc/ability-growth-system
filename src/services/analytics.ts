@@ -144,7 +144,7 @@ export function buildGrowthSeries(records: TrainingRecord[], subject: Subject) {
     list.push(r);
     buckets.set(week, list);
   }
-  return Array.from(buckets.entries())
+  const raw = Array.from(buckets.entries())
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([week, list]) => {
       const q = list.reduce((s, r) => s + r.totalQuestions, 0);
@@ -156,6 +156,17 @@ export function buildGrowthSeries(records: TrainingRecord[], subject: Subject) {
       const unfamiliar = uq === 0 ? score : Math.round(((uq - ue) / uq) * 100);
       return { week, score, unfamiliar, samples: q };
     });
+  // V5.11 §18 + §30.9(九段心法·涌现) · 涌现点标注
+  // 需要有前置至少 5 周的样本, 且当前分数比前 5 周均值高 ≥ 12 分, 视为"非线性跃迁"
+  return raw.map((pt, idx) => {
+    if (idx < 5) return { ...pt, emergence: false as const };
+    const prev = raw.slice(Math.max(0, idx - 5), idx);
+    const enoughSamples = prev.every((p) => p.samples > 0) && pt.samples > 0;
+    if (!enoughSamples) return { ...pt, emergence: false as const };
+    const mean = prev.reduce((s, p) => s + p.score, 0) / prev.length;
+    const jump = pt.score - mean;
+    return { ...pt, emergence: jump >= 12, jumpDelta: jump };
+  });
 }
 
 function weekKey(dateISO: string): string {

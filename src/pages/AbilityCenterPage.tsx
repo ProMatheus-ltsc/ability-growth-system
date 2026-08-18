@@ -104,19 +104,50 @@ export function AbilityCenterPage() {
           <div className="flex items-center gap-2 mb-3">
             <TrendingUp size={16} className="text-emerald-600" />
             <h2 className="font-semibold text-slate-900">能力增长曲线</h2>
+            {growth.some((p) => p.emergence) && (
+              <span className="badge bg-purple-50 text-purple-700 text-[10px] ml-auto">
+                ✨ 涌现点 {growth.filter((p) => p.emergence).length} 个
+              </span>
+            )}
           </div>
           {growth.length === 0 ? (
             <EmptyState icon={TrendingUp} title="需要更多训练" description="至少 2 周的训练数据后可查看趋势" />
           ) : (
-            <ResponsiveContainer width="100%" height={280}>
-              <LineChart data={growth}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                <XAxis dataKey="week" tick={{ fontSize: 11 }} />
-                <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} />
-                <Tooltip />
-                <Line type="monotone" dataKey="score" stroke="#2563eb" strokeWidth={2} dot={{ r: 3 }} />
-              </LineChart>
-            </ResponsiveContainer>
+            <>
+              <ResponsiveContainer width="100%" height={280}>
+                <LineChart data={growth}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                  <XAxis dataKey="week" tick={{ fontSize: 11 }} />
+                  <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} />
+                  <Tooltip />
+                  <Line
+                    type="monotone"
+                    dataKey="score"
+                    stroke="#2563eb"
+                    strokeWidth={2}
+                    dot={(props: { cx?: number; cy?: number; payload?: { emergence?: boolean } }) => {
+                      const { cx = 0, cy = 0, payload } = props;
+                      if (payload?.emergence) {
+                        return (
+                          <g key={`em-${cx}-${cy}`}>
+                            <circle cx={cx} cy={cy} r={7} fill="#a855f7" stroke="#fff" strokeWidth={2} />
+                            <text x={cx} y={cy - 12} textAnchor="middle" fontSize={10} fill="#7e22ce" fontWeight={700}>
+                              ✨
+                            </text>
+                          </g>
+                        );
+                      }
+                      return <circle key={`d-${cx}-${cy}`} cx={cx} cy={cy} r={3} fill="#2563eb" />;
+                    }}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+              {growth.some((p) => p.emergence) && (
+                <div className="text-[10px] text-slate-500 mt-1 leading-relaxed">
+                  ✨ <b className="text-purple-700">涌现点</b>:比前 5 周均值跃升 ≥ 12 分——九段心法·涌现的产品挂载, 微小叠加转变成系统力量。 单次循环平淡, 长期坚持会在某刻质变。
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>

@@ -106,6 +106,17 @@ const SNAPSHOT_LISTS: (keyof ExportedSnapshot)[] = [
   'registrations',
   'stagePlans',
   'spacedReviews',
+  'pdcaProblems',
+  'careerAssessments',
+  'careerReports',
+  'subjectiveAnswers',
+  'interviewRecords',
+  'pdcaArtifacts',
+  'customTools',
+  'weeklyChecklists',
+  'collaborationEvents',
+  'vetoOverrides',
+  'politicsHotspots',
 ];
 
 function totalRecords(snap: ExportedSnapshot): number {
@@ -303,7 +314,7 @@ function mergeSnapshots(local: ExportedSnapshot, remote: ExportedSnapshot): Merg
   }
 
   return {
-    snapshot: { ...merged, version: '2.0.0', exportedAt: new Date().toISOString() },
+    snapshot: { ...merged, version: '4.0.0', exportedAt: new Date().toISOString() },
     pulled: totalPulled,
     conflicts: totalConflicts,
   };

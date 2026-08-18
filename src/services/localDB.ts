@@ -26,13 +26,32 @@ import type {
   ExamRegistration,
   StagePlan,
   SpacedReviewItem,
+  PDCAProblem,
+  CareerAssessment,
+  CareerReport,
+  SubjectiveAnswer,
+  InterviewRecord,
+  PdcaArtifact,
+  CustomPdcaTool,
+  WeeklyChecklist,
+  CollaborationEvent,
+  CareerVetoOverride,
+  PoliticsHotspot,
+  CareerObservationPoint,
+  RetestReflection,
 } from '../domain/types';
 
 export const APP_DB_PREFIX = 'ability-growth';
 configureDB(APP_DB_PREFIX);
 
-/** 数据库版本 - 每次新增 store 必须递增 */
-const DB_VERSION = 2;
+/** 数据库版本 - 每次新增 store 必须递增
+ *  v1: P0 六大 store
+ *  v2: P1 教师端 + 阶段/间隔复习/报考 (9 张)
+ *  v3: PRD V5.8 - PDCA / 职业测评 / 职业报告 (3 张)
+ *  v4: V5.8 全量补齐 - 申论版本/面试专项/PDCA工具产出/自定义工具/周检查/协作行为/否决解除/时政素材 (8 张)
+ *  v5: V5.11 作答质量保障版 - 3 个月观察点 + 事后反思 2 问 (2 张)
+ */
+const DB_VERSION = 5;
 
 interface AGSchema extends DBSchema {
   trainings: {
@@ -110,6 +129,71 @@ interface AGSchema extends DBSchema {
     value: SpacedReviewItem;
     indexes: { studentId: string; subject: string; nextDueDate: string; status: string };
   };
+  pdcaProblems: {
+    key: string;
+    value: PDCAProblem;
+    indexes: { studentId: string; currentStage: string; status: string; updatedAt: string };
+  };
+  careerAssessments: {
+    key: string;
+    value: CareerAssessment;
+    indexes: { studentId: string; gradeLevel: string; updatedAt: string };
+  };
+  careerReports: {
+    key: string;
+    value: CareerReport;
+    indexes: { studentId: string; assessmentId: string; generatedAt: string };
+  };
+  subjectiveAnswers: {
+    key: string;
+    value: SubjectiveAnswer;
+    indexes: { studentId: string; subject: string; date: string; parentId: string };
+  };
+  interviewRecords: {
+    key: string;
+    value: InterviewRecord;
+    indexes: { studentId: string; date: string };
+  };
+  pdcaArtifacts: {
+    key: string;
+    value: PdcaArtifact;
+    indexes: { problemId: string; stage: string; createdAt: string };
+  };
+  customTools: {
+    key: string;
+    value: CustomPdcaTool;
+    indexes: { name: string; updatedAt: string };
+  };
+  weeklyChecklists: {
+    key: string;
+    value: WeeklyChecklist;
+    indexes: { weekStart: string };
+  };
+  collaborationEvents: {
+    key: string;
+    value: CollaborationEvent;
+    indexes: { studentId: string; date: string; kind: string };
+  };
+  vetoOverrides: {
+    key: string;
+    value: CareerVetoOverride;
+    indexes: { reportId: string; candidateId: string };
+  };
+  politicsHotspots: {
+    key: string;
+    value: PoliticsHotspot;
+    indexes: { yearMonth: string; createdAt: string };
+  };
+  careerObservationPoints: {
+    key: string;
+    value: CareerObservationPoint;
+    indexes: { studentId: string; assessmentId: string; triggeredAt: string };
+  };
+  careerRetestReflections: {
+    key: string;
+    value: RetestReflection;
+    indexes: { studentId: string; assessmentId: string; createdAt: string };
+  };
   meta: {
     key: string;
     value: { key: string; value: unknown };
@@ -131,7 +215,20 @@ export type StoreName =
   | 'strategies'
   | 'registrations'
   | 'stagePlans'
-  | 'spacedReviews';
+  | 'spacedReviews'
+  | 'pdcaProblems'
+  | 'careerAssessments'
+  | 'careerReports'
+  | 'subjectiveAnswers'
+  | 'interviewRecords'
+  | 'pdcaArtifacts'
+  | 'customTools'
+  | 'weeklyChecklists'
+  | 'collaborationEvents'
+  | 'vetoOverrides'
+  | 'politicsHotspots'
+  | 'careerObservationPoints'
+  | 'careerRetestReflections';
 
 const SYNCED_STORES: StoreName[] = [
   'trainings',
@@ -149,6 +246,19 @@ const SYNCED_STORES: StoreName[] = [
   'registrations',
   'stagePlans',
   'spacedReviews',
+  'pdcaProblems',
+  'careerAssessments',
+  'careerReports',
+  'subjectiveAnswers',
+  'interviewRecords',
+  'pdcaArtifacts',
+  'customTools',
+  'weeklyChecklists',
+  'collaborationEvents',
+  'vetoOverrides',
+  'politicsHotspots',
+  'careerObservationPoints',
+  'careerRetestReflections',
 ];
 
 let currentAccountId: string | undefined;
@@ -249,6 +359,75 @@ function db(): Promise<IDBPDatabase<AGSchema>> {
           spacedReviews.createIndex('subject', 'subject');
           spacedReviews.createIndex('nextDueDate', 'nextDueDate');
           spacedReviews.createIndex('status', 'status');
+        }
+
+        if (oldVersion < 3) {
+          const pdca = dbi.createObjectStore('pdcaProblems', { keyPath: 'id' });
+          pdca.createIndex('studentId', 'studentId');
+          pdca.createIndex('currentStage', 'currentStage');
+          pdca.createIndex('status', 'status');
+          pdca.createIndex('updatedAt', 'updatedAt');
+
+          const assess = dbi.createObjectStore('careerAssessments', { keyPath: 'id' });
+          assess.createIndex('studentId', 'studentId');
+          assess.createIndex('gradeLevel', 'gradeLevel');
+          assess.createIndex('updatedAt', 'updatedAt');
+
+          const reports = dbi.createObjectStore('careerReports', { keyPath: 'id' });
+          reports.createIndex('studentId', 'studentId');
+          reports.createIndex('assessmentId', 'assessmentId');
+          reports.createIndex('generatedAt', 'generatedAt');
+        }
+
+        if (oldVersion < 4) {
+          const sa = dbi.createObjectStore('subjectiveAnswers', { keyPath: 'id' });
+          sa.createIndex('studentId', 'studentId');
+          sa.createIndex('subject', 'subject');
+          sa.createIndex('date', 'date');
+          sa.createIndex('parentId', 'parentId');
+
+          const ir = dbi.createObjectStore('interviewRecords', { keyPath: 'id' });
+          ir.createIndex('studentId', 'studentId');
+          ir.createIndex('date', 'date');
+
+          const art = dbi.createObjectStore('pdcaArtifacts', { keyPath: 'id' });
+          art.createIndex('problemId', 'problemId');
+          art.createIndex('stage', 'stage');
+          art.createIndex('createdAt', 'createdAt');
+
+          const ct = dbi.createObjectStore('customTools', { keyPath: 'id' });
+          ct.createIndex('name', 'name');
+          ct.createIndex('updatedAt', 'updatedAt');
+
+          const wc = dbi.createObjectStore('weeklyChecklists', { keyPath: 'id' });
+          wc.createIndex('weekStart', 'weekStart');
+
+          const ce = dbi.createObjectStore('collaborationEvents', { keyPath: 'id' });
+          ce.createIndex('studentId', 'studentId');
+          ce.createIndex('date', 'date');
+          ce.createIndex('kind', 'kind');
+
+          const vo = dbi.createObjectStore('vetoOverrides', { keyPath: 'id' });
+          vo.createIndex('reportId', 'reportId');
+          vo.createIndex('candidateId', 'candidateId');
+
+          const ph = dbi.createObjectStore('politicsHotspots', { keyPath: 'id' });
+          ph.createIndex('yearMonth', 'yearMonth');
+          ph.createIndex('createdAt', 'createdAt');
+        }
+
+        if (oldVersion < 5) {
+          // V5.11 §31.3 · 3 个月观察点
+          const cop = dbi.createObjectStore('careerObservationPoints', { keyPath: 'id' });
+          cop.createIndex('studentId', 'studentId');
+          cop.createIndex('assessmentId', 'assessmentId');
+          cop.createIndex('triggeredAt', 'triggeredAt');
+
+          // V5.11 §31.3 · 事后反思 2 问
+          const crr = dbi.createObjectStore('careerRetestReflections', { keyPath: 'id' });
+          crr.createIndex('studentId', 'studentId');
+          crr.createIndex('assessmentId', 'assessmentId');
+          crr.createIndex('createdAt', 'createdAt');
         }
       },
     });
@@ -398,6 +577,19 @@ export interface ExportedSnapshot {
   registrations: ExamRegistration[];
   stagePlans: StagePlan[];
   spacedReviews: SpacedReviewItem[];
+  pdcaProblems: PDCAProblem[];
+  careerAssessments: CareerAssessment[];
+  careerReports: CareerReport[];
+  subjectiveAnswers: SubjectiveAnswer[];
+  interviewRecords: InterviewRecord[];
+  pdcaArtifacts: PdcaArtifact[];
+  customTools: CustomPdcaTool[];
+  weeklyChecklists: WeeklyChecklist[];
+  collaborationEvents: CollaborationEvent[];
+  vetoOverrides: CareerVetoOverride[];
+  politicsHotspots: PoliticsHotspot[];
+  careerObservationPoints?: CareerObservationPoint[];
+  careerRetestReflections?: RetestReflection[];
 }
 
 async function readAll<S extends StoreName>(store: S): Promise<StoreValue<S>[]> {
@@ -425,6 +617,19 @@ export async function exportSnapshot(): Promise<ExportedSnapshot> {
     registrations,
     stagePlans,
     spacedReviews,
+    pdcaProblems,
+    careerAssessments,
+    careerReports,
+    subjectiveAnswers,
+    interviewRecords,
+    pdcaArtifacts,
+    customTools,
+    weeklyChecklists,
+    collaborationEvents,
+    vetoOverrides,
+    politicsHotspots,
+    careerObservationPoints,
+    careerRetestReflections,
   ] = await Promise.all([
     readAll('trainings'),
     readAll('gaps'),
@@ -441,9 +646,22 @@ export async function exportSnapshot(): Promise<ExportedSnapshot> {
     readAll('registrations'),
     readAll('stagePlans'),
     readAll('spacedReviews'),
+    readAll('pdcaProblems'),
+    readAll('careerAssessments'),
+    readAll('careerReports'),
+    readAll('subjectiveAnswers'),
+    readAll('interviewRecords'),
+    readAll('pdcaArtifacts'),
+    readAll('customTools'),
+    readAll('weeklyChecklists'),
+    readAll('collaborationEvents'),
+    readAll('vetoOverrides'),
+    readAll('politicsHotspots'),
+    readAll('careerObservationPoints'),
+    readAll('careerRetestReflections'),
   ]);
   return {
-    version: '2.0.0',
+    version: '5.0.0',
     exportedAt: new Date().toISOString(),
     trainings,
     gaps,
@@ -460,6 +678,19 @@ export async function exportSnapshot(): Promise<ExportedSnapshot> {
     registrations,
     stagePlans,
     spacedReviews,
+    pdcaProblems,
+    careerAssessments,
+    careerReports,
+    subjectiveAnswers,
+    interviewRecords,
+    pdcaArtifacts,
+    customTools,
+    weeklyChecklists,
+    collaborationEvents,
+    vetoOverrides,
+    politicsHotspots,
+    careerObservationPoints,
+    careerRetestReflections,
   };
 }
 
@@ -487,6 +718,19 @@ export async function importSnapshot(snapshot: ExportedSnapshot, mode: 'merge' |
     registrations: snapshot.registrations ?? [],
     stagePlans: snapshot.stagePlans ?? [],
     spacedReviews: snapshot.spacedReviews ?? [],
+    pdcaProblems: snapshot.pdcaProblems ?? [],
+    careerAssessments: snapshot.careerAssessments ?? [],
+    careerReports: snapshot.careerReports ?? [],
+    subjectiveAnswers: snapshot.subjectiveAnswers ?? [],
+    interviewRecords: snapshot.interviewRecords ?? [],
+    pdcaArtifacts: snapshot.pdcaArtifacts ?? [],
+    customTools: snapshot.customTools ?? [],
+    weeklyChecklists: snapshot.weeklyChecklists ?? [],
+    collaborationEvents: snapshot.collaborationEvents ?? [],
+    vetoOverrides: snapshot.vetoOverrides ?? [],
+    politicsHotspots: snapshot.politicsHotspots ?? [],
+    careerObservationPoints: snapshot.careerObservationPoints ?? [],
+    careerRetestReflections: snapshot.careerRetestReflections ?? [],
   };
   for (const store of SYNCED_STORES) {
     for (const record of payload[store]) {
@@ -528,5 +772,16 @@ export async function getChangesSince(since: string | null): Promise<ExportedSna
     registrations: filterByUpdated(snapshot.registrations),
     stagePlans: filterByUpdated(snapshot.stagePlans),
     spacedReviews: filterByUpdated(snapshot.spacedReviews),
+    pdcaProblems: filterByUpdated(snapshot.pdcaProblems),
+    careerAssessments: filterByUpdated(snapshot.careerAssessments),
+    careerReports: filterByUpdated(snapshot.careerReports),
+    subjectiveAnswers: filterByUpdated(snapshot.subjectiveAnswers),
+    interviewRecords: filterByUpdated(snapshot.interviewRecords),
+    pdcaArtifacts: filterByUpdated(snapshot.pdcaArtifacts),
+    customTools: filterByUpdated(snapshot.customTools),
+    weeklyChecklists: filterByUpdated(snapshot.weeklyChecklists),
+    collaborationEvents: filterByUpdated(snapshot.collaborationEvents),
+    vetoOverrides: snapshot.vetoOverrides.filter((r) => (since ? r.confirmedAt > since : true)),
+    politicsHotspots: filterByUpdated(snapshot.politicsHotspots),
   };
 }

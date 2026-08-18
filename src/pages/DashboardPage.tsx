@@ -1,15 +1,79 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Sparkles, Target, CheckCircle2, TrendingUp, CalendarClock, RefreshCw, PlusCircle } from 'lucide-react';
+import { Sparkles, Target, CheckCircle2, TrendingUp, CalendarClock, RefreshCw, PlusCircle, CalendarRange, Timer, Star, Flag } from 'lucide-react';
 import { useAppSession } from '../hooks/useAppSession';
 import { useSyncStatus } from '../hooks/useSyncStatus';
-import { findTrainingsInRange, findGaps, findAbilities, findTasks, findReviews } from '../services/localDB';
+import { findTrainingsInRange, findGaps, findAbilities, findTasks, findReviews, getAllRecords } from '../services/localDB';
 import { aggregateBySubject, prioritizeGaps } from '../services/analytics';
 import { PageHeader } from '../components/PageHeader';
 import { MasteryBar } from '../components/MasteryBar';
 import { EmptyState } from '../components/EmptyState';
-import { GRADE_LEVEL_LABEL, SUBJECT_LABEL } from '../domain/types';
-import type { AbilityGap, TrainingRecord, AbilitySnapshot, FixTask, ReviewRecord } from '../domain/types';
+import { PdcaCalendarBoard } from '../components/PdcaCalendarBoard';
+import { GRADE_LEVEL_LABEL, MODULE_VISIBILITY, SUBJECT_LABEL } from '../domain/types';
+import type { AbilityGap, GradeLevel, TrainingRecord, AbilitySnapshot, FixTask, ReviewRecord, ExamRegistration, StagePlan } from '../domain/types';
+
+/** V5.11 §7 · 学段差异化文案(小学游戏化 / 公考直白 / K12 中性) */
+const GRADE_TONE: Record<GradeLevel, {
+  title: string;
+  desc: string;
+  actionLabel: string;
+  focusTitle: string;
+  reviewTitle: string;
+  metricGap: string;
+  metricTrain: string;
+  metricAbility: string;
+  todayFocusEmpty: string;
+  focusPrefix: string;
+}> = {
+  primary: {
+    title: '今天的闯关任务 🌟',
+    desc: '小任务闯一闯:练一练 → 找找错在哪 → 把弱项补回来 → 再来一次 → 变得更厉害!',
+    actionLabel: '开始小任务',
+    focusTitle: '今天要闯的关卡 🎯',
+    reviewTitle: '今天的小结 🎈',
+    metricGap: '要修理的小怪兽',
+    metricTrain: '这个月练了几次',
+    metricAbility: '收集到的能力星星',
+    todayFocusEmpty: '所有小怪兽都被打败啦, 继续保持! 🎉',
+    focusPrefix: '打怪',
+  },
+  junior: {
+    title: '今日工作台',
+    desc: '训练 → 反馈 → 错题/问题 → 能力短板 → 修复 → 验证 → 能力提升',
+    actionLabel: '记录训练',
+    focusTitle: '今天的核心任务',
+    reviewTitle: '今日复盘',
+    metricGap: '待修复能力缺口',
+    metricTrain: '近30天训练次数',
+    metricAbility: '能力快照数量',
+    todayFocusEmpty: '当前没有未修复的问题, 继续保持!',
+    focusPrefix: '修复',
+  },
+  senior: {
+    title: '今日工作台',
+    desc: '训练 → 反馈 → 错题/问题 → 能力短板 → 修复 → 验证 → 能力提升',
+    actionLabel: '记录训练',
+    focusTitle: '今天的核心任务',
+    reviewTitle: '今日复盘',
+    metricGap: '待修复能力缺口',
+    metricTrain: '近30天训练次数',
+    metricAbility: '能力快照数量',
+    todayFocusEmpty: '当前没有未修复的问题, 继续保持!',
+    focusPrefix: '修复',
+  },
+  adult: {
+    title: '今日工作台',
+    desc: '告诉你今天最值得做什么。 训练 → 反馈 → 错误/问题 → 能力缺口 → 修复 → 验证 → 能力增长。',
+    actionLabel: '记录训练',
+    focusTitle: '今天的核心任务',
+    reviewTitle: '今日复盘',
+    metricGap: '待修复能力缺口',
+    metricTrain: '近30天训练次数',
+    metricAbility: '能力快照数量',
+    todayFocusEmpty: '当前没有未修复的问题, 继续保持!',
+    focusPrefix: '修复',
+  },
+};
 
 export function DashboardPage() {
   const { prefs } = useAppSession();
@@ -19,24 +83,30 @@ export function DashboardPage() {
   const [abilities, setAbilities] = useState<AbilitySnapshot[]>([]);
   const [tasks, setTasks] = useState<FixTask[]>([]);
   const [reviews, setReviews] = useState<ReviewRecord[]>([]);
+  const [registrations, setRegistrations] = useState<ExamRegistration[]>([]);
+  const [stagePlans, setStagePlans] = useState<StagePlan[]>([]);
 
   useEffect(() => {
     const load = async () => {
       const monthAgo = new Date();
       monthAgo.setDate(monthAgo.getDate() - 30);
       const from = monthAgo.toISOString().slice(0, 10);
-      const [t, g, a, tk, r] = await Promise.all([
+      const [t, g, a, tk, r, regs, sp] = await Promise.all([
         findTrainingsInRange(from),
         findGaps(undefined, 'unresolved'),
         findAbilities(),
         findTasks(undefined, 'pending'),
         findReviews('day'),
+        getAllRecords('registrations'),
+        getAllRecords('stagePlans'),
       ]);
       setTrainings(t);
       setGaps(g);
       setAbilities(a);
       setTasks(tk);
       setReviews(r);
+      setRegistrations(regs);
+      setStagePlans(sp);
     };
     void load();
   }, []);
@@ -46,47 +116,105 @@ export function DashboardPage() {
   const prioritizedGaps = prioritizeGaps(gaps).slice(0, 3);
   const stats = aggregateBySubject(trainings);
   const totalTrainingsToday = trainings.filter((r) => r.date === today).length;
+  const visibility = MODULE_VISIBILITY[prefs.gradeLevel];
+  const tone = GRADE_TONE[prefs.gradeLevel];
+
+  // V5.11 §7 · 公考倒计时(仅公考学段) - 最近一次未过考的考试
+  const upcomingExam = useMemo(() => {
+    return registrations
+      .filter((r) => r.examDate >= today)
+      .sort((a, b) => a.examDate.localeCompare(b.examDate))[0];
+  }, [registrations, today]);
 
   return (
     <div className="space-y-6">
       <PageHeader
-        title={`今日工作台 · ${GRADE_LEVEL_LABEL[prefs.gradeLevel]}`}
-        description="告诉你今天最值得做什么。 训练 → 反馈 → 错误/问题 → 能力缺口 → 修复 → 验证 → 能力增长。"
+        title={`${tone.title} · ${GRADE_LEVEL_LABEL[prefs.gradeLevel]}`}
+        description={tone.desc}
         actions={
           <>
             <button className="btn-ghost" onClick={refresh} title="刷新">
               <RefreshCw size={14} />
             </button>
             <Link to="/trainings" className="btn-primary">
-              <PlusCircle size={16} /> 记录训练
+              <PlusCircle size={16} /> {tone.actionLabel}
             </Link>
           </>
         }
       />
 
+      {/* V5.11 §7 · 公考倒计时(仅公考学段, 常驻置顶) */}
+      {visibility.examRegistration && upcomingExam && (
+        <div className="card p-4 bg-gradient-to-r from-purple-50 to-blue-50 border-purple-200">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-lg bg-purple-600 text-white flex items-center justify-center">
+                <Flag size={18} />
+              </div>
+              <div>
+                <div className="text-xs text-purple-700">下一场公考</div>
+                <div className="text-sm font-semibold text-slate-900">
+                  {upcomingExam.postName}
+                  <span className="text-xs text-slate-500 ml-2">{upcomingExam.examDate}</span>
+                </div>
+              </div>
+            </div>
+            <div className="text-right">
+              <div className="text-3xl font-bold text-purple-700">
+                {Math.max(0, Math.ceil((new Date(upcomingExam.examDate).getTime() - Date.now()) / 86400000))}
+              </div>
+              <div className="text-xs text-slate-500">天</div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 时间线总览:一进来就能看到当月安排 */}
+      {visibility.pdca ? (
+        <div className="card p-4">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-base font-semibold text-slate-900 flex items-center gap-2">
+              <CalendarRange size={16} className="text-blue-600" /> 本月时间线安排
+            </h2>
+            <Link to="/pdca-calendar" className="text-xs text-blue-600 hover:underline">
+              打开完整视图 →
+            </Link>
+          </div>
+          <PdcaCalendarBoard
+            compact
+            defaultView="month"
+            showViewSwitch={false}
+            showFilter={false}
+            showLegend={false}
+          />
+        </div>
+      ) : (
+        <TimelineSummary registrations={registrations} stagePlans={stagePlans} />
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <TodayFocusCard gaps={prioritizedGaps} tasks={tasks} />
-        <TodayReviewCard hasReview={!!todayReview} totalTrainingsToday={totalTrainingsToday} />
+        <TodayFocusCard gaps={prioritizedGaps} tasks={tasks} tone={tone} />
+        <TodayReviewCard hasReview={!!todayReview} totalTrainingsToday={totalTrainingsToday} tone={tone} />
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <MetricCard
-          icon={<Target size={18} />}
-          label="待修复能力缺口"
+          icon={prefs.gradeLevel === 'primary' ? <Star size={18} /> : <Target size={18} />}
+          label={tone.metricGap}
           value={gaps.length}
           tone="orange"
           to="/problems"
         />
         <MetricCard
           icon={<TrendingUp size={18} />}
-          label="近30天训练次数"
+          label={tone.metricTrain}
           value={trainings.length}
           tone="blue"
           to="/trainings"
         />
         <MetricCard
-          icon={<CalendarClock size={18} />}
-          label="能力快照数量"
+          icon={prefs.gradeLevel === 'primary' ? <Star size={18} /> : <CalendarClock size={18} />}
+          label={tone.metricAbility}
           value={abilities.length}
           tone="emerald"
           to="/abilities"
@@ -138,6 +266,70 @@ export function DashboardPage() {
   );
 }
 
+function TimelineSummary({ registrations, stagePlans }: { registrations: ExamRegistration[]; stagePlans: StagePlan[] }) {
+  const today = new Date().toISOString().slice(0, 10);
+  const upcomingExam = registrations
+    .filter((r) => r.examDate >= today)
+    .sort((a, b) => a.examDate.localeCompare(b.examDate))[0];
+  const activeStage = stagePlans
+    .filter((s) => s.startDate <= today && s.endDate >= today)
+    .sort((a, b) => a.startDate.localeCompare(b.startDate))[0];
+  const nextStage = stagePlans
+    .filter((s) => s.startDate > today)
+    .sort((a, b) => a.startDate.localeCompare(b.startDate))[0];
+
+  const hasContent = !!upcomingExam || !!activeStage || !!nextStage;
+  return (
+    <div className="card p-4">
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-base font-semibold text-slate-900 flex items-center gap-2">
+          <Timer size={16} className="text-blue-600" /> 学习时间线
+        </h2>
+        <Link to="/timeline" className="text-xs text-blue-600 hover:underline">
+          管理时间线 →
+        </Link>
+      </div>
+      {!hasContent ? (
+        <EmptyState icon={CalendarClock} title="尚未设置里程碑" description="到「学习时间线」设定目标日期即可" />
+      ) : (
+        <div className="space-y-2 text-sm">
+          {upcomingExam && (
+            <div className="flex items-center justify-between bg-purple-50 rounded p-2">
+              <div>
+                <b>{upcomingExam.postName}</b>
+                <span className="text-xs text-slate-500 ml-2">{upcomingExam.examDate}</span>
+              </div>
+              <span className="text-red-600 font-bold">
+                倒计时 {Math.max(0, Math.ceil((new Date(upcomingExam.examDate).getTime() - Date.now()) / 86400000))} 天
+              </span>
+            </div>
+          )}
+          {activeStage && (
+            <div className="flex items-center justify-between bg-blue-50 rounded p-2">
+              <div>
+                当前阶段: <b>
+                  {activeStage.stage === 'foundation' ? '基础期' : activeStage.stage === 'topic' ? '专项期' : activeStage.stage === 'sprint' ? '冲刺期' : '考前期'}
+                </b>
+                <span className="text-xs text-slate-500 ml-2">
+                  {activeStage.startDate} → {activeStage.endDate}
+                </span>
+              </div>
+              <span className="text-xs text-slate-500">
+                重点: {activeStage.focusModules.slice(0, 2).join(' / ')}
+              </span>
+            </div>
+          )}
+          {nextStage && (
+            <div className="text-xs text-slate-500">
+              下一阶段: {nextStage.stage} 起于 {nextStage.startDate}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function MetricCard({
   icon,
   label,
@@ -171,7 +363,15 @@ function MetricCard({
   );
 }
 
-function TodayFocusCard({ gaps, tasks }: { gaps: AbilityGap[]; tasks: FixTask[] }) {
+function TodayFocusCard({
+  gaps,
+  tasks,
+  tone,
+}: {
+  gaps: AbilityGap[];
+  tasks: FixTask[];
+  tone: (typeof GRADE_TONE)[GradeLevel];
+}) {
   const hasContent = gaps.length + tasks.length > 0;
   return (
     <div className="card p-5">
@@ -179,17 +379,19 @@ function TodayFocusCard({ gaps, tasks }: { gaps: AbilityGap[]; tasks: FixTask[] 
         <div className="w-8 h-8 rounded-lg bg-blue-100 text-blue-600 flex items-center justify-center">
           <Target size={16} />
         </div>
-        <h2 className="text-base font-semibold text-slate-900">今天的核心任务</h2>
+        <h2 className="text-base font-semibold text-slate-900">{tone.focusTitle}</h2>
       </div>
       {!hasContent ? (
-        <p className="text-sm text-slate-500">当前没有未修复的问题，继续保持！</p>
+        <p className="text-sm text-slate-500">{tone.todayFocusEmpty}</p>
       ) : (
         <ol className="space-y-3">
           {gaps.slice(0, 3).map((g, i) => (
             <li key={g.id} className="flex items-start gap-2 text-sm">
               <span className="text-blue-600 font-bold w-5">①{i > 0 && ''}</span>
               <div className="flex-1">
-                <div className="text-slate-800">修复：{g.abilityPath.split('/').slice(-1)[0]}</div>
+                <div className="text-slate-800">
+                  {tone.focusPrefix}: {g.abilityPath.split('/').slice(-1)[0]}
+                </div>
                 <div className="text-xs text-slate-500 mt-0.5">
                   {SUBJECT_LABEL[g.subject]} · 复现 {g.occurrenceCount} 次
                 </div>
@@ -201,7 +403,7 @@ function TodayFocusCard({ gaps, tasks }: { gaps: AbilityGap[]; tasks: FixTask[] 
               <span className="text-emerald-600 font-bold w-5"><CheckCircle2 size={14} /></span>
               <div className="flex-1">
                 <div className="text-slate-800">
-                  {t.type === 'verify' ? '验证' : '修复'}：{t.abilityPath.split('/').slice(-1)[0]}
+                  {t.type === 'verify' ? '验证' : tone.focusPrefix}: {t.abilityPath.split('/').slice(-1)[0]}
                 </div>
                 <div className="text-xs text-slate-500 mt-0.5">
                   {SUBJECT_LABEL[t.subject]}
@@ -213,7 +415,7 @@ function TodayFocusCard({ gaps, tasks }: { gaps: AbilityGap[]; tasks: FixTask[] 
       )}
       <div className="mt-4 flex gap-2">
         <Link to="/trainings" className="btn-primary text-sm">
-          <PlusCircle size={14} /> 开始训练
+          <PlusCircle size={14} /> {tone.actionLabel}
         </Link>
         <Link to="/problems" className="btn-secondary text-sm">
           查看全部
@@ -223,20 +425,28 @@ function TodayFocusCard({ gaps, tasks }: { gaps: AbilityGap[]; tasks: FixTask[] 
   );
 }
 
-function TodayReviewCard({ hasReview, totalTrainingsToday }: { hasReview: boolean; totalTrainingsToday: number }) {
+function TodayReviewCard({
+  hasReview,
+  totalTrainingsToday,
+  tone,
+}: {
+  hasReview: boolean;
+  totalTrainingsToday: number;
+  tone: (typeof GRADE_TONE)[GradeLevel];
+}) {
   return (
     <div className="card p-5">
       <div className="flex items-center gap-2 mb-3">
         <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-600 flex items-center justify-center">
           <CalendarClock size={16} />
         </div>
-        <h2 className="text-base font-semibold text-slate-900">今日复盘</h2>
+        <h2 className="text-base font-semibold text-slate-900">{tone.reviewTitle}</h2>
       </div>
       {hasReview ? (
         <div className="text-sm text-slate-600">今天的复盘已完成 ✅</div>
       ) : (
         <div className="text-sm text-slate-600">
-          今日已记录训练 <b className="text-slate-900">{totalTrainingsToday}</b> 次， 只需 2 分钟即可完成日复盘。
+          今日已记录训练 <b className="text-slate-900">{totalTrainingsToday}</b> 次, 只需 2 分钟即可完成日复盘。
         </div>
       )}
       <div className="mt-4">
