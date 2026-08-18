@@ -22,7 +22,7 @@ import {
   scoreMBTI,
   scoreValueQuestions,
 } from '../../services/careerAssessment';
-import type { GradeLevel } from '../../domain/types';
+import type { CareerAssessment, GradeLevel } from '../../domain/types';
 
 type Section = 'intro' | 'values' | 'mbti' | 'ability' | 'projection' | 'external' | 'submit';
 
@@ -165,7 +165,7 @@ export function CareerAssessmentFlow({ gradeLevel, studentId, onComplete, onCanc
         });
 
       const base = createBlankAssessment(gradeLevel, studentId);
-      const assessment = {
+      const assessment: CareerAssessment = {
         ...base,
         values: {
           ...values,
@@ -182,7 +182,7 @@ export function CareerAssessmentFlow({ gradeLevel, studentId, onComplete, onCanc
         updatedAt: now,
       };
       // V5.11 · 一句话价值观说明书(先算再写回)
-      assessment.values.valueStatement = generateValueStatement(assessment);
+      assessment.values = { ...assessment.values, valueStatement: generateValueStatement(assessment) };
 
       await saveAssessment(assessment);
       const report = generateCareerReport(assessment);
