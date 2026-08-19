@@ -421,7 +421,7 @@ export function FormRenderer({
         setValidationErrors(remaining);
       }
     }
-  }, [watchedErrorValues, validationErrors]);
+  }, [watchedErrorValues, validationErrors, errorFieldIds.length]);
 
   // === 可选字段分组（计数与条件显隐对齐） ===
   const mainFields = activeSection.fields.filter((f) => f.priority !== 'optional');

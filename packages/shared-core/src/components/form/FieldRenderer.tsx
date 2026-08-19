@@ -12,8 +12,9 @@
  * - React.memo 避免无关字段重渲染
  */
 import { memo, useState } from 'react';
+import type { ReactNode } from 'react';
 import { useFormContext, useController } from 'react-hook-form';
-import type { UseFormRegister, FieldValues } from 'react-hook-form';
+import type { UseFormRegister, FieldValues, FieldPath } from 'react-hook-form';
 import type { FormField } from '../../types';
 import {
   TextInput,
@@ -95,10 +96,36 @@ const baseInputClass =
   'w-full px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition';
 const errorTextClass = 'text-xs text-red-500 mt-1';
 
-const FieldRendererImpl = memo(function FieldRenderer({
+/** useController 桥接结果（RHF 受控模式 / 外部 value-onChange 降级） */
+type ControllerBridgeField = { value: unknown; onChange?: (value: unknown) => void };
+type ControllerBridgeState = { error?: { message?: string } };
+
+/**
+ * RHF 受控桥接：仅 name 模式（位于 FormProvider 内）时渲染。
+ * 在独立子组件内无条件调用 useController，满足 Rules of Hooks
+ * （避免在 FieldRenderer 内做条件 Hook 调用）。
+ */
+function RHFControllerBridge({
+  field,
+  name,
+  children,
+}: {
+  field: FormField;
+  name: string;
+  children: (ctlField: ControllerBridgeField, ctlState: ControllerBridgeState) => ReactNode;
+}) {
+  const { control } = useFormContext();
+  const { field: ctlField, fieldState: ctlState } = useController({
+    control,
+    name: name as FieldPath<FieldValues>,
+    rules: buildValidationRules(field),
+  });
+  return children(ctlField, ctlState);
+}
+
+const FieldRendererInner = memo(function FieldRendererInner({
   field,
   register,
-  name,
   controlled,
   value,
   onChange,
@@ -109,7 +136,15 @@ const FieldRendererImpl = memo(function FieldRenderer({
   dynamicOptions,
   suggestions,
   readOnly,
-}: FieldRendererProps) {
+  ctlField,
+  ctlState,
+  controllerMode,
+}: FieldRendererProps & {
+  ctlField: ControllerBridgeField;
+  ctlState: ControllerBridgeState;
+  /** 是否走 RHF useController 受控模式（影响受控/非受控分发） */
+  controllerMode: boolean;
+}) {
   const isOptional = field.priority === 'optional';
   const isRequired = field.required === true || field.priority === 'required';
   const labelClass = `block text-sm font-medium mb-1 ${isOptional ? 'text-slate-500' : 'text-slate-700'}`;
@@ -122,15 +157,8 @@ const FieldRendererImpl = memo(function FieldRenderer({
     field.type === 'quadrant' ||
     field.type === 'dragMatrix';
 
-  // name 模式：位于 FormProvider 内时用 useController 受控接管（name 恒定，Hook 调用顺序稳定）
-  const formContext = useFormContext();
-  const useControllerMode = !!name && !controlled && !!formContext?.control;
-  const { field: ctlField, fieldState: ctlState } = useControllerMode
-    ? useController({ control: formContext!.control, name: name!, rules: buildValidationRules(field) })
-    : { field: { value, onChange }, fieldState: { error: undefined } };
-
-  const effectiveValue = useControllerMode ? ctlField.value : value;
-  const effectiveOnChange = useControllerMode ? ctlField.onChange : onChange;
+  const effectiveValue = ctlField.value;
+  const effectiveOnChange = ctlField.onChange;
   const effectiveError = error ?? (ctlState.error ? (typeof ctlState.error.message === 'string' ? ctlState.error.message : undefined) : undefined);
   const effectiveDisabled = disabled || readOnly || field.readOnly;
 
@@ -170,7 +198,7 @@ const FieldRendererImpl = memo(function FieldRenderer({
 
   // 受控/非受控分发（显式 value/onChange 或受控类型一律走受控，其余走 register）
   const hasValueBridge = controlled || value !== undefined || !!onChange;
-  const passControlled = hasValueBridge || useControllerMode || isControlledType;
+  const passControlled = hasValueBridge || controllerMode || isControlledType;
   const commonInputProps: InputFieldProps = {
     field,
     inputClass,
@@ -293,6 +321,34 @@ const FieldRendererImpl = memo(function FieldRenderer({
       {renderHint()}
       {effectiveError && <p className={errorTextClass}>{effectiveError}</p>}
     </div>
+  );
+});
+
+FieldRendererInner.displayName = 'FieldRendererInner';
+
+const FieldRendererImpl = memo(function FieldRenderer(props: FieldRendererProps) {
+  const { field, name, controlled } = props;
+  // name 模式：位于 FormProvider 内时用 useController 受控接管。
+  // Hook 调用下沉到独立子组件 RHFControllerBridge，保持本组件 Hook 无条件、顺序稳定。
+  const formContext = useFormContext();
+  const useControllerMode = !!name && !controlled && !!formContext?.control;
+
+  if (useControllerMode) {
+    return (
+      <RHFControllerBridge field={field} name={name!}>
+        {(ctlField, ctlState) => (
+          <FieldRendererInner {...props} ctlField={ctlField} ctlState={ctlState} controllerMode />
+        )}
+      </RHFControllerBridge>
+    );
+  }
+  return (
+    <FieldRendererInner
+      {...props}
+      ctlField={{ value: props.value, onChange: props.onChange }}
+      ctlState={{ error: undefined }}
+      controllerMode={false}
+    />
   );
 });
 
