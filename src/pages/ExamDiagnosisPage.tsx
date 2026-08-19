@@ -129,7 +129,13 @@ export function ExamDiagnosisPage() {
                 </div>
               </div>
 
+              {/* V5.11 Bug #030 修复:测验诊断四层结构清晰分层
+                  第一层:总体诊断  第二层:模块掌握度分布
+                  第三层:主要问题清单  第四层:修复行动(一键任务) */}
               <div className="space-y-2">
+                <div className="text-[11px] text-slate-400 uppercase tracking-wider">
+                  Layer 1 · 模块掌握度分布
+                </div>
                 {e.moduleBreakdown.map((m) => (
                   <div key={m.module} className="flex items-center gap-3 text-sm">
                     <div className="w-32 text-slate-700">{m.module}</div>
@@ -142,14 +148,21 @@ export function ExamDiagnosisPage() {
               </div>
 
               {e.diagnosis && (
-                <div className="mt-3 p-3 rounded bg-blue-50 text-sm text-blue-900">
-                  💡 {e.diagnosis}
+                <div className="mt-3">
+                  <div className="text-[11px] text-slate-400 uppercase tracking-wider mb-1">
+                    Layer 2 · 总体诊断
+                  </div>
+                  <div className="p-3 rounded bg-blue-50 text-sm text-blue-900">
+                    💡 {e.diagnosis}
+                  </div>
                 </div>
               )}
 
               {e.mainProblems.length > 0 && (
                 <div className="mt-3">
-                  <div className="text-xs text-slate-500">主要问题:</div>
+                  <div className="text-[11px] text-slate-400 uppercase tracking-wider mb-1">
+                    Layer 3 · 主要能力短板
+                  </div>
                   <ul className="text-sm text-slate-700 list-disc list-inside">
                     {e.mainProblems.map((p) => (
                       <li key={p}>{p}</li>
@@ -157,6 +170,15 @@ export function ExamDiagnosisPage() {
                   </ul>
                 </div>
               )}
+
+              <div className="mt-3">
+                <div className="text-[11px] text-slate-400 uppercase tracking-wider mb-1">
+                  Layer 4 · 修复行动
+                </div>
+                <div className="text-xs text-slate-500">
+                  点击右上「一键生成修复任务」自动派生 gap 到问题中心,并生成陌生题验证任务
+                </div>
+              </div>
             </div>
           ))}
         </div>

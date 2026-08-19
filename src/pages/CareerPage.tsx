@@ -8,6 +8,7 @@ import { CareerAssessmentFlow } from '../components/career/CareerAssessmentFlow'
 import { CareerReportView } from '../components/career/CareerReportView';
 import { useAppSession } from '../hooks/useAppSession';
 import type { CareerAssessment, CareerReport } from '../domain/types';
+import { getCareerCopy } from '../domain/careerCopy';
 
 type Mode = 'list' | 'assess' | 'report';
 
@@ -67,27 +68,28 @@ export function CareerPage() {
     );
   }
 
+  const copy = getCareerCopy(prefs.gradeLevel);
   return (
     <div className="space-y-5">
       <PageHeader
-        title="职业选择"
-        description="价值观 · 能力 · 性格 三合一测评。 兴趣×能力四象限定位 + 价值观一票否决 + 三定输出 + 双路线参考。"
+        title={copy.pageTitle}
+        description={copy.pageDescription}
         actions={
           <button className="btn-primary" onClick={() => setMode('assess')}>
-            <PlayCircle size={16} /> 开始测评
+            <PlayCircle size={16} /> {copy.startAction}
           </button>
         }
       />
 
       <div className="card p-4 text-sm text-slate-600 bg-blue-50 border-blue-100">
-        <b>本次交付版本</b>: 三个子测评简短版(价值观 15 / MBTI 28 / 能力 20 = 63 题), 大约 15-20 分钟完成。 完成后自动生成职业定位报告。
+        {copy.entryBanner}
       </div>
 
       {reports.length === 0 ? (
         <EmptyState
           icon={Compass}
-          title="尚未完成任何测评"
-          description="首次测评建议在放松状态下按第一反应作答, 不做过度思考"
+          title={copy.emptyTitle}
+          description={copy.emptyDescription}
           action={
             <button className="btn-primary" onClick={() => setMode('assess')}>
               <PlayCircle size={16} /> 立即开始

@@ -20,6 +20,7 @@ import {
 } from '../services/insights';
 import type { AbilityGap, Subject, TrainingRecord } from '../domain/types';
 import { SUBJECT_LABEL } from '../domain/types';
+import { getInsightsCopy, type InsightsCopy } from '../domain/insightsCopy';
 
 type Tab = 'strategy' | 'forecast' | 'simulate' | 'causal' | 'leverage';
 
@@ -34,11 +35,12 @@ export function InsightsPage() {
     void findGaps(prefs.currentStudentId).then(setGaps);
   }, [prefs.currentStudentId]);
 
+  const copy = getInsightsCopy(prefs.gradeLevel);
   return (
     <div className="space-y-5">
       <PageHeader
-        title="深度洞察 · P2"
-        description="智能训练策略推荐 · 收益预测 · 因果建模 · What-if 模拟 · 迁移杠杆点。 基于历史数据的系统动力学分析。"
+        title={copy.pageTitle}
+        description={copy.pageDescription}
       />
 
       <div className="flex flex-wrap items-center gap-2">
@@ -64,21 +66,21 @@ export function InsightsPage() {
         ))}
       </div>
 
-      {tab === 'strategy' && <StrategyTab records={trainings} gaps={gaps} />}
-      {tab === 'forecast' && <ForecastTab records={trainings} subjects={prefs.subjects} />}
+      {tab === 'strategy' && <StrategyTab records={trainings} gaps={gaps} copy={copy} />}
+      {tab === 'forecast' && <ForecastTab records={trainings} subjects={prefs.subjects} copy={copy} />}
       {tab === 'simulate' && <SimulationTab records={trainings} subjects={prefs.subjects} />}
-      {tab === 'causal' && <CausalTab records={trainings} gaps={gaps} />}
-      {tab === 'leverage' && <LeverageTab gaps={gaps} />}
+      {tab === 'causal' && <CausalTab records={trainings} gaps={gaps} copy={copy} />}
+      {tab === 'leverage' && <LeverageTab gaps={gaps} copy={copy} />}
     </div>
   );
 }
 
 // ============ 策略推荐 ============
 
-function StrategyTab({ records, gaps }: { records: TrainingRecord[]; gaps: AbilityGap[] }) {
+function StrategyTab({ records, gaps, copy }: { records: TrainingRecord[]; gaps: AbilityGap[]; copy: InsightsCopy }) {
   const recs: StrategyRecommendation[] = useMemo(() => recommendStrategies(records, gaps), [records, gaps]);
   if (recs.length === 0) {
-    return <EmptyState icon={Lightbulb} title="数据不足以生成策略推荐" description="记录几次训练后系统将自动生成个性化训练策略" />;
+    return <EmptyState icon={Lightbulb} title={copy.strategyEmptyTitle} description={copy.strategyEmptyDescription} />;
   }
   return (
     <div className="card p-5">
@@ -107,7 +109,7 @@ function StrategyTab({ records, gaps }: { records: TrainingRecord[]; gaps: Abili
 
 // ============ 收益预测 ============
 
-function ForecastTab({ records, subjects }: { records: TrainingRecord[]; subjects: Subject[] }) {
+function ForecastTab({ records, subjects, copy }: { records: TrainingRecord[]; subjects: Subject[]; copy: InsightsCopy }) {
   const summaries = useMemo(() => aggregateSubjectForecasts(records, subjects), [records, subjects]);
   const [subject, setSubject] = useState<Subject>(subjects[0] ?? 'math');
   const detail = useMemo(() => forecastGrowth(records, subject), [records, subject]);
@@ -125,7 +127,7 @@ function ForecastTab({ records, subjects }: { records: TrainingRecord[]; subject
       <div className="card p-5">
         <h2 className="font-semibold mb-3">全学科增长预测</h2>
         {summaries.every((s) => s.weeklyRate === 0) ? (
-          <EmptyState icon={Compass} title="数据不足" description="每个学科至少 2 周数据后可生成预测" />
+          <EmptyState icon={Compass} title={copy.forecastEmptyTitle} description={copy.forecastEmptyDescription} />
         ) : (
           <div className="space-y-3">
             {summaries.map((s) => (
@@ -286,10 +288,10 @@ function SimulationTab({ records, subjects }: { records: TrainingRecord[]; subje
 
 // ============ 因果建模 ============
 
-function CausalTab({ records, gaps }: { records: TrainingRecord[]; gaps: AbilityGap[] }) {
+function CausalTab({ records, gaps, copy }: { records: TrainingRecord[]; gaps: AbilityGap[]; copy: InsightsCopy }) {
   const graph: CausalGraph = useMemo(() => buildCausalGraph(records, gaps), [records, gaps]);
   if (graph.nodes.length === 0) {
-    return <EmptyState icon={GitBranch} title="尚无足够能力短板生成因果图" />;
+    return <EmptyState icon={GitBranch} title={copy.causalEmptyTitle} />;
   }
 
   const errors = graph.nodes.filter((n) => n.kind === 'error');
@@ -334,10 +336,10 @@ function ColumnBlock({ title, tone, items }: { title: string; tone: 'red' | 'ora
 
 // ============ 迁移杠杆 ============
 
-function LeverageTab({ gaps }: { gaps: AbilityGap[] }) {
+function LeverageTab({ gaps, copy }: { gaps: AbilityGap[]; copy: InsightsCopy }) {
   const leverages = useMemo(() => findLeveragePoints(gaps), [gaps]);
   if (leverages.length === 0) {
-    return <EmptyState icon={Cpu} title="尚未识别出可用杠杆点" description="随着能力缺口积累,系统将标记高迁移强度的能力点" />;
+    return <EmptyState icon={Cpu} title={copy.leverageEmptyTitle} description={copy.leverageEmptyDescription} />;
   }
   return (
     <div className="card p-5">

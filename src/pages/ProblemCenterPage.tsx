@@ -176,6 +176,33 @@ function GapCard({
               💡 {gap.suggestion}
             </div>
           )}
+          {/* V5.11 Bug #029 修复:四角度证据链 · 来源 · 复现率 · 趋势 · 掌握度 */}
+          <div className="mt-2 grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+            <div className="rounded bg-slate-50 p-2">
+              <div className="text-slate-400">来源</div>
+              <div className="text-slate-700 mt-0.5">
+                {gap.sourceRecordIds.length > 0
+                  ? `${gap.sourceRecordIds.length} 次训练`
+                  : '手动标记'}
+              </div>
+            </div>
+            <div className="rounded bg-slate-50 p-2">
+              <div className="text-slate-400">复现率</div>
+              <div className="text-slate-700 mt-0.5">{Math.round(recurrence * 100)}%</div>
+            </div>
+            <div className="rounded bg-slate-50 p-2">
+              <div className="text-slate-400">趋势</div>
+              <div className="text-slate-700 mt-0.5">
+                {gap.occurrenceCount >= 5 ? '📈 高频' : gap.occurrenceCount >= 3 ? '↗ 上升' : '➖ 观察'}
+              </div>
+            </div>
+            <div className="rounded bg-slate-50 p-2">
+              <div className="text-slate-400">掌握度</div>
+              <div className="text-slate-700 mt-0.5">
+                {gap.status === 'verified' ? '✅ 已验证' : gap.status === 'in-progress' ? '⏳ 修复中' : '⚠ 待修复'}
+              </div>
+            </div>
+          </div>
           <div className="text-xs text-slate-400 mt-2">
             首次: {gap.firstSeenAt.slice(0, 10)} · 最近: {gap.lastSeenAt.slice(0, 10)}
           </div>

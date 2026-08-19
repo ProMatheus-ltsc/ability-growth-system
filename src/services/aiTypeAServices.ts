@@ -13,6 +13,7 @@
 import { v4 as uuid } from 'uuid';
 import type {
   AiJobParseResult,
+  CareerAiImport,
   CareerAssessment,
   CareerCandidate,
   ExamRegistration,
@@ -22,7 +23,8 @@ import type {
   Subject,
   ValueCostTag,
 } from '../domain/types';
-import { getAllRecords, putRecord } from './localDB';
+import { BOTTOM_LINE_LABEL, VALUE_COST_LABEL } from '../domain/types';
+import { getAllRecords, deleteRecord, putRecord } from './localDB';
 
 // ============ 27 岗位表 AI 解析 ============
 
@@ -307,12 +309,14 @@ export function toCareerCandidates(
   };
   return data.candidates.map((c) => {
     const tags: ValueCostTag[] = (c.value_cost_tags ?? []).map((t) => mapCost[t] ?? 'none');
-    // 冲突判断
+    // V5.11 Bug #021 修复:冲突文案用中文,不再直出英文枚举
     let vetoReason: string | undefined;
     for (const t of tags) {
       for (const bl of costToBL[t]) {
         if (bottomLines.includes(bl)) {
-          vetoReason = `与底线价值[${bl}]冲突: ${t}`;
+          const blLabel = BOTTOM_LINE_LABEL[bl] ?? bl;
+          const costLabel = VALUE_COST_LABEL[t] ?? t;
+          vetoReason = `与底线价值「${blLabel}」冲突:${costLabel}`;
           break;
         }
       }
@@ -339,4 +343,28 @@ export function toCareerCandidates(
       aiConfidence: c.salary_range?.confidence,
     };
   });
+}
+
+/* ============================================================
+ * V5.11 §31.10 · AI 拓展候选导入记录(多次导入独立存档)
+ * ============================================================ */
+export async function saveAiImport(input: Omit<CareerAiImport, 'id' | 'createdAt'>): Promise<CareerAiImport> {
+  const now = new Date().toISOString();
+  const record: CareerAiImport = {
+    id: uuid(),
+    createdAt: now,
+    ...input,
+  };
+  await putRecord('careerAiImports', record);
+  return record;
+}
+
+export async function listAiImports(reportId?: string): Promise<CareerAiImport[]> {
+  const all = await getAllRecords('careerAiImports');
+  const filtered = reportId ? all.filter((r) => r.reportId === reportId) : all;
+  return filtered.sort((a, b) => b.importedAt.localeCompare(a.importedAt));
+}
+
+export async function deleteAiImport(id: string): Promise<void> {
+  await deleteRecord('careerAiImports', id);
 }

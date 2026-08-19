@@ -358,21 +358,22 @@ export async function summarizeClassLiteracy(students: StudentProfile[]): Promis
   return out;
 }
 
-/** §18A.5 与职业选择联动 - 从素养派生能力校准值 */
+/**
+ * §18A.5 与职业选择联动 - 从素养派生能力校准值
+ * V5.12 · 只保留强因果映射;弱语义映射(time→endurance / critical→probability / collab→expression)已删除
+ */
 export function literacyToAbilityCalibration(
   profile: LiteracyDimensionSummary[],
 ): Partial<Record<import('../domain/types').AbilityEightDim, number>> {
-  const map: Record<LiteracyDimension, import('../domain/types').AbilityEightDim | null> = {
+  const map: Partial<Record<LiteracyDimension, import('../domain/types').AbilityEightDim>> = {
     metacognition: 'metacognition',
-    'time-management': 'endurance',
     'info-processing': 'structure',
-    'critical-thinking': 'probability',
-    collaboration: 'expression',
   };
   const out: Partial<Record<import('../domain/types').AbilityEightDim, number>> = {};
   for (const p of profile) {
     const target = map[p.dimension];
-    if (target) out[target] = p.score;
+    // 无 measurements 时 aggregateSummary 返回 score=0,视为无数据,跳过
+    if (target && p.measurements.length > 0 && p.score > 0) out[target] = p.score;
   }
   return out;
 }

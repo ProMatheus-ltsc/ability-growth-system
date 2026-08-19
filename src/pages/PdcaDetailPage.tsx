@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, X, CheckCircle2, AlertOctagon, ExternalLink, RefreshCw, Sparkles, Sprout, GitBranch } from 'lucide-react';
+import { ArrowLeft, X, CheckCircle2, AlertOctagon, ExternalLink, RefreshCw, Sparkles, Sprout } from 'lucide-react';
 import { useToast } from '@shared/core';
 import { PageHeader } from '../components/PageHeader';
 import { EmptyState } from '../components/EmptyState';
@@ -10,7 +10,6 @@ import {
   addCountermeasure,
   addRootCause,
   advanceStage,
-  archiveArtifact,
   canAdvance,
   checkStretchZone,
   EMOTION_TRIPLE_QUESTIONS,
@@ -20,10 +19,8 @@ import {
   listArtifacts,
   listCustomTools,
   saveProblem,
-  setMeceStructure,
   updateCountermeasureStatus,
   validateInformationTypes,
-  validateMeceCompleteness,
   canAddMadHatter,
   getEffectiveCountermeasures,
   MAD_HATTER_BUDGET_RATIO,
@@ -39,14 +36,10 @@ import {
   INFORMATION_TYPE_LABEL,
   INFORMATION_TYPE_ARGUMENT,
   LIFE_DOMAIN_LABEL,
-  MECE_STRUCTURE_LABEL,
-  MECE_BUILD_PATH_LABEL,
   PDCA_PROBLEM_TYPE_LABEL,
   PDCA_STAGE_LABEL,
   SENSORY_SIGNAL_LABEL,
   type InformationType,
-  type MECEBuildPath,
-  type MECEStructure,
   type PDCAActExit,
   type PDCAProblem,
   type PDCAStage,
@@ -63,9 +56,9 @@ export function PdcaDetailPage() {
   const [problem, setProblem] = useState<PDCAProblem | null>(null);
   const [artifacts, setArtifacts] = useState<PdcaArtifact[]>([]);
   const [customTools, setCustomTools] = useState<CustomPdcaTool[]>([]);
-  const [iframeUrl, setIframeUrl] = useState<string | null>(null);
-  const [iframeToolId, setIframeToolId] = useState<string>('');
-  const [iframeToolName, setIframeToolName] = useState<string>('');
+  // V5.12 · A 阶段归档前的经验输入 & 归档后追加输入
+  const [archiveLessonInput, setArchiveLessonInput] = useState('');
+  const [appendLessonInput, setAppendLessonInput] = useState('');
 
   const refresh = useCallback(async () => {
     const p = await getRecord('pdcaProblems', id);
@@ -138,10 +131,22 @@ export function PdcaDetailPage() {
             </span>
           ))}
         </div>
-        <div className="mt-3 text-sm text-slate-700">
-          <div>目标状态: {problem.targetState}</div>
-          <div>衡量标准: {problem.successCriteria}</div>
-          {problem.expectedDueAt && <div>期望解决: {problem.expectedDueAt}</div>}
+        {/* V5.12 · P1 展示合并为单一"问题定义"(RCA 导入 problemDescription 即为定义) */}
+        <div className="mt-3 text-sm text-slate-700 space-y-1">
+          <div>
+            <b className="text-slate-500 mr-1">问题定义:</b>
+            <span>
+              {problem.targetState?.trim() ||
+                problem.description?.trim() ||
+                <em className="text-slate-400">未设置</em>}
+            </span>
+          </div>
+          {problem.expectedDueAt && (
+            <div>
+              <b className="text-slate-500 mr-1">期望解决:</b>
+              <span>{problem.expectedDueAt}</span>
+            </div>
+          )}
         </div>
 
         {/* V5.11 · 感性信号 & 闭环阻碍标注 */}
@@ -169,7 +174,16 @@ export function PdcaDetailPage() {
 
           {problem.currentStage === 'a-act' && problem.status === 'active' && (
             <>
-              <button className="btn-primary" onClick={() => doExit('archived', { lessons: ['成功经验待补充'] })}>
+              <button
+                className="btn-primary"
+                onClick={() => {
+                  const lessons = archiveLessonInput
+                    .split('\n')
+                    .map((s) => s.trim())
+                    .filter(Boolean);
+                  doExit('archived', { lessons: lessons.length > 0 ? lessons : ['(未记录)'] });
+                }}
+              >
                 <CheckCircle2 size={14} /> 已解决, 归档
               </button>
               <button className="btn-secondary" onClick={() => doExit('next-cycle', { gapNote: '进入第 N+1 轮' })}>
@@ -181,6 +195,22 @@ export function PdcaDetailPage() {
             </>
           )}
         </div>
+
+        {/* V5.12 · A 阶段归档前的成功经验输入区 */}
+        {problem.currentStage === 'a-act' && problem.status === 'active' && (
+          <div className="mt-3 border border-emerald-100 bg-emerald-50/40 rounded p-3">
+            <div className="text-xs text-slate-700 mb-1.5">
+              <b>沉淀成功经验(归档时一并保存)</b>
+              <span className="text-slate-500 ml-1">每行一条,可留空</span>
+            </div>
+            <textarea
+              className="input text-xs min-h-[70px]"
+              placeholder={'例如:\n评审前先与主评人对齐大方向\n方案分层展示,避免细节吞掉主旨'}
+              value={archiveLessonInput}
+              onChange={(e) => setArchiveLessonInput(e.target.value)}
+            />
+          </div>
+        )}
 
         {/* V5.11 §30.9 · A 阶段"重启视角"提示 + ACE 变异建议 */}
         {problem.currentStage === 'a-act' && problem.status === 'active' && (
@@ -224,8 +254,9 @@ export function PdcaDetailPage() {
         <CheckPanel problem={problem} onSave={save} />
       </StageBlock>
 
-      {/* 拉伸区自查 (§30.9) */}
-      {(() => {
+      {/* V5.11 Bug #035 修复:拉伸区自查仅在 C(检查)或 A(修正)阶段展示,
+         D 阶段刚进入时不再触发"数据不足以判断"过早提示 */}
+      {(problem.currentStage === 'c-check' || problem.currentStage === 'a-act') && (() => {
         const zone = checkStretchZone(problem);
         const tone = zone.status === 'stretch' ? 'bg-emerald-50 text-emerald-700'
           : zone.status === 'comfort' ? 'bg-yellow-50 text-yellow-700'
@@ -269,7 +300,7 @@ export function PdcaDetailPage() {
         </details>
       </div>
 
-      {/* 外部工具 - 支持内嵌 iframe + 归档 (§30.5) */}
+      {/* 外部工具 · 仅新窗口打开(去掉内嵌 iframe) */}
       <div className="card p-5">
         <div className="flex items-center justify-between mb-3">
           <h2 className="font-semibold flex items-center gap-2">
@@ -282,7 +313,6 @@ export function PdcaDetailPage() {
         <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-sm">
           {[...EXTERNAL_TOOLS, ...customTools].map((tool) => {
             const applies = tool.appliesTo.includes(problem.currentStage);
-            const isIframe = 'embedType' in tool ? tool.embedType === 'iframe' : true;
             return (
               <div
                 key={tool.id}
@@ -293,18 +323,6 @@ export function PdcaDetailPage() {
                   适用: {tool.appliesTo.map((s) => PDCA_STAGE_LABEL[s]).join(', ')}
                 </div>
                 <div className="flex gap-2 mt-2">
-                  {isIframe && (
-                    <button
-                      className="btn-primary text-xs"
-                      onClick={() => {
-                        setIframeUrl(tool.url);
-                        setIframeToolId(tool.id);
-                        setIframeToolName(tool.name);
-                      }}
-                    >
-                      内嵌打开
-                    </button>
-                  )}
                   <a className="btn-secondary text-xs" href={tool.url} target="_blank" rel="noreferrer">
                     新窗口打开
                   </a>
@@ -331,42 +349,81 @@ export function PdcaDetailPage() {
         )}
       </div>
 
-      {iframeUrl && (
-        <IframeModal
-          url={iframeUrl}
-          toolName={iframeToolName}
-          onClose={() => setIframeUrl(null)}
-          onArchive={async (note) => {
-            await archiveArtifact({
-              problemId: problem.id,
-              toolId: iframeToolId,
-              toolName: iframeToolName,
-              stage: problem.currentStage,
-              productType: iframeToolId === 'root-cause' ? 'causal-graph' : iframeToolId === 'decision-log' ? 'decision-log' : 'other',
-              link: iframeUrl,
-              note,
-            });
-            setIframeUrl(null);
-            void refresh();
-            showToast('已归档到当前问题', 'success');
-          }}
-        />
-      )}
-
-      {problem.archivedLessons && problem.archivedLessons.length > 0 && (
-        <div className="card p-5">
-          <h2 className="font-semibold mb-2">成功经验</h2>
-          <ul className="list-disc list-inside text-sm text-slate-700">
+      {/* V5.12 · 成功经验(随时可补充,不再依赖归档) */}
+      <div className="card p-5 space-y-3">
+        <h2 className="font-semibold flex items-center gap-2">
+          <Sparkles size={16} className="text-emerald-600" /> 成功经验
+        </h2>
+        {problem.archivedLessons && problem.archivedLessons.length > 0 ? (
+          <ul className="list-disc list-inside text-sm text-slate-700 space-y-1">
             {problem.archivedLessons.map((l, i) => (
-              <li key={i}>{l}</li>
+              <li key={i} className="group flex items-start gap-2">
+                <span className="flex-1">{l}</span>
+                <button
+                  className="opacity-0 group-hover:opacity-100 text-xs text-red-500 hover:underline"
+                  onClick={async () => {
+                    const next: PDCAProblem = {
+                      ...problem,
+                      archivedLessons: (problem.archivedLessons ?? []).filter((_, idx) => idx !== i),
+                      updatedAt: new Date().toISOString(),
+                    };
+                    await save(next);
+                  }}
+                >
+                  删除
+                </button>
+              </li>
             ))}
           </ul>
+        ) : (
+          <p className="text-xs text-slate-400">尚未沉淀经验;可以在下方随时补充。</p>
+        )}
+        <div className="border-t border-slate-100 pt-3">
+          <div className="text-xs text-slate-600 mb-1.5">追加一条成功经验</div>
+          <div className="flex gap-2">
+            <input
+              className="input text-sm flex-1"
+              placeholder="从这个问题里学到的可迁移经验…"
+              value={appendLessonInput}
+              onChange={(e) => setAppendLessonInput(e.target.value)}
+              onKeyDown={async (e) => {
+                if (e.key === 'Enter' && appendLessonInput.trim()) {
+                  const next: PDCAProblem = {
+                    ...problem,
+                    archivedLessons: [...(problem.archivedLessons ?? []), appendLessonInput.trim()],
+                    updatedAt: new Date().toISOString(),
+                  };
+                  await save(next);
+                  setAppendLessonInput('');
+                }
+              }}
+            />
+            <button
+              className="btn-primary text-sm"
+              disabled={!appendLessonInput.trim()}
+              onClick={async () => {
+                const next: PDCAProblem = {
+                  ...problem,
+                  archivedLessons: [...(problem.archivedLessons ?? []), appendLessonInput.trim()],
+                  updatedAt: new Date().toISOString(),
+                };
+                await save(next);
+                setAppendLessonInput('');
+              }}
+            >
+              添加
+            </button>
+          </div>
         </div>
-      )}
+      </div>
     </div>
   );
 }
 
+/**
+ * V5.11 Bug #018 修复:PDCA 阶段面板改用 details 折叠(默认非当前阶段折叠)
+ * 优化点 #006:按 PRD 要求"阶段折叠"避免一屏噪声
+ */
 function StageBlock({
   title,
   active,
@@ -379,13 +436,19 @@ function StageBlock({
   empty?: string;
 }) {
   return (
-    <div className={`card p-5 ${active ? 'ring-2 ring-blue-400' : ''}`}>
-      <h2 className="font-semibold mb-3 flex items-center gap-2">
+    <details
+      className={`card p-5 ${active ? 'ring-2 ring-blue-400' : ''}`}
+      open={active}
+    >
+      <summary className="font-semibold cursor-pointer flex items-center gap-2 list-none">
+        <span className="text-slate-400 text-xs">▸</span>
         {title}
         {active && <span className="badge bg-blue-100 text-blue-700">当前阶段</span>}
-      </h2>
-      {children ?? <div className="text-sm text-slate-500">{empty}</div>}
-    </div>
+      </summary>
+      <div className="mt-3">
+        {children ?? <div className="text-sm text-slate-500">{empty}</div>}
+      </div>
+    </details>
   );
 }
 
@@ -410,59 +473,9 @@ function RootCausePanel({ problem, onSave }: { problem: PDCAProblem; onSave: (p:
 
   // V5.11 · 信息分类校验
   const infoValidation = validateInformationTypes(problem);
-  const meceValidation = validateMeceCompleteness(problem);
 
   return (
     <div>
-      {/* V5.11 · MECE 结构选择器 */}
-      <div className="mb-4 border border-slate-200 rounded p-3 bg-slate-50/60">
-        <div className="flex items-center gap-2 text-xs text-slate-700 mb-2">
-          <GitBranch size={14} /> <b>MECE 结构与构建路径</b>
-        </div>
-        <div className="grid grid-cols-2 gap-2 text-xs">
-          <div>
-            <label className="text-slate-500 text-xs">结构类型</label>
-            <select
-              className="input py-1"
-              value={problem.meceStructure ?? ''}
-              onChange={async (e) => {
-                const s = e.target.value as MECEStructure;
-                if (!s) return;
-                await onSave(setMeceStructure(problem, s, problem.meceBuildPath));
-              }}
-            >
-              <option value="">未选择</option>
-              <option value="serial">{MECE_STRUCTURE_LABEL.serial}</option>
-              <option value="parallel">{MECE_STRUCTURE_LABEL.parallel}</option>
-            </select>
-          </div>
-          <div>
-            <label className="text-slate-500 text-xs">构建路径</label>
-            <select
-              className="input py-1"
-              value={problem.meceBuildPath ?? ''}
-              onChange={async (e) => {
-                const p = e.target.value as MECEBuildPath;
-                if (!p || !problem.meceStructure) return;
-                await onSave(setMeceStructure(problem, problem.meceStructure, p));
-              }}
-              disabled={!problem.meceStructure}
-            >
-              <option value="">未选择</option>
-              <option value="bottom-up">{MECE_BUILD_PATH_LABEL['bottom-up']}</option>
-              <option value="top-down">{MECE_BUILD_PATH_LABEL['top-down']}</option>
-            </select>
-          </div>
-        </div>
-        {meceValidation.warnings.length > 0 && (
-          <div className="mt-2 text-xs text-amber-700 space-y-1">
-            {meceValidation.warnings.map((w, i) => (
-              <div key={i}>⚠️ {w}</div>
-            ))}
-          </div>
-        )}
-      </div>
-
       {/* V5.11 · 信息类型校验警告 */}
       {infoValidation.warnings.length > 0 && (
         <div className="mb-3 text-xs bg-yellow-50 border border-yellow-200 rounded p-2 text-yellow-900 space-y-1">
@@ -823,42 +836,3 @@ function CheckPanel({ problem, onSave }: { problem: PDCAProblem; onSave: (p: PDC
   );
 }
 
-// ==================== 内嵌 iframe 模态 (§30.5) ====================
-
-function IframeModal({
-  url,
-  toolName,
-  onClose,
-  onArchive,
-}: {
-  url: string;
-  toolName: string;
-  onClose: () => void;
-  onArchive: (note: string) => Promise<void>;
-}) {
-  const [note, setNote] = useState('');
-  return (
-    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex flex-col p-4">
-      <div className="bg-white rounded-lg overflow-hidden flex flex-col flex-1 max-h-[95vh]">
-        <div className="flex items-center justify-between px-4 py-2 border-b border-slate-100">
-          <div className="font-medium">{toolName}</div>
-          <div className="flex items-center gap-2">
-            <input
-              className="input py-1 text-xs max-w-[200px]"
-              placeholder="产出物备注 (可选)"
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-            />
-            <button className="btn-primary text-xs" onClick={() => onArchive(note)}>
-              归档到当前问题
-            </button>
-            <button className="btn-ghost text-xs" onClick={onClose}>
-              <X size={14} />
-            </button>
-          </div>
-        </div>
-        <iframe src={url} className="flex-1 w-full bg-white" title={toolName} />
-      </div>
-    </div>
-  );
-}

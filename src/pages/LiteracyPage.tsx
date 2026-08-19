@@ -11,14 +11,9 @@ import {
   LITERACY_DIMENSION_LABEL,
   GRADE_LEVEL_LABEL,
 } from '../domain/types';
+import { getLiteracyCopy } from '../domain/literacyCopy';
 
 const LEVEL_LABEL = { L1: 'L1 · 初步', L2: 'L2 · 发展', L3: 'L3 · 熟练' } as const;
-
-const LEVEL_HINT: Record<'primary' | 'junior' | 'senior', string> = {
-  primary: '小学 · 习惯养成期 - 以"行为发生"为达标线',
-  junior: '初中 · 方法形成期 - 以"方法稳定"为达标线',
-  senior: '高中 · 自主规划期 - 以"自主运转"为达标线',
-};
 
 export function LiteracyPage() {
   const { prefs } = useAppSession();
@@ -52,14 +47,15 @@ export function LiteracyPage() {
     [profile],
   );
 
+  const copy = getLiteracyCopy(prefs.gradeLevel);
   if (prefs.gradeLevel === 'adult') {
     return (
       <div className="space-y-5">
-        <PageHeader title="学习素养" description="K12 通用能力体系" />
+        <PageHeader title={copy.pageTitle} description="K12 通用能力体系" />
         <EmptyState
           icon={GraduationCap}
-          title="成年人学段不开放本模块"
-          description="成年人对应的通用能力由「问题跟进(PDCA)」与「职业选择」承载"
+          title={copy.adultBlockedTitle}
+          description={copy.adultBlockedDescription}
         />
       </div>
     );
@@ -68,8 +64,8 @@ export function LiteracyPage() {
   return (
     <div className="space-y-5">
       <PageHeader
-        title="学习素养"
-        description="K12 通用能力五大维度 · 零新增测评 · 全部来自现有场景数据。 学科能力回答『学得怎么样』, 学习素养回答『会不会学习』。"
+        title={copy.pageTitle}
+        description={copy.pageDescription}
         actions={
           <button
             className={`btn-ghost text-xs ${parentView ? 'bg-emerald-100 text-emerald-800' : ''}`}
@@ -91,7 +87,7 @@ export function LiteracyPage() {
         <Sparkles size={16} className="text-blue-600 mt-0.5" />
         <div>
           <div>
-            <b>{LEVEL_HINT[prefs.gradeLevel as 'primary' | 'junior' | 'senior']}</b>
+            <b>{copy.levelHint}</b>
           </div>
           <div className="text-xs text-slate-500 mt-1">
             指标数据由训练记录/复盘/能力缺口自动派生,不会打扰学生;跨学段升学时素养曲线连续追踪。

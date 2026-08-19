@@ -9,7 +9,7 @@ import { PageHeader } from '../components/PageHeader';
 import { MasteryBar } from '../components/MasteryBar';
 import { EmptyState } from '../components/EmptyState';
 import { PdcaCalendarBoard } from '../components/PdcaCalendarBoard';
-import { GRADE_LEVEL_LABEL, MODULE_VISIBILITY, SUBJECT_LABEL } from '../domain/types';
+import { GRADE_LEVEL_LABEL, MODULE_VISIBILITY, PLAN_STAGE_LABEL, SUBJECT_LABEL } from '../domain/types';
 import type { AbilityGap, GradeLevel, TrainingRecord, AbilitySnapshot, FixTask, ReviewRecord, ExamRegistration, StagePlan } from '../domain/types';
 
 /** V5.11 §7 · 学段差异化文案(小学游戏化 / 公考直白 / K12 中性) */
@@ -38,39 +38,39 @@ const GRADE_TONE: Record<GradeLevel, {
     focusPrefix: '打怪',
   },
   junior: {
-    title: '今日工作台',
-    desc: '训练 → 反馈 → 错题/问题 → 能力短板 → 修复 → 验证 → 能力提升',
-    actionLabel: '记录训练',
-    focusTitle: '今天的核心任务',
-    reviewTitle: '今日复盘',
-    metricGap: '待修复能力缺口',
-    metricTrain: '近30天训练次数',
-    metricAbility: '能力快照数量',
-    todayFocusEmpty: '当前没有未修复的问题, 继续保持!',
-    focusPrefix: '修复',
+    title: '今天该做点什么',
+    desc: '练一次 → 看看哪里错了 → 补一补 → 再验证 · 一点一点变强',
+    actionLabel: '记一次练习',
+    focusTitle: '今天要搞定的事',
+    reviewTitle: '今日回顾',
+    metricGap: '还没解决的薄弱点',
+    metricTrain: '本月练了几次',
+    metricAbility: '能力记录数',
+    todayFocusEmpty: '目前没有卡住的地方,继续保持 👍',
+    focusPrefix: '补齐',
   },
   senior: {
     title: '今日工作台',
-    desc: '训练 → 反馈 → 错题/问题 → 能力短板 → 修复 → 验证 → 能力提升',
+    desc: '目标 → 训练 → 错题定位 → 弱项修复 → 验证闭环 · 提高陌生题正确率',
     actionLabel: '记录训练',
-    focusTitle: '今天的核心任务',
+    focusTitle: '今日重点',
     reviewTitle: '今日复盘',
-    metricGap: '待修复能力缺口',
-    metricTrain: '近30天训练次数',
-    metricAbility: '能力快照数量',
-    todayFocusEmpty: '当前没有未修复的问题, 继续保持!',
+    metricGap: '待修复弱项',
+    metricTrain: '近 30 天训练',
+    metricAbility: '能力快照',
+    todayFocusEmpty: '当前没有未修复的弱项,保持节奏',
     focusPrefix: '修复',
   },
   adult: {
     title: '今日工作台',
-    desc: '告诉你今天最值得做什么。 训练 → 反馈 → 错误/问题 → 能力缺口 → 修复 → 验证 → 能力增长。',
+    desc: '训练 → 反馈 → 能力缺口 → 修复 → 验证 · 数据驱动的能力增长闭环',
     actionLabel: '记录训练',
     focusTitle: '今天的核心任务',
     reviewTitle: '今日复盘',
     metricGap: '待修复能力缺口',
-    metricTrain: '近30天训练次数',
+    metricTrain: '近 30 天训练次数',
     metricAbility: '能力快照数量',
-    todayFocusEmpty: '当前没有未修复的问题, 继续保持!',
+    todayFocusEmpty: '当前没有未修复的问题,继续保持',
     focusPrefix: '修复',
   },
 };
@@ -153,9 +153,12 @@ export function DashboardPage() {
               </div>
               <div>
                 <div className="text-xs text-purple-700">下一场公考</div>
-                <div className="text-sm font-semibold text-slate-900">
-                  {upcomingExam.postName}
-                  <span className="text-xs text-slate-500 ml-2">{upcomingExam.examDate}</span>
+                {/* V5.11 Bug #019/优化点 #005 修复:岗位名与日期换行分隔,避免粘连 */}
+                <div className="text-sm font-semibold text-slate-900 leading-relaxed">
+                  <div>{upcomingExam.postName}</div>
+                  <div className="text-xs font-normal text-slate-500 mt-0.5">
+                    考试日期:{upcomingExam.examDate}
+                  </div>
                 </div>
               </div>
             </div>
@@ -192,10 +195,7 @@ export function DashboardPage() {
         <TimelineSummary registrations={registrations} stagePlans={stagePlans} />
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <TodayFocusCard gaps={prioritizedGaps} tasks={tasks} tone={tone} />
-        <TodayReviewCard hasReview={!!todayReview} totalTrainingsToday={totalTrainingsToday} tone={tone} />
-      </div>
+      <TodayFocusCard gaps={prioritizedGaps} tasks={tasks} tone={tone} />
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <MetricCard
@@ -307,9 +307,7 @@ function TimelineSummary({ registrations, stagePlans }: { registrations: ExamReg
           {activeStage && (
             <div className="flex items-center justify-between bg-blue-50 rounded p-2">
               <div>
-                当前阶段: <b>
-                  {activeStage.stage === 'foundation' ? '基础期' : activeStage.stage === 'topic' ? '专项期' : activeStage.stage === 'sprint' ? '冲刺期' : '考前期'}
-                </b>
+                当前阶段: <b>{PLAN_STAGE_LABEL[activeStage.stage]}</b>
                 <span className="text-xs text-slate-500 ml-2">
                   {activeStage.startDate} → {activeStage.endDate}
                 </span>
@@ -321,7 +319,8 @@ function TimelineSummary({ registrations, stagePlans }: { registrations: ExamReg
           )}
           {nextStage && (
             <div className="text-xs text-slate-500">
-              下一阶段: {nextStage.stage} 起于 {nextStage.startDate}
+              {/* V5.11 Bug #036 修复:占位符改中文 */}
+              下一阶段: <b>{PLAN_STAGE_LABEL[nextStage.stage]}</b> 起于 {nextStage.startDate}
             </div>
           )}
         </div>
@@ -425,35 +424,3 @@ function TodayFocusCard({
   );
 }
 
-function TodayReviewCard({
-  hasReview,
-  totalTrainingsToday,
-  tone,
-}: {
-  hasReview: boolean;
-  totalTrainingsToday: number;
-  tone: (typeof GRADE_TONE)[GradeLevel];
-}) {
-  return (
-    <div className="card p-5">
-      <div className="flex items-center gap-2 mb-3">
-        <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-600 flex items-center justify-center">
-          <CalendarClock size={16} />
-        </div>
-        <h2 className="text-base font-semibold text-slate-900">{tone.reviewTitle}</h2>
-      </div>
-      {hasReview ? (
-        <div className="text-sm text-slate-600">今天的复盘已完成 ✅</div>
-      ) : (
-        <div className="text-sm text-slate-600">
-          今日已记录训练 <b className="text-slate-900">{totalTrainingsToday}</b> 次, 只需 2 分钟即可完成日复盘。
-        </div>
-      )}
-      <div className="mt-4">
-        <Link to="/reviews" className="btn-primary text-sm">
-          {hasReview ? '查看复盘' : '开始复盘'}
-        </Link>
-      </div>
-    </div>
-  );
-}

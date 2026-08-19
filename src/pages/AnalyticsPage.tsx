@@ -17,6 +17,7 @@ import {
 import { ALL_TRANSFERS, TRANSFER_STRENGTH_LABEL } from '../domain/abilityTransfer';
 import { ERROR_CATEGORY_LABEL, SUBJECT_LABEL } from '../domain/types';
 import type { AbilityGap, Subject, TrainingRecord } from '../domain/types';
+import { getAnalyticsCopy } from '../domain/analyticsCopy';
 
 type Tab = 'roi' | 'stage' | 'marginal' | 'loops' | 'transfer';
 
@@ -44,11 +45,12 @@ export function AnalyticsPage() {
   const growthSeries = useMemo(() => buildGrowthSeries(trainings, subject), [trainings, subject]);
   const priorityGaps = useMemo(() => prioritizeGaps(gaps.filter((g) => g.status === 'unresolved')), [gaps]);
 
+  const copy = getAnalyticsCopy(prefs.gradeLevel);
   return (
     <div className="space-y-5">
       <PageHeader
-        title="训练收益 & 阶段报告"
-        description="识别你的最有效训练方式、边际收益递减点、恶性反馈回路、以及能力迁移杠杆。"
+        title={copy.pageTitle}
+        description={copy.pageDescription}
       />
 
       <div className="flex flex-wrap items-center gap-2">
@@ -82,7 +84,7 @@ export function AnalyticsPage() {
             对比不同训练方式在你身上的收益率(能力掌握度增量 / 小时)。 "错误修复的单位时间收益最高" 是常见规律。
           </p>
           {roi.length === 0 ? (
-            <EmptyState icon={Wallet} title="数据不足" description="每种训练方式至少 2 次记录后可分析" />
+            <EmptyState icon={Wallet} title={copy.effEmptyTitle} description={copy.effEmptyDescription} />
           ) : (
             <>
               <ResponsiveContainer width="100%" height={280}>
@@ -199,7 +201,7 @@ export function AnalyticsPage() {
             )}
           </p>
           {marginal.points.length === 0 ? (
-            <EmptyState icon={TrendingUp} title="数据不足" description="该学科尚无足够训练累计数据" />
+            <EmptyState icon={TrendingUp} title={copy.transferEmptyTitle} description={copy.transferEmptyDescription} />
           ) : (
             <>
               <ResponsiveContainer width="100%" height={280}>
@@ -271,7 +273,7 @@ export function AnalyticsPage() {
             同一类错误持续 4 周以上仍在复现且缺乏对应修复动作, 视为恶性反馈回路。 需要打破循环。
           </p>
           {feedbackLoops.length === 0 ? (
-            <EmptyState icon={Zap} title="未检测到恶性反馈回路" description="继续保持" />
+            <EmptyState icon={Zap} title={copy.loopEmptyTitle} description={copy.loopEmptyDescription} />
           ) : (
             <div className="space-y-2">
               {feedbackLoops.map((l) => (

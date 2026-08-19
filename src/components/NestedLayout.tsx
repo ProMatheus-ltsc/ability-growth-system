@@ -10,7 +10,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '@shared/core';
-import { ChevronDown, ChevronRight, LogOut, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { ChevronDown, ChevronRight, LogOut, Menu, PanelLeftClose, PanelLeftOpen, Search, X } from 'lucide-react';
 
 export interface NestedNavLeaf {
   to: string;
@@ -52,6 +52,11 @@ export function NestedLayout({ children, groups, appConfig, storageKey = DEFAULT
   const navigate = useNavigate();
   const location = useLocation();
   const [collapsed, setCollapsed] = useState(false);
+  // V5.11 Bug #037 修复:移动端(<lg 断点)侧边栏改为 Drawer 抽屉,默认关闭
+  const [mobileOpen, setMobileOpen] = useState(false);
+  // V5.11 Bug #037 修复:全局搜索面板(Ctrl+K / Cmd+K)
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
   const [expanded, setExpanded] = useState<Set<string>>(() => {
     try {
       const raw = localStorage.getItem(storageKey);
@@ -61,6 +66,25 @@ export function NestedLayout({ children, groups, appConfig, storageKey = DEFAULT
     }
     return new Set();
   });
+
+  // Ctrl+K / Cmd+K 打开全局搜索
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setSearchOpen((v) => !v);
+      }
+      if (e.key === 'Escape') setSearchOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  // 路由切换时关闭 Drawer
+  useEffect(() => {
+    setMobileOpen(false);
+    setSearchOpen(false);
+  }, [location.pathname]);
 
   // 当前路由属于哪个组 → 自动展开
   const activeGroupKey = useMemo(() => {
@@ -108,14 +132,70 @@ export function NestedLayout({ children, groups, appConfig, storageKey = DEFAULT
 
   const AppIcon = appConfig.icon;
   const sidebarWidth = collapsed ? 'w-16' : 'w-60';
-  const mainPadding = collapsed ? 'pl-16' : 'pl-60';
+  // V5.11 Bug #037 修复:移动端不预留侧栏空间,主内容 100% 宽度
+  const mainPadding = collapsed ? 'lg:pl-16' : 'lg:pl-60';
 
   const visibleGroups = groups.filter((g) => g.visible !== false);
 
+  // 全局搜索候选(基于导航菜单)
+  const searchCandidates = useMemo(() => {
+    const list: Array<{ to: string; label: string; group: string }> = [];
+    for (const g of visibleGroups) {
+      if (g.to && !g.children?.length) list.push({ to: g.to, label: g.label, group: g.label });
+      g.children?.forEach((c) => {
+        if (c.visible !== false) list.push({ to: c.to, label: c.label, group: g.label });
+      });
+    }
+    return list;
+  }, [visibleGroups]);
+  const searchResults = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return searchCandidates.slice(0, 8);
+    return searchCandidates.filter(
+      (c) => c.label.toLowerCase().includes(q) || c.group.toLowerCase().includes(q),
+    );
+  }, [searchQuery, searchCandidates]);
+
   return (
-    <div className="min-h-screen bg-slate-50 flex">
+    <div className="min-h-screen bg-slate-50 flex flex-col lg:flex-row">
+      {/* 移动端顶部条(<lg 断点显示) */}
+      <div className="lg:hidden flex items-center justify-between bg-white border-b border-slate-200 px-3 h-14 sticky top-0 z-30">
+        <button
+          className="p-2 rounded hover:bg-slate-100"
+          onClick={() => setMobileOpen(true)}
+          aria-label="打开菜单"
+        >
+          <Menu size={20} />
+        </button>
+        <div className="flex items-center gap-2">
+          <div className="w-7 h-7 bg-gradient-to-br from-blue-600 to-indigo-700 rounded-lg flex items-center justify-center">
+            <AppIcon size={16} className="text-white" />
+          </div>
+          <span className="font-bold text-slate-800 text-sm">{appConfig.name}</span>
+        </div>
+        <button
+          className="p-2 rounded hover:bg-slate-100"
+          onClick={() => setSearchOpen(true)}
+          aria-label="搜索"
+        >
+          <Search size={20} />
+        </button>
+      </div>
+
+      {/* 移动端 Drawer 遮罩 */}
+      {mobileOpen && (
+        <div
+          className="lg:hidden fixed inset-0 z-40 bg-black/40"
+          onClick={() => setMobileOpen(false)}
+        />
+      )}
+
       <aside
-        className={`fixed left-0 top-0 bottom-0 ${sidebarWidth} flex flex-col bg-white border-r border-slate-200 z-40 transition-all duration-300`}
+        className={`
+          fixed left-0 top-0 bottom-0 flex flex-col bg-white border-r border-slate-200 z-50 transition-transform duration-300
+          ${sidebarWidth}
+          ${mobileOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
+        `}
       >
         {/* 品牌区 */}
         <div className="flex items-center h-14 px-3 border-b border-slate-100 flex-shrink-0">
@@ -249,8 +329,65 @@ export function NestedLayout({ children, groups, appConfig, storageKey = DEFAULT
       </aside>
 
       <main className={`flex-1 ${mainPadding} transition-all duration-300 min-h-screen`}>
-        <div className="p-4 lg:p-6 max-w-7xl mx-auto">{children}</div>
+        <div className="p-3 lg:p-6 max-w-7xl mx-auto">{children}</div>
       </main>
+
+      {/* V5.11 Bug #037 修复:Ctrl+K 全局搜索面板 */}
+      {searchOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-start justify-center pt-24 bg-black/40"
+          onClick={() => setSearchOpen(false)}
+        >
+          <div
+            className="bg-white rounded-xl shadow-2xl w-full max-w-lg mx-4 overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-2 px-4 py-3 border-b border-slate-100">
+              <Search size={18} className="text-slate-400" />
+              <input
+                autoFocus
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="搜索菜单/功能(Ctrl+K)"
+                className="flex-1 outline-none text-sm"
+              />
+              <button
+                onClick={() => setSearchOpen(false)}
+                className="p-1 rounded hover:bg-slate-100 text-slate-400"
+                aria-label="关闭"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="max-h-80 overflow-y-auto py-1">
+              {searchResults.length === 0 ? (
+                <div className="px-4 py-6 text-center text-sm text-slate-400">未找到匹配项</div>
+              ) : (
+                searchResults.map((r) => (
+                  <button
+                    key={r.to}
+                    onClick={() => {
+                      navigate(r.to);
+                      setSearchOpen(false);
+                      setSearchQuery('');
+                    }}
+                    className="w-full flex items-center justify-between px-4 py-2 text-sm hover:bg-slate-50 text-left"
+                  >
+                    <span className="text-slate-800">{r.label}</span>
+                    <span className="text-xs text-slate-400">{r.group}</span>
+                  </button>
+                ))
+              )}
+            </div>
+            <div className="border-t border-slate-100 px-4 py-2 text-[10px] text-slate-400 flex items-center gap-2">
+              <kbd className="px-1.5 py-0.5 rounded bg-slate-100">↑↓</kbd> 选择
+              <kbd className="px-1.5 py-0.5 rounded bg-slate-100">Enter</kbd> 打开
+              <kbd className="px-1.5 py-0.5 rounded bg-slate-100">Esc</kbd> 关闭
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

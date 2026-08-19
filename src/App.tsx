@@ -8,7 +8,6 @@ import {
   BookOpen,
   Activity,
   AlertOctagon,
-  Calendar,
   Users,
   Settings,
   CloudUpload,
@@ -16,7 +15,6 @@ import {
   Timer,
   FlaskConical,
   BarChart3,
-  Briefcase,
   LayoutDashboard,
   ClipboardList,
   CheckSquare,
@@ -43,7 +41,6 @@ import { DashboardPage } from './pages/DashboardPage';
 import { TrainingsPage } from './pages/TrainingsPage';
 import { AbilityCenterPage } from './pages/AbilityCenterPage';
 import { ProblemCenterPage } from './pages/ProblemCenterPage';
-import { ReviewPage } from './pages/ReviewPage';
 import { StudentsPage } from './pages/StudentsPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { SyncPage } from './pages/SyncPage';
@@ -51,7 +48,6 @@ import { SyncPage } from './pages/SyncPage';
 import { TimelinePage } from './pages/TimelinePage';
 import { ExamDiagnosisPage } from './pages/ExamDiagnosisPage';
 import { AnalyticsPage } from './pages/AnalyticsPage';
-import { ExamRegistrationPage } from './pages/ExamRegistrationPage';
 import { InsightsPage } from './pages/InsightsPage';
 
 // V5.8 新增模块
@@ -64,8 +60,6 @@ import { PdcaEfficiencyPage } from './pages/PdcaEfficiencyPage';
 import { CareerPage } from './pages/CareerPage';
 import { LiteracyPage } from './pages/LiteracyPage';
 import { LiteracyCollaborationPage } from './pages/LiteracyCollaborationPage';
-import { SubjectiveAnswersPage } from './pages/SubjectiveAnswersPage';
-import { InterviewRecordPage } from './pages/InterviewRecordPage';
 import { StudentsBatchImportPage } from './pages/StudentsBatchImportPage';
 import { AiJobParsePage } from './pages/AiJobParsePage';
 import { PoliticsHotspotsPage } from './pages/PoliticsHotspotsPage';
@@ -101,18 +95,6 @@ function buildStudentGroups(v: Visibility): NestedNavGroup[] {
         { to: '/abilities', icon: Activity, label: '能力中心' },
         { to: '/problems', icon: AlertOctagon, label: '问题中心' },
         { to: '/exams', icon: FlaskConical, label: '测验诊断' },
-        { to: '/reviews', icon: Calendar, label: '复盘中心' },
-      ],
-    },
-    {
-      key: 'gongkao',
-      label: '公考专项',
-      icon: Briefcase,
-      visible: v.examRegistration,
-      children: [
-        { to: '/subjective-answers', icon: BookOpen, label: '申论作答' },
-        { to: '/interview', icon: BookOpen, label: '面试训练' },
-        { to: '/registrations', icon: Briefcase, label: '公考报考' },
       ],
     },
     {
@@ -206,18 +188,6 @@ function buildTeacherGroups(v: Visibility): NestedNavGroup[] {
         { to: '/abilities', icon: Activity, label: '能力中心' },
         { to: '/problems', icon: AlertOctagon, label: '问题中心' },
         { to: '/exams', icon: FlaskConical, label: '测验诊断' },
-        { to: '/reviews', icon: Calendar, label: '复盘中心' },
-      ],
-    },
-    {
-      key: 'gongkao',
-      label: '公考专项',
-      icon: Briefcase,
-      visible: v.examRegistration,
-      children: [
-        { to: '/subjective-answers', icon: BookOpen, label: '申论作答' },
-        { to: '/interview', icon: BookOpen, label: '面试训练' },
-        { to: '/registrations', icon: Briefcase, label: '公考报考' },
       ],
     },
     {
@@ -342,7 +312,6 @@ function AuthenticatedApp() {
         <Route path="/abilities" element={<ProtectedRoute><AbilityCenterPage /></ProtectedRoute>} />
         <Route path="/problems" element={<ProtectedRoute><ProblemCenterPage /></ProtectedRoute>} />
         <Route path="/exams" element={<ProtectedRoute><ExamDiagnosisPage /></ProtectedRoute>} />
-        <Route path="/reviews" element={<ProtectedRoute><ReviewPage /></ProtectedRoute>} />
         <Route path="/timeline" element={<ProtectedRoute><TimelinePage /></ProtectedRoute>} />
         <Route path="/analytics" element={<ProtectedRoute><AnalyticsPage /></ProtectedRoute>} />
         <Route path="/insights" element={<ProtectedRoute><InsightsPage /></ProtectedRoute>} />
@@ -359,11 +328,8 @@ function AuthenticatedApp() {
         <Route path="/career" element={<ProtectedRoute><ModuleGuardCareer><CareerPage /></ModuleGuardCareer></ProtectedRoute>} />
         <Route path="/literacy" element={<ProtectedRoute><ModuleGuardLiteracy><LiteracyPage /></ModuleGuardLiteracy></ProtectedRoute>} />
         <Route path="/literacy-collab" element={<ProtectedRoute><ModuleGuardLiteracy><LiteracyCollaborationPage /></ModuleGuardLiteracy></ProtectedRoute>} />
-        <Route path="/registrations" element={<ProtectedRoute><ModuleGuardExamReg><ExamRegistrationPage /></ModuleGuardExamReg></ProtectedRoute>} />
         <Route path="/ai-job-parse" element={<ProtectedRoute><ModuleGuardExamReg><AiJobParsePage /></ModuleGuardExamReg></ProtectedRoute>} />
         <Route path="/politics-hotspots" element={<ProtectedRoute><ModuleGuardExamReg><PoliticsHotspotsPage /></ModuleGuardExamReg></ProtectedRoute>} />
-        <Route path="/subjective-answers" element={<ProtectedRoute><ModuleGuardExamReg><SubjectiveAnswersPage /></ModuleGuardExamReg></ProtectedRoute>} />
-        <Route path="/interview" element={<ProtectedRoute><ModuleGuardExamReg><InterviewRecordPage /></ModuleGuardExamReg></ProtectedRoute>} />
 
         {/* 教师专属路由 */}
         <Route path="/class" element={<ProtectedRoute><TeacherOnly><ClassOverviewPage /></TeacherOnly></ProtectedRoute>} />

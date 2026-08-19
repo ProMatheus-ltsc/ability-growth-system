@@ -39,6 +39,7 @@ import type {
   PoliticsHotspot,
   CareerObservationPoint,
   RetestReflection,
+  CareerAiImport,
 } from '../domain/types';
 
 export const APP_DB_PREFIX = 'ability-growth';
@@ -50,8 +51,9 @@ configureDB(APP_DB_PREFIX);
  *  v3: PRD V5.8 - PDCA / 职业测评 / 职业报告 (3 张)
  *  v4: V5.8 全量补齐 - 申论版本/面试专项/PDCA工具产出/自定义工具/周检查/协作行为/否决解除/时政素材 (8 张)
  *  v5: V5.11 作答质量保障版 - 3 个月观察点 + 事后反思 2 问 (2 张)
+ *  v6: V5.11 · AI 拓展候选导入记录(每次导入独立存档) (1 张)
  */
-const DB_VERSION = 5;
+const DB_VERSION = 6;
 
 interface AGSchema extends DBSchema {
   trainings: {
@@ -194,6 +196,11 @@ interface AGSchema extends DBSchema {
     value: RetestReflection;
     indexes: { studentId: string; assessmentId: string; createdAt: string };
   };
+  careerAiImports: {
+    key: string;
+    value: CareerAiImport;
+    indexes: { studentId: string; reportId: string; assessmentId: string; importedAt: string };
+  };
   meta: {
     key: string;
     value: { key: string; value: unknown };
@@ -228,7 +235,8 @@ export type StoreName =
   | 'vetoOverrides'
   | 'politicsHotspots'
   | 'careerObservationPoints'
-  | 'careerRetestReflections';
+  | 'careerRetestReflections'
+  | 'careerAiImports';
 
 const SYNCED_STORES: StoreName[] = [
   'trainings',
@@ -259,6 +267,7 @@ const SYNCED_STORES: StoreName[] = [
   'politicsHotspots',
   'careerObservationPoints',
   'careerRetestReflections',
+  'careerAiImports',
 ];
 
 let currentAccountId: string | undefined;
@@ -429,6 +438,15 @@ function db(): Promise<IDBPDatabase<AGSchema>> {
           crr.createIndex('assessmentId', 'assessmentId');
           crr.createIndex('createdAt', 'createdAt');
         }
+
+        if (oldVersion < 6) {
+          // V5.11 §31.10 · AI 拓展候选导入记录(每次导入独立存档,支持多次)
+          const cai = dbi.createObjectStore('careerAiImports', { keyPath: 'id' });
+          cai.createIndex('studentId', 'studentId');
+          cai.createIndex('reportId', 'reportId');
+          cai.createIndex('assessmentId', 'assessmentId');
+          cai.createIndex('importedAt', 'importedAt');
+        }
       },
     });
   }
@@ -590,6 +608,7 @@ export interface ExportedSnapshot {
   politicsHotspots: PoliticsHotspot[];
   careerObservationPoints?: CareerObservationPoint[];
   careerRetestReflections?: RetestReflection[];
+  careerAiImports?: CareerAiImport[];
 }
 
 async function readAll<S extends StoreName>(store: S): Promise<StoreValue<S>[]> {
@@ -630,6 +649,7 @@ export async function exportSnapshot(): Promise<ExportedSnapshot> {
     politicsHotspots,
     careerObservationPoints,
     careerRetestReflections,
+    careerAiImports,
   ] = await Promise.all([
     readAll('trainings'),
     readAll('gaps'),
@@ -659,9 +679,10 @@ export async function exportSnapshot(): Promise<ExportedSnapshot> {
     readAll('politicsHotspots'),
     readAll('careerObservationPoints'),
     readAll('careerRetestReflections'),
+    readAll('careerAiImports'),
   ]);
   return {
-    version: '5.0.0',
+    version: '6.0.0',
     exportedAt: new Date().toISOString(),
     trainings,
     gaps,
@@ -691,6 +712,7 @@ export async function exportSnapshot(): Promise<ExportedSnapshot> {
     politicsHotspots,
     careerObservationPoints,
     careerRetestReflections,
+    careerAiImports,
   };
 }
 
@@ -731,6 +753,7 @@ export async function importSnapshot(snapshot: ExportedSnapshot, mode: 'merge' |
     politicsHotspots: snapshot.politicsHotspots ?? [],
     careerObservationPoints: snapshot.careerObservationPoints ?? [],
     careerRetestReflections: snapshot.careerRetestReflections ?? [],
+    careerAiImports: snapshot.careerAiImports ?? [],
   };
   for (const store of SYNCED_STORES) {
     for (const record of payload[store]) {

@@ -429,6 +429,14 @@ export interface ExamRegistration {
 /** 备考/学期阶段规划 */
 export type PlanStage = 'foundation' | 'topic' | 'sprint' | 'pre-exam';
 
+/** V5.11 Bug #036 修复:PlanStage 中文映射,避免 UI 直接展示英文占位符 */
+export const PLAN_STAGE_LABEL: Record<PlanStage, string> = {
+  foundation: '基础期',
+  topic: '专项期',
+  sprint: '冲刺期',
+  'pre-exam': '考前期',
+};
+
 export interface StagePlan {
   id: string;
   studentId?: string;
@@ -903,10 +911,13 @@ export interface CareerAssessment {
       selectedOptions: string[];
       tags: string[];
     }>;
-    /** V5.11 §31.3 · 他评校准卡录入结果 */
+    /** V5.11 §31.3 · 他评校准卡录入结果
+     * V5.12 起:answer 变为可选(优化改用勾选);selectedOptions 记录用户选中的候选描述。
+     */
     externalFeedback?: Array<{
       questionId: string;
-      answer: string;
+      answer?: string;
+      selectedOptions?: string[];
       tags: string[];
     }>;
   };
@@ -914,6 +925,18 @@ export interface CareerAssessment {
     scores: Record<AbilityEightDim, number>;
     selfOnly: AbilityEightDim[];
     calibratedFromSystem: AbilityEightDim[];
+    /** V5.12 · 完整版:每维置信度(反向题一致性,0-100) */
+    confidence?: Record<AbilityEightDim, number>;
+    /** V5.12 · Top 3 优势 */
+    topStrengths?: Array<{ dim: AbilityEightDim; score: number }>;
+    /** V5.12 · 底部待发展项 */
+    developAreas?: Array<{ dim: AbilityEightDim; score: number }>;
+    /** V5.12 · 强度分档 */
+    levelBucket?: Record<AbilityEightDim, 'below' | 'basic' | 'solid' | 'excellent'>;
+    /** V5.12 · 跨维度模式识别 */
+    patterns?: string[];
+    /** V5.12 · 反向题一致性说明 */
+    consistencyNote?: string;
   };
   personality: MBTIScore;
   /** V5.11 · 作答可信度评分 */
@@ -1000,6 +1023,28 @@ export interface TridentStructure {
     workDataAssets: string[];   // 作品与数据资产
     targetYears: string;
   };
+}
+
+/** V5.11 §31.10 · AI 拓展候选导入记录(每次导入独立存档,支持多次) */
+export interface CareerAiImport {
+  id: string;
+  reportId: string;
+  assessmentId: string;
+  studentId?: string;
+  /** 场景:职业方向 / 大学专业(高中变体) */
+  scenario: 'career' | 'college-major';
+  /** AI 模型标识(用户可自定义) */
+  aiModel?: string;
+  /** 用户使用的 Prompt(便于溯源) */
+  prompt?: string;
+  /** AI 原始响应 JSON(压缩存储便于回溯) */
+  rawResponse: string;
+  /** 解析后的候选(含系统否决校验结果) */
+  candidates: CareerCandidate[];
+  /** 用户备注 */
+  note?: string;
+  importedAt: string;
+  createdAt: string;
 }
 
 /** 职业定位报告 */

@@ -4,6 +4,7 @@
  * P1: 瓶颈识别 / 训练收益 / 阶段报告 / 预警
  * P2: 能力关联分析 / 边际收益 / 恶性反馈回路 / 杠杆点
  */
+import { v4 as uuid } from 'uuid';
 import type {
   AbilityGap,
   AbilitySnapshot,
@@ -27,7 +28,10 @@ export interface SubjectStats {
   totalErrors: number;
   totalDurationMinutes: number;
   correctRate: number;
-  unfamiliarCorrectRate: number;
+  /** 陌生题正确率;仅当存在陌生题记录时有效,否则为 null */
+  unfamiliarCorrectRate: number | null;
+  /** 陌生题样本数,便于 UI 展示"暂无陌生题数据" */
+  unfamiliarSampleSize: number;
   masteryScore: number;
   level: MasteryLevel;
   errorHotspots: Array<{ category: ErrorCategory; count: number }>;
@@ -48,11 +52,18 @@ export function aggregateBySubject(records: TrainingRecord[]): SubjectStats[] {
     const totalDurationMinutes = list.reduce((s, r) => s + (r.durationMinutes ?? 0), 0);
     const correctRate = totalQuestions === 0 ? 0 : totalCorrect / totalQuestions;
 
+    // V5.11 Bug #007 修复:陌生题正确率严格按 isUnfamiliar 标记的记录计算,
+    // 若无陌生题样本则显式返回 null,UI 可显示"暂无陌生题数据",避免与整体正确率混淆。
     const unfamiliar = list.filter((r) => r.isUnfamiliar);
     const unfamiliarQ = unfamiliar.reduce((s, r) => s + r.totalQuestions, 0);
     const unfamiliarErr = unfamiliar.reduce((s, r) => s + r.errorCount, 0);
-    const unfamiliarCorrectRate = unfamiliarQ === 0 ? correctRate : (unfamiliarQ - unfamiliarErr) / unfamiliarQ;
-    const masteryScore = Math.round((unfamiliarCorrectRate * 0.7 + correctRate * 0.3) * 100);
+    const unfamiliarCorrectRate = unfamiliarQ === 0 ? null : (unfamiliarQ - unfamiliarErr) / unfamiliarQ;
+    // 掌握度评分:陌生题占主导 (0.7),缺失时退化为整体正确率 (0.3 权重也归给整体)
+    const masteryScore = Math.round(
+      unfamiliarCorrectRate === null
+        ? correctRate * 100
+        : (unfamiliarCorrectRate * 0.7 + correctRate * 0.3) * 100,
+    );
 
     const errorCounter = new Map<ErrorCategory, number>();
     for (const r of list) {
@@ -72,6 +83,7 @@ export function aggregateBySubject(records: TrainingRecord[]): SubjectStats[] {
       totalDurationMinutes,
       correctRate,
       unfamiliarCorrectRate,
+      unfamiliarSampleSize: unfamiliarQ,
       masteryScore,
       level: scoreToLevel(masteryScore),
       errorHotspots,
@@ -458,3 +470,128 @@ export function computeGrowthRate(series: Array<{ week: string; score: number }>
   const last = series[series.length - 1].score;
   return +((last - first) / series.length).toFixed(2);
 }
+
+// ============ V5.11 Bug #005 修复 · 错题自动归集为能力缺口 ============
+// ============ V5.11 Bug #009 修复 · 训练完成后自动生成能力快照 ============
+
+/**
+ * 从单条训练记录派生能力缺口(gap) - 打通"训练→反馈→修复"P0 核心闭环
+ *
+ * 归集规则:
+ * - 错题数 ≥ 3 或 错题率 ≥ 40% → 归为缺口
+ * - 严重度分档:错题率 ≥ 70% serious / ≥ 40% medium / 其它 light
+ * - 若同学员+同学科+同模块+同错误类型已存在未验证缺口,则合并计数(occurrenceCount+1 · lastSeenAt 刷新)
+ * - 每个 errorCategory 派生一条缺口;若训练未打错误标签,则用默认 concept 兜底
+ */
+export function deriveGapsFromTraining(
+  record: TrainingRecord,
+  existingGaps: AbilityGap[],
+): AbilityGap[] {
+  const errorRate = record.totalQuestions === 0 ? 0 : record.errorCount / record.totalQuestions;
+  // 阈值:错题 <3 且错误率 <40% 不派生 gap
+  if (record.errorCount < 3 && errorRate < 0.4) return [];
+
+  const now = new Date().toISOString();
+  const severity: AbilityGap['severity'] =
+    errorRate >= 0.7 ? 'serious' : errorRate >= 0.4 ? 'medium' : 'light';
+
+  // 若无错误类型标签,使用默认 concept 兜底(避免"训练录入错题但未选错因"场景漏归集)
+  const categories: ErrorCategory[] = record.errorCategories.length > 0 ? record.errorCategories : ['concept'];
+  const abilityPath = `${record.subject}/${record.module}`;
+
+  const updated: AbilityGap[] = [];
+  for (const category of categories) {
+    // 合并同类未验证缺口
+    const existing = existingGaps.find(
+      (g) =>
+        g.studentId === record.studentId &&
+        g.subject === record.subject &&
+        g.abilityPath === abilityPath &&
+        g.errorCategory === category &&
+        g.status !== 'verified',
+    );
+    if (existing) {
+      updated.push({
+        ...existing,
+        occurrenceCount: existing.occurrenceCount + 1,
+        lastSeenAt: now,
+        updatedAt: now,
+        severity: severityMax(existing.severity, severity),
+        sourceRecordIds: existing.sourceRecordIds.includes(record.id)
+          ? existing.sourceRecordIds
+          : [...existing.sourceRecordIds, record.id].slice(-20),
+      });
+    } else {
+      updated.push({
+        id: uuid(),
+        studentId: record.studentId,
+        subject: record.subject,
+        abilityPath,
+        errorCategory: category,
+        severity,
+        status: 'unresolved',
+        sourceRecordIds: [record.id],
+        occurrenceCount: 1,
+        firstSeenAt: now,
+        lastSeenAt: now,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+  }
+  return updated;
+}
+
+function severityMax(a: AbilityGap['severity'], b: AbilityGap['severity']): AbilityGap['severity'] {
+  const rank = { light: 1, medium: 2, serious: 3 } as const;
+  return rank[a] >= rank[b] ? a : b;
+}
+
+/**
+ * V5.11 Bug #009 修复 · 从训练记录派生能力快照(建立基线 + 增长追踪)
+ *
+ * 快照规则:
+ * - 学科 × 模块 一级快照:每次训练后即写入,evaluationTime = record.date
+ * - 分档:陌生题正确率 ≥ 85% 精通 · 61-85% 熟练 · 26-60% 初步 · 0-25% 未掌握
+ * - 置信度: 陌生题样本 ≥ 5 → 0.9 / 1-4 → 0.6 / 0 → 0.4
+ * - source = 'training'(与 external_ai / exam / manual 区分)
+ */
+export function deriveSnapshotFromTraining(record: TrainingRecord): AbilitySnapshot {
+  const correctRate = record.totalQuestions === 0 ? 0 : (record.totalQuestions - record.errorCount) / record.totalQuestions;
+  const score = Math.round(correctRate * 100);
+  const level = scoreToLevel(score);
+  const confidence = record.isUnfamiliar
+    ? (record.totalQuestions >= 5 ? 0.9 : 0.6)
+    : 0.4;
+  return {
+    id: uuid(),
+    studentId: record.studentId,
+    subject: record.subject,
+    abilityPath: `${record.subject}/${record.module}`,
+    score,
+    level,
+    confidence,
+    source: 'training',
+    sampleTotal: record.totalQuestions,
+    sampleCorrect: record.totalQuestions - record.errorCount,
+    evidence: `${TRAINING_TYPE_LABEL[record.trainingType]} · ${record.date} · ${record.totalQuestions}题错${record.errorCount}`,
+    evaluationTime: record.date + 'T' + (new Date().toISOString().split('T')[1] ?? '00:00:00.000Z'),
+    createdAt: new Date().toISOString(),
+  };
+}
+
+// ============ V5.11 Bug #028 修复 · 预警 5 类具体规则 ============
+// 长期未训练(已有) · 能力停滞 · 能力退步 · 错误恶化 · 心理状态(累计未修复缺口)
+
+export interface WarningRule {
+  key: 'no-training' | 'stagnation' | 'regression' | 'error-worsen' | 'mental';
+  label: string;
+}
+
+export const WARNING_RULES: WarningRule[] = [
+  { key: 'no-training', label: '长期未训练' },
+  { key: 'stagnation', label: '能力停滞' },
+  { key: 'regression', label: '能力退步' },
+  { key: 'error-worsen', label: '错误恶化' },
+  { key: 'mental', label: '心理状态偏差' },
+];

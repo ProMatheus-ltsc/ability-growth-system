@@ -3,7 +3,9 @@ import { v4 as uuid } from 'uuid';
 import { PlusCircle, Trash2, Zap, X, Filter } from 'lucide-react';
 import { useToast } from '@shared/core';
 import { useAppSession } from '../hooks/useAppSession';
-import { findTrainingsByStudent, putRecord, deleteRecord, getMeta, setMeta } from '../services/localDB';
+import { getTrainingsCopy } from '../domain/trainingsCopy';
+import { findTrainingsByStudent, findGaps, putRecord, deleteRecord, getMeta, setMeta } from '../services/localDB';
+import { deriveGapsFromTraining, deriveSnapshotFromTraining } from '../services/analytics';
 import { getModules } from '../domain/abilityTags';
 import {
   SUBJECT_LABEL,
@@ -54,6 +56,21 @@ export function TrainingsPage() {
 
   const handleSave = async (draft: TrainingRecord) => {
     await putRecord('trainings', draft);
+
+    // V5.11 Bug #005 修复:训练保存后自动派生能力缺口(错题归集为问题)
+    const existingGaps = await findGaps(draft.studentId);
+    const derivedGaps = deriveGapsFromTraining(draft, existingGaps);
+    let newGapCount = 0;
+    for (const gap of derivedGaps) {
+      const already = existingGaps.some((g) => g.id === gap.id);
+      await putRecord('gaps', gap);
+      if (!already) newGapCount += 1;
+    }
+
+    // V5.11 Bug #009 修复:训练保存后自动生成能力快照,建立基线 + 支撑增长曲线
+    const snapshot = deriveSnapshotFromTraining(draft);
+    await putRecord('abilities', snapshot);
+
     const nextRecent: RecentDefaults = {
       subject: draft.subject,
       module: draft.module,
@@ -65,7 +82,14 @@ export function TrainingsPage() {
     await setMeta(RECENT_KEY, nextRecent);
     setShowForm(false);
     void refresh();
-    showToast('训练记录已保存', 'success');
+
+    if (newGapCount > 0) {
+      showToast(`训练已保存,自动归集 ${newGapCount} 个能力缺口到问题中心`, 'success');
+    } else if (derivedGaps.length > 0) {
+      showToast('训练已保存,合并到既有能力缺口', 'success');
+    } else {
+      showToast('训练记录已保存', 'success');
+    }
   };
 
   const handleDelete = async (id: string) => {
@@ -75,11 +99,12 @@ export function TrainingsPage() {
     showToast('记录已删除', 'info');
   };
 
+  const copy = getTrainingsCopy(prefs.gradeLevel);
   return (
     <div className="space-y-5">
       <PageHeader
-        title="训练记录"
-        description="记录一次训练：做了什么 · 做得怎么样 · 为什么错。 陌生题正确率比刷题数量更能反映能力增长。"
+        title={copy.pageTitle}
+        description={copy.pageDescription}
         actions={
           <>
             <button
@@ -89,10 +114,10 @@ export function TrainingsPage() {
                 setShowForm(true);
               }}
             >
-              <Zap size={14} /> {quickMode ? '标准模式' : '快速模式'}
+              <Zap size={14} /> {quickMode ? copy.quickModeOn : copy.quickModeOff}
             </button>
             <button className="btn-primary" onClick={() => setShowForm(true)}>
-              <PlusCircle size={16} /> 记录训练
+              <PlusCircle size={16} /> {copy.addAction}
             </button>
           </>
         }
@@ -121,11 +146,11 @@ export function TrainingsPage() {
       {filtered.length === 0 ? (
         <EmptyState
           icon={PlusCircle}
-          title="还没有训练记录"
-          description="完成第一次训练后来这里记录吧。 系统会根据陌生题正确率和错误类型分布诊断你的能力瓶颈。"
+          title={copy.emptyTitle}
+          description={copy.emptyDescription}
           action={
             <button className="btn-primary" onClick={() => setShowForm(true)}>
-              <PlusCircle size={16} /> 记录第一次训练
+              <PlusCircle size={16} /> {copy.emptyAction}
             </button>
           }
         />
@@ -299,7 +324,7 @@ function TrainingForm({ quick, defaults, studentId, gradeLevel, availableSubject
           <div>
             <label className="label">训练类型</label>
             <select className="input" value={trainingType} onChange={(e) => setTrainingType(e.target.value as TrainingType)}>
-              {(Object.keys(TRAINING_TYPE_LABEL) as TrainingType[]).map((k) => (
+              {getTrainingTypesForSubject(subject).map((k) => (
                 <option key={k} value={k}>
                   {TRAINING_TYPE_LABEL[k]}
                 </option>
@@ -413,5 +438,17 @@ function getErrorLibrary(subject: Subject): ErrorCategory[] {
     return ['point', 'accuracy', 'read', 'structure', 'argument', 'language', 'format', 'wordcount', 'time'];
   if (subject === 'mianshi')
     return ['structure', 'argument', 'language', 'read', 'concept', 'time'];
+  return base;
+}
+
+// V5.11 Bug #004 修复:训练类型按学科过滤
+// - 只有物理/化学/生物这类"实验学科"才出现"实验记录"
+// - 公考三科(行测/申论/面试)+ 语文/英语等文科不出现"实验记录"
+export function getTrainingTypesForSubject(subject: Subject): TrainingType[] {
+  const experimentSubjects: Subject[] = ['physics', 'chemistry', 'biology'];
+  const base: TrainingType[] = ['daily', 'topic', 'review', 'unfamiliar', 'timed', 'exam'];
+  if (experimentSubjects.includes(subject)) {
+    return ['daily', 'topic', 'review', 'unfamiliar', 'timed', 'experiment', 'exam'];
+  }
   return base;
 }

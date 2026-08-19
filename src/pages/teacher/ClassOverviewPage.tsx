@@ -1,12 +1,21 @@
 import { useEffect, useMemo, useState } from 'react';
-import { LayoutDashboard, Users, TrendingUp, AlertOctagon } from 'lucide-react';
+import { LayoutDashboard, Users, TrendingUp, AlertOctagon, Radar as RadarIcon } from 'lucide-react';
 import { PageHeader } from '../../components/PageHeader';
 import { EmptyState } from '../../components/EmptyState';
 import { MasteryBar } from '../../components/MasteryBar';
+import { AbilityRadar } from '../../components/RadarChart';
 import { getAllRecords, findTrainingsByStudent, findGaps } from '../../services/localDB';
-import { aggregateBySubject, computeWarnings } from '../../services/analytics';
-import type { StudentProfile, TrainingRecord, AbilityGap, WarningItem, GradeLevel } from '../../domain/types';
-import { GRADE_LEVEL_LABEL, SUBJECT_LABEL } from '../../domain/types';
+import { aggregateBySubject, buildRadarSlices, computeWarnings } from '../../services/analytics';
+import type {
+  StudentProfile,
+  TrainingRecord,
+  AbilityGap,
+  WarningItem,
+  GradeLevel,
+  Subject,
+  AbilityRadarSlice,
+} from '../../domain/types';
+import { GRADE_LEVEL_LABEL, SUBJECT_LABEL, SUBJECT_MATRIX } from '../../domain/types';
 
 interface StudentRollup {
   student: StudentProfile;
@@ -17,22 +26,21 @@ interface StudentRollup {
 }
 
 export function ClassOverviewPage() {
-  const [students, setStudents] = useState<StudentProfile[]>([]);
   const [rollups, setRollups] = useState<StudentRollup[]>([]);
   const [warnings, setWarnings] = useState<WarningItem[]>([]);
   const [gradeFilter, setGradeFilter] = useState<GradeLevel | 'all'>('all');
+  const [allTrainings, setAllTrainings] = useState<TrainingRecord[]>([]);
 
   useEffect(() => {
     (async () => {
       const list = await getAllRecords('students');
-      setStudents(list);
       const rollupList: StudentRollup[] = [];
       const allWarnings: WarningItem[] = [];
-      const allTrainings: TrainingRecord[] = [];
+      const trainingsAll: TrainingRecord[] = [];
       const allGaps: AbilityGap[] = [];
       for (const s of list) {
         const [tr, g] = await Promise.all([findTrainingsByStudent(s.id), findGaps(s.id)]);
-        allTrainings.push(...tr);
+        trainingsAll.push(...tr);
         allGaps.push(...g);
         const stats = aggregateBySubject(tr);
         const masteryAvg = stats.length === 0 ? 0 : Math.round(stats.reduce((a, b) => a + b.masteryScore, 0) / stats.length);
@@ -46,7 +54,8 @@ export function ClassOverviewPage() {
         });
       }
       setRollups(rollupList);
-      allWarnings.push(...computeWarnings(list, allTrainings, allGaps));
+      setAllTrainings(trainingsAll);
+      allWarnings.push(...computeWarnings(list, trainingsAll, allGaps));
       setWarnings(allWarnings);
     })();
   }, []);
@@ -57,9 +66,34 @@ export function ClassOverviewPage() {
   );
 
   const activeCount = filtered.filter((r) => r.totalQuestions > 0).length;
-  const totalQuestions = filtered.reduce((a, r) => a + r.totalQuestions, 0);
   const avgMastery = filtered.length === 0 ? 0 : Math.round(filtered.reduce((a, r) => a + r.masteryAvg, 0) / filtered.length);
   const highWarnings = warnings.filter((w) => w.level === 'high').length;
+
+  // V5.11 Bug #026 修复:全班平均能力雷达图叠加(按当前学段筛选)
+  // 从各学段学生的训练记录聚合出学科掌握度,再取平均得到"全班雷达"
+  const dominantGrade: GradeLevel = useMemo(() => {
+    if (gradeFilter !== 'all') return gradeFilter;
+    // 若"全部",选出学生最多的学段作为雷达主体
+    const counts: Record<GradeLevel, number> = { primary: 0, junior: 0, senior: 0, adult: 0 };
+    for (const r of filtered) counts[r.student.gradeLevel]++;
+    const entries = Object.entries(counts) as Array<[GradeLevel, number]>;
+    entries.sort((a, b) => b[1] - a[1]);
+    return entries[0]?.[0] ?? 'adult';
+  }, [filtered, gradeFilter]);
+  const radarSubjects = SUBJECT_MATRIX[dominantGrade];
+  const [classRadarSubject, setClassRadarSubject] = useState<Subject | null>(null);
+  useEffect(() => {
+    if (!classRadarSubject || !radarSubjects.includes(classRadarSubject)) {
+      setClassRadarSubject(radarSubjects[0] ?? null);
+    }
+  }, [dominantGrade]); // eslint-disable-line react-hooks/exhaustive-deps
+  const classRadar: AbilityRadarSlice[] = useMemo(() => {
+    if (!classRadarSubject) return [];
+    const scoped = allTrainings.filter((t) =>
+      filtered.some((r) => r.student.id === t.studentId) && t.subject === classRadarSubject,
+    );
+    return buildRadarSlices(scoped, [], dominantGrade, classRadarSubject);
+  }, [classRadarSubject, allTrainings, filtered, dominantGrade]);
 
   return (
     <div className="space-y-5">
@@ -119,6 +153,36 @@ export function ClassOverviewPage() {
                 </tbody>
               </table>
             </div>
+          )}
+        </div>
+
+        {/* V5.11 Bug #026 修复:全班平均能力雷达图叠加 */}
+        <div className="card p-5">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="font-semibold flex items-center gap-2">
+              <RadarIcon size={16} className="text-blue-600" />
+              全班平均能力雷达({GRADE_LEVEL_LABEL[dominantGrade]})
+            </h2>
+            <div className="flex items-center gap-1">
+              {radarSubjects.slice(0, 3).map((s) => (
+                <button
+                  key={s}
+                  className={`px-2 py-0.5 rounded text-xs ${
+                    classRadarSubject === s
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
+                  onClick={() => setClassRadarSubject(s)}
+                >
+                  {SUBJECT_LABEL[s]}
+                </button>
+              ))}
+            </div>
+          </div>
+          {classRadar.length === 0 ? (
+            <EmptyState icon={RadarIcon} title="暂无雷达数据" description="需要学生的训练记录数据聚合" />
+          ) : (
+            <AbilityRadar slices={classRadar} />
           )}
         </div>
 

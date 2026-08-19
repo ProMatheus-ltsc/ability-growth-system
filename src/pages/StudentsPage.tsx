@@ -175,6 +175,36 @@ function StudentCard({
   );
 }
 
+/**
+ * V5.11 Bug #023/#024/#025 修复:补齐学生表单字段
+ * - 联系方式(contact) / 年级(grade)——学段→年级联动
+ * - 学习阶段(stage): foundation / improve / sprint / maintain
+ * - 学习目标(goal)
+ * - 公考额外字段(仅 adult 显示):考试类型 / 考试日期 / 目标岗位
+ * - 优化点 #007:与批量导入字段对齐(6 字段)
+ */
+const GRADE_OPTIONS: Record<GradeLevel, string[]> = {
+  primary: ['一年级', '二年级', '三年级', '四年级', '五年级', '六年级'],
+  junior: ['初一', '初二', '初三'],
+  senior: ['高一', '高二', '高三'],
+  adult: ['备考期', '在职备考', '应届毕业'],
+};
+
+const STAGE_LABEL: Record<'foundation' | 'improve' | 'sprint' | 'maintain', string> = {
+  foundation: '基础期',
+  improve: '提升期',
+  sprint: '冲刺期',
+  maintain: '维持期',
+};
+
+const EXAM_TYPE_LABEL: Record<'national' | 'provincial' | 'selected' | 'public-inst' | 'military', string> = {
+  national: '国考',
+  provincial: '省考',
+  selected: '选调',
+  'public-inst': '事业单位',
+  military: '军队文职',
+};
+
 function StudentForm({
   onClose,
   onSave,
@@ -183,13 +213,22 @@ function StudentForm({
   onSave: (student: StudentProfile) => Promise<void>;
 }) {
   const [name, setName] = useState('');
+  const [contact, setContact] = useState('');
   const [gradeLevel, setGradeLevel] = useState<GradeLevel>('adult');
-  const [subjects, setSubjects] = useState<Subject[]>(SUBJECT_MATRIX.adult);
+  const [grade, setGrade] = useState('');
+  const [subjects, setSubjects] = useState<Subject[]>([]);
+  const [stage, setStage] = useState<StudentProfile['stage']>('foundation');
+  const [goal, setGoal] = useState('');
   const [group, setGroup] = useState('');
   const [note, setNote] = useState('');
+  // 公考专属字段
+  const [examType, setExamType] = useState<StudentProfile['examType']>('national');
+  const [examDate, setExamDate] = useState('');
+  const [targetPost, setTargetPost] = useState('');
   const [saving, setSaving] = useState(false);
 
   const availableSubjects = SUBJECT_MATRIX[gradeLevel];
+  const gradeOptions = GRADE_OPTIONS[gradeLevel];
 
   const toggle = (s: Subject) => {
     setSubjects((prev) => (prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s]));
@@ -199,13 +238,21 @@ function StudentForm({
     if (!name.trim()) return;
     setSaving(true);
     const now = new Date().toISOString();
+    const isPublicExam = gradeLevel === 'adult';
     const student: StudentProfile = {
       id: uuid(),
       name: name.trim(),
+      contact: contact.trim() || undefined,
       gradeLevel,
+      grade: grade.trim() || undefined,
       subjects: subjects.filter((s) => availableSubjects.includes(s)),
+      stage,
+      goal: goal.trim() || undefined,
       group: group.trim() || undefined,
       note: note.trim() || undefined,
+      examType: isPublicExam ? examType : undefined,
+      examDate: isPublicExam ? examDate || undefined : undefined,
+      targetPost: isPublicExam ? targetPost.trim() || undefined : undefined,
       createdAt: now,
       updatedAt: now,
     };
@@ -218,7 +265,7 @@ function StudentForm({
 
   return (
     <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="card w-full max-w-lg p-6">
+      <div className="card w-full max-w-lg max-h-[90vh] overflow-y-auto p-6">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-bold text-slate-900">添加学生</h2>
           <button className="btn-ghost" onClick={onClose}>
@@ -227,9 +274,20 @@ function StudentForm({
         </div>
 
         <div className="space-y-3">
-          <div>
-            <label className="label">姓名 ★</label>
-            <input className="input" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">姓名 ★</label>
+              <input className="input" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
+            </div>
+            <div>
+              <label className="label">联系方式</label>
+              <input
+                className="input"
+                value={contact}
+                onChange={(e) => setContact(e.target.value)}
+                placeholder="手机 / 微信 / 邮箱"
+              />
+            </div>
           </div>
 
           <div>
@@ -245,7 +303,9 @@ function StudentForm({
                   }`}
                   onClick={() => {
                     setGradeLevel(g);
-                    setSubjects(SUBJECT_MATRIX[g]);
+                    // Bug #003 一致:切学段清空学科由用户主动多选
+                    setSubjects([]);
+                    setGrade('');
                   }}
                 >
                   {GRADE_LEVEL_LABEL[g]}
@@ -254,8 +314,37 @@ function StudentForm({
             </div>
           </div>
 
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              {/* Bug #024 修复:学段→年级联动 */}
+              <label className="label">年级</label>
+              <select className="input" value={grade} onChange={(e) => setGrade(e.target.value)}>
+                <option value="">-- 请选择 --</option>
+                {gradeOptions.map((g) => (
+                  <option key={g} value={g}>
+                    {g}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="label">学习阶段</label>
+              <select
+                className="input"
+                value={stage ?? 'foundation'}
+                onChange={(e) => setStage(e.target.value as StudentProfile['stage'])}
+              >
+                {(Object.keys(STAGE_LABEL) as Array<keyof typeof STAGE_LABEL>).map((k) => (
+                  <option key={k} value={k}>
+                    {STAGE_LABEL[k]}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
           <div>
-            <label className="label">学科</label>
+            <label className="label">学科(至少选 1)</label>
             <div className="flex flex-wrap gap-2">
               {availableSubjects.map((s) => (
                 <button
@@ -274,9 +363,65 @@ function StudentForm({
           </div>
 
           <div>
-            <label className="label">分组</label>
-            <input className="input" value={group} onChange={(e) => setGroup(e.target.value)} placeholder='例如: 2026 国考一期班' />
+            <label className="label">学习目标</label>
+            <input
+              className="input"
+              value={goal}
+              onChange={(e) => setGoal(e.target.value)}
+              placeholder="例如:高考数学 130+ · 国考行测 75+ · 中考物理 90+"
+            />
           </div>
+
+          <div>
+            <label className="label">分组</label>
+            <input
+              className="input"
+              value={group}
+              onChange={(e) => setGroup(e.target.value)}
+              placeholder="例如: 2026 国考一期班 / 高三 3 班"
+            />
+          </div>
+
+          {/* Bug #025 修复:公考专属字段 */}
+          {gradeLevel === 'adult' && (
+            <div className="rounded-lg border border-purple-200 bg-purple-50/60 p-3 space-y-3">
+              <div className="text-xs font-semibold text-purple-800">公考专属字段(选填)</div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="label">考试类型</label>
+                  <select
+                    className="input"
+                    value={examType}
+                    onChange={(e) => setExamType(e.target.value as StudentProfile['examType'])}
+                  >
+                    {(Object.keys(EXAM_TYPE_LABEL) as Array<keyof typeof EXAM_TYPE_LABEL>).map((k) => (
+                      <option key={k} value={k}>
+                        {EXAM_TYPE_LABEL[k]}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="label">考试日期</label>
+                  <input
+                    className="input"
+                    type="date"
+                    value={examDate}
+                    onChange={(e) => setExamDate(e.target.value)}
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="label">目标岗位</label>
+                <input
+                  className="input"
+                  value={targetPost}
+                  onChange={(e) => setTargetPost(e.target.value)}
+                  placeholder="例如:XX 市财政局 综合管理岗"
+                />
+              </div>
+            </div>
+          )}
 
           <div>
             <label className="label">备注</label>

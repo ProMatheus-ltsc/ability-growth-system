@@ -246,6 +246,33 @@ export interface RadarDimension {
 }
 
 export const RADAR_DIMENSIONS: Partial<Record<`${GradeLevel}-${Subject}`, RadarDimension[]>> = {
+  'primary-math': [
+    { key: 'number', label: '数与运算', weight: 30, modules: ['数与运算'] },
+    { key: 'geometry', label: '图形与几何', weight: 22, modules: ['图形与几何'] },
+    { key: 'measure', label: '量与计量', weight: 15, modules: ['量与计量'] },
+    { key: 'data', label: '数据与可能性', weight: 13, modules: ['数据与可能性'] },
+    { key: 'problem', label: '问题解决', weight: 20, modules: ['问题解决'] },
+  ],
+  'junior-math': [
+    { key: 'algebra', label: '代数运算', weight: 32, modules: ['代数运算'] },
+    { key: 'geometry', label: '几何推理', weight: 32, modules: ['几何推理'] },
+    { key: 'statistics', label: '数据统计与概率', weight: 15, modules: ['数据统计与概率'] },
+    { key: 'comprehensive', label: '综合应用', weight: 21, modules: ['综合应用'] },
+  ],
+  'senior-math': [
+    { key: 'function', label: '函数分析', weight: 28, modules: ['函数分析'] },
+    { key: 'algebra', label: '代数与方程', weight: 20, modules: ['代数与方程'] },
+    { key: 'geometry', label: '几何', weight: 22, modules: ['几何'] },
+    { key: 'probability', label: '概率统计', weight: 14, modules: ['概率统计'] },
+    { key: 'thinking', label: '数学思维', weight: 16, modules: ['数学思维'] },
+  ],
+  'adult-math': [
+    { key: 'function', label: '函数分析', weight: 28, modules: ['函数分析'] },
+    { key: 'algebra', label: '代数与方程', weight: 20, modules: ['代数与方程'] },
+    { key: 'geometry', label: '几何', weight: 22, modules: ['几何'] },
+    { key: 'probability', label: '概率统计', weight: 14, modules: ['概率统计'] },
+    { key: 'thinking', label: '数学思维', weight: 16, modules: ['数学思维'] },
+  ],
   'junior-physics': [
     { key: 'mechanics', label: '力学', weight: 30, modules: ['力学基础', '压强与浮力', '功与机械能'] },
     { key: 'electric', label: '电学', weight: 25, modules: ['电学'] },

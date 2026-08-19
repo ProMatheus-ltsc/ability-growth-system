@@ -11,6 +11,7 @@ import { AbilityRadar } from '../components/RadarChart';
 import { getAbilityTags, getModules } from '../domain/abilityTags';
 import type { AbilitySnapshot, Subject, TrainingRecord } from '../domain/types';
 import { SUBJECT_LABEL } from '../domain/types';
+import { getAbilityCopy } from '../domain/abilityCopy';
 
 export function AbilityCenterPage() {
   const { prefs } = useAppSession();
@@ -55,11 +56,12 @@ export function AbilityCenterPage() {
   const stats = aggregateBySubject(trainings);
   const subjectStats = stats.find((s) => s.subject === subject);
 
+  const copy = getAbilityCopy(prefs.gradeLevel);
   return (
     <div className="space-y-5">
       <PageHeader
-        title="能力中心"
-        description="以能力掌握度为核心的多维视图。 陌生题正确率是能力增长的核心指标。"
+        title={copy.pageTitle}
+        description={copy.pageDescription}
       />
 
       <div className="flex flex-wrap items-center gap-2">
@@ -81,7 +83,15 @@ export function AbilityCenterPage() {
       {subjectStats && (
         <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
           <StatBlock label="综合掌握度" value={`${subjectStats.masteryScore}%`} tone="blue" />
-          <StatBlock label="陌生题正确率" value={`${Math.round(subjectStats.unfamiliarCorrectRate * 100)}%`} tone="emerald" />
+          <StatBlock
+            label={subjectStats.unfamiliarCorrectRate === null ? '陌生题正确率(无样本)' : '陌生题正确率'}
+            value={
+              subjectStats.unfamiliarCorrectRate === null
+                ? '—'
+                : `${Math.round(subjectStats.unfamiliarCorrectRate * 100)}%`
+            }
+            tone="emerald"
+          />
           <StatBlock label="累计题量" value={subjectStats.totalQuestions} tone="slate" />
           <StatBlock label="累计错题" value={subjectStats.totalErrors} tone="orange" />
         </div>
@@ -94,7 +104,7 @@ export function AbilityCenterPage() {
             <h2 className="font-semibold text-slate-900">能力雷达图</h2>
           </div>
           {radarSlices.length === 0 ? (
-            <EmptyState icon={RadarIcon} title="暂无雷达数据" description="该学段/学科尚未定义雷达维度权重" />
+            <EmptyState icon={RadarIcon} title={copy.radarEmptyTitle} description={copy.radarEmptyDescription} />
           ) : (
             <AbilityRadar slices={radarSlices} />
           )}
@@ -111,7 +121,17 @@ export function AbilityCenterPage() {
             )}
           </div>
           {growth.length === 0 ? (
-            <EmptyState icon={TrendingUp} title="需要更多训练" description="至少 2 周的训练数据后可查看趋势" />
+            <EmptyState
+              icon={TrendingUp}
+              title={copy.growthEmptyTitle}
+              description={copy.growthEmptyDescription}
+            />
+          ) : growth.length < 2 ? (
+            <EmptyState
+              icon={TrendingUp}
+              title={copy.growthShortTitle}
+              description={copy.growthShortHint(growth.length)}
+            />
           ) : (
             <>
               <ResponsiveContainer width="100%" height={280}>
@@ -158,7 +178,7 @@ export function AbilityCenterPage() {
           <h2 className="font-semibold text-slate-900">各模块掌握度</h2>
         </div>
         {moduleMastery.every((m) => m.score === null) ? (
-          <EmptyState icon={BarChart3} title="暂无模块数据" description="记录训练后自动汇总各模块掌握度" />
+          <EmptyState icon={BarChart3} title={copy.moduleEmptyTitle} description={copy.moduleEmptyDescription} />
         ) : (
           <div className="space-y-3">
             {moduleMastery.map((m) => (
@@ -183,7 +203,7 @@ export function AbilityCenterPage() {
           <span className="text-xs text-slate-400">共 {abilityCards.length} 项</span>
         </div>
         {abilityCards.length === 0 ? (
-          <EmptyState icon={BarChart3} title="尚未定义能力标签" />
+          <EmptyState icon={BarChart3} title={copy.tagsEmptyTitle} />
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-[500px] overflow-y-auto">
             {abilityCards.map(({ tag, snapshot }) => (

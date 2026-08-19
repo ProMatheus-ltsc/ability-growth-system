@@ -46,3 +46,80 @@
     @apply inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium;
   }
 }
+
+/* V5.11 · 报告 PDF 导出:打印样式(触发 window.print(),用户选"另存为 PDF") */
+@media print {
+  /* 隐藏所有非报告内容:侧边栏、导航、Toast 等 */
+  aside,
+  nav,
+  .print-hide,
+  [data-print-hide='true'],
+  .fixed {
+    display: none !important;
+  }
+
+  /* 主容器铺满,取消侧边栏留白 */
+  main {
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+  }
+
+  /* 只保留报告根节点:body.printing-report 时其他元素透明化 */
+  body.printing-report {
+    background: #ffffff !important;
+  }
+
+  body.printing-report .report-print-root {
+    max-width: 100% !important;
+    box-shadow: none !important;
+  }
+
+  /* 报告卡片扁平化,避免阴影/边框在纸上过重 */
+  .report-print-root .card {
+    box-shadow: none !important;
+    border-color: #d1d5db !important;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  /* 每张卡片尽量不跨页 */
+  .report-print-root h1,
+  .report-print-root h2,
+  .report-print-root h3 {
+    break-after: avoid;
+    page-break-after: avoid;
+  }
+
+  /* 打印时把折叠面板全部展开 */
+  .report-print-root details {
+    display: block !important;
+  }
+  .report-print-root details > summary {
+    display: block !important;
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+  .report-print-root details[open] > *,
+  .report-print-root details > *:not(summary) {
+    display: block !important;
+  }
+
+  /* 强制 A4 页面 + 合理边距 */
+  @page {
+    size: A4;
+    margin: 12mm 10mm;
+  }
+
+  /* 隐藏所有 button 与 input(打印时不需要交互) */
+  .report-print-root button,
+  .report-print-root input,
+  .report-print-root textarea,
+  .report-print-root select {
+    display: none !important;
+  }
+
+  /* 但允许"复选框"这种展示型的仍保留(用 print-keep 强制显示) */
+  .report-print-root .print-keep {
+    display: initial !important;
+  }
+}
