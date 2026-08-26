@@ -118,8 +118,9 @@ export default {
     }
 
     // 连通性探针（无需鉴权，前端 checkConnectivity 用它探测）
+    // 注意：必须带 CORS 头，否则跨域前端 fetch 会被浏览器拦截（同步端点走 json() 已带，health 是裸 Response）
     if (path === '/api/sync/health' && request.method === 'GET') {
-      return new Response('ok');
+      return new Response('ok', { headers: { 'Access-Control-Allow-Origin': '*' } });
     }
 
     const auth = authorize(request, env);
