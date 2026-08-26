@@ -24,8 +24,10 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true,
 
-    /* 统一 React 类型版本（shared-core 本地 node_modules 的 @types/react 可能较旧） */
+    /* 路径别名：@shared/core 指向项目父目录的公共包源码（与 root-cause-analysis 接入方式一致） */
     "paths": {
+      "@shared/core": ["../shared-core/src/index.ts"],
+      "@shared/core/*": ["../shared-core/src/*"],
       "react": ["./node_modules/@types/react"],
       "react-dom": ["./node_modules/@types/react-dom"],
       "react/jsx-runtime": ["./node_modules/@types/react/jsx-runtime"]

@@ -11,7 +11,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@shared/core": "file:./packages/shared-core",
+    "@shared/core": "file:../shared-core",
     "clsx": "^2.1.0",
     "date-fns": "^3.6.0",
     "idb": "^8.0.0",
