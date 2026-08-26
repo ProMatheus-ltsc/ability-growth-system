@@ -417,14 +417,28 @@ tnpm run preview      # 本地预览生产构建
 
 ---
 
-## 9. 部署 Cloudflare D1
+## 9. 部署（Cloudflare Pages 前端 + D1 Worker）
+
+### 9.1 Cloudflare Pages（前端）
+
+前端通过 Cloudflare Pages 的 GitHub 集成自动构建部署（push 到 main 触发），构建设置：
+
+- **Build command**: `bash scripts/cf-pages-build.sh`
+- **Build output directory**: `dist`
+- **Environment variables**: `NODE_VERSION = 22`（Vite 8 要求 `^20.19.0 || >=22.12.0`，Pages 默认 Node 版本可能过低）
+
+> `@shared/core` 以 `file:../shared-core` 方式引入，构建时要求项目父目录存在该公共包；
+> `scripts/cf-pages-build.sh` 会在构建前自动 clone `github.com/ProMatheus-ltsc/shared-core` 到父目录并安装其依赖，
+> 与 root-cause-analysis 的 CI 策略一致。本地开发/手动 `wrangler pages deploy dist` 无需该脚本（本地已存在 shared-core）。
+
+### 9.2 Cloudflare D1 Worker（云端同步）
 
 见 §5.2 章节的 Worker 骨架示例。 建议按如下步骤:
 
 1. `wrangler d1 create ability-growth`
 2. 编写 15 张表的 CREATE TABLE 迁移 (建议每张表附 `id TEXT PRIMARY KEY, updated_at TEXT, ...`)
 3. 实现 `/api/sync/push · pull · backup · restore · health · backups` 六个端点
-4. 部署 Worker: `wrangler deploy`
+4. 部署 Worker: `wrangler deploy`（`worker/` 为独立工程，不依赖 `@shared/core`，部署前需设置 `D1_DATABASE_ID` 环境变量与 `SYNC_AUTH_TOKEN` secret，见 `worker/wrangler.toml` 注释）
 5. 在应用「云端同步」页面填入 Worker URL + accountId + 可选 Bearer Token,保存后即可开始双向同步
 
 ---
@@ -441,7 +455,7 @@ tnpm run preview      # 本地预览生产构建
 ## 11. 引用
 
 - PRD 版本: V5.1 (交互体验增强版)
-- 共享基座: [`@shared/core`](./packages/shared-core) — 复用 root-cause-analysis / personal_review_system 的表单/账户/工具基础层
+- 共享基座: [`@shared/core`](https://github.com/ProMatheus-ltsc/shared-core) — 复用 root-cause-analysis / personal_review_system 的表单/账户/工具基础层（以 `file:../shared-core` 本地路径引入，勿提交到本仓库）
 - 图表: recharts
 - 图标: lucide-react
 - 存储: idb (Jake Archibald)
