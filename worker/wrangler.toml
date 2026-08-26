@@ -9,7 +9,7 @@ compatibility_date = "2025-01-01"
 [[d1_databases]]
 binding = "DB"
 database_name = "ability_growth"
-database_id = "{D1_DATABASE_ID}"
+database_id = "88b2a816-77bc-4f51-b2c7-d54c7a27e273"
 
 # 可选鉴权 Token：请勿写在 [vars] 里！
 # 用 `npx wrangler secret put SYNC_AUTH_TOKEN` 设置（运行时通过 env.SYNC_AUTH_TOKEN 读取，不进代码库）。
