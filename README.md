@@ -433,13 +433,12 @@ tnpm run preview      # 本地预览生产构建
 
 ### 9.2 Cloudflare D1 Worker（云端同步）
 
-见 §5.2 章节的 Worker 骨架示例。 建议按如下步骤:
+前端「云端同步」页的备份链路：本地 IndexedDB → Worker(`/api/sync/backup`) → D1。部署只需配置 D1 的 name 和 id：
 
-1. `wrangler d1 create ability-growth`
-2. 编写 15 张表的 CREATE TABLE 迁移 (建议每张表附 `id TEXT PRIMARY KEY, updated_at TEXT, ...`)
-3. 实现 `/api/sync/push · pull · backup · restore · health · backups` 六个端点
-4. 部署 Worker: `wrangler deploy`（`worker/` 为独立工程，不依赖 `@shared/core`，部署前需设置 `D1_DATABASE_ID` 环境变量与 `SYNC_AUTH_TOKEN` secret，见 `worker/wrangler.toml` 注释）
-5. 在应用「云端同步」页面填入 Worker URL + accountId + 可选 Bearer Token,保存后即可开始双向同步
+1. 在 `worker/wrangler.toml` 的 `[[d1_databases]]` 填入你的 `database_name` 与 `database_id`（Cloudflare Dashboard → Workers & Pages → D1 数据库页面可查），无需其它环境变量
+2. `cd worker && npm run db:init` 建表（`wrangler d1 execute --remote --file=./schema.sql`）
+3. `cd worker && npm run deploy` 部署 Worker
+4. 在应用「云端同步」页填入 Worker URL 并保存即可开始备份（accountId 留空自动取当前登录账户名；authToken 可选，仅在设置了 `SYNC_AUTH_TOKEN` secret 时需要一致）
 
 ---
 

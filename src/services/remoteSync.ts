@@ -17,6 +17,7 @@
  *   GET  /api/sync/backups    -> 列出历史备份点
  */
 import type { SyncStatus, SyncResult } from '@shared/core/types';
+import { getCurrentAccountId, listAccounts } from '@shared/core';
 import {
   exportSnapshot,
   importSnapshot,
@@ -54,6 +55,27 @@ export function getSyncConfigSync(): D1SyncConfig | null {
   return runtimeConfig;
 }
 
+/**
+ * 解析本次同步使用的 accountId（D1 内区分数据来源）：
+ * 1. 配置里显式填写了就用配置值（多设备想共用同一份数据时，各端填相同值即可互通）
+ * 2. 否则自动取当前登录账户的用户名（同一用户名跨设备登录即可互通）
+ * 3. 兜底用固定值 'local-user'（纯单设备备份场景，零配置）
+ */
+async function resolveAccountId(cfg: D1SyncConfig): Promise<string> {
+  if (cfg.accountId?.trim()) return cfg.accountId.trim();
+  try {
+    const id = getCurrentAccountId();
+    if (id) {
+      const accounts = await listAccounts();
+      const acc = accounts.find((a) => a.id === id);
+      if (acc?.username) return acc.username;
+    }
+  } catch {
+    /* 账户库异常时走兜底 */
+  }
+  return 'local-user';
+}
+
 export async function clearSyncConfig(): Promise<void> {
   runtimeConfig = null;
   await setMeta(CONFIG_KEY, null);
@@ -70,10 +92,10 @@ function buildUrl(cfg: D1SyncConfig, path: string, params?: Record<string, strin
   return url.toString();
 }
 
-function authHeaders(cfg: D1SyncConfig, extra?: HeadersInit): Headers {
+async function authHeaders(cfg: D1SyncConfig, extra?: HeadersInit): Promise<Headers> {
   const headers = new Headers(extra);
   if (cfg.authToken) headers.set('Authorization', `Bearer ${cfg.authToken}`);
-  headers.set('X-Sync-Account', cfg.accountId);
+  headers.set('X-Sync-Account', await resolveAccountId(cfg));
   return headers;
 }
 
@@ -81,7 +103,7 @@ async function checkConnectivity(cfg: D1SyncConfig): Promise<boolean> {
   try {
     const res = await fetch(buildUrl(cfg, '/api/sync/health'), {
       method: 'GET',
-      headers: authHeaders(cfg),
+      headers: await authHeaders(cfg),
       signal: AbortSignal.timeout(5000),
     });
     return res.ok;
@@ -157,9 +179,9 @@ export async function pushChanges(): Promise<SyncResult> {
     if (total === 0) return { ...emptyResult(), success: true };
     const res = await fetch(buildUrl(cfg, '/api/sync/push'), {
       method: 'POST',
-      headers: authHeaders(cfg, { 'Content-Type': 'application/json' }),
+      headers: await authHeaders(cfg, { 'Content-Type': 'application/json' }),
       body: JSON.stringify({
-        accountId: cfg.accountId,
+        accountId: await resolveAccountId(cfg),
         snapshot: changes,
         since: lastSyncAt,
         timestamp: new Date().toISOString(),
@@ -181,8 +203,8 @@ export async function pullChanges(): Promise<SyncResult> {
   try {
     const lastSyncAt = await getMeta<string | null>(LAST_SYNC_KEY, null);
     const res = await fetch(
-      buildUrl(cfg, '/api/sync/pull', { accountId: cfg.accountId, since: lastSyncAt ?? undefined }),
-      { headers: authHeaders(cfg) },
+      buildUrl(cfg, '/api/sync/pull', { accountId: await resolveAccountId(cfg), since: lastSyncAt ?? undefined }),
+      { headers: await authHeaders(cfg) },
     );
     if (!res.ok) throw new Error(`拉取失败(HTTP ${res.status}): ${await res.text()}`);
     const remote = (await res.json()) as ExportedSnapshot;
@@ -212,9 +234,9 @@ export async function fullBackupToD1(): Promise<SyncResult> {
     const snapshot = await exportSnapshot();
     const res = await fetch(buildUrl(cfg, '/api/sync/backup'), {
       method: 'POST',
-      headers: authHeaders(cfg, { 'Content-Type': 'application/json' }),
+      headers: await authHeaders(cfg, { 'Content-Type': 'application/json' }),
       body: JSON.stringify({
-        accountId: cfg.accountId,
+        accountId: await resolveAccountId(cfg),
         snapshot,
         timestamp: new Date().toISOString(),
       }),
@@ -234,8 +256,8 @@ export async function restoreFromD1(timestamp?: string): Promise<SyncResult> {
   if (!cfg) return emptyResult('未配置 D1 同步服务');
   try {
     const res = await fetch(
-      buildUrl(cfg, '/api/sync/restore', { accountId: cfg.accountId, timestamp }),
-      { headers: authHeaders(cfg) },
+      buildUrl(cfg, '/api/sync/restore', { accountId: await resolveAccountId(cfg), timestamp }),
+      { headers: await authHeaders(cfg) },
     );
     if (!res.ok) throw new Error(`恢复失败(HTTP ${res.status}): ${await res.text()}`);
     const snapshot = (await res.json()) as ExportedSnapshot;
@@ -258,8 +280,8 @@ export async function listBackupPoints(): Promise<BackupPoint[]> {
   const cfg = runtimeConfig;
   if (!cfg) return [];
   try {
-    const res = await fetch(buildUrl(cfg, '/api/sync/backups', { accountId: cfg.accountId }), {
-      headers: authHeaders(cfg),
+    const res = await fetch(buildUrl(cfg, '/api/sync/backups', { accountId: await resolveAccountId(cfg) }), {
+      headers: await authHeaders(cfg),
     });
     if (!res.ok) return [];
     return (await res.json()) as BackupPoint[];

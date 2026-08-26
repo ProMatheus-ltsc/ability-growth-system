@@ -10,14 +10,15 @@
  *   GET  /api/sync/backups  → ?accountId，列出历史备份点
  *
  * 鉴权：
- *   - 请求头必须携带 X-Sync-Account: <accountId>（账户数据隔离）
+ *   - 请求头必须携带 X-Sync-Account: <accountId>（账户数据隔离；前端留空时自动取当前登录账户名）
  *   - 若 wrangler.toml 配置了 SYNC_AUTH_TOKEN，则必须再携带 Authorization: Bearer <token>
  *
- * 部署：
- *   wrangler d1 create ability-growth          # 1. 创建数据库（记下 database_id 填入 wrangler.toml）
- *   wrangler d1 execute ability-growth --remote --file=./schema.sql   # 2. 建表
- *   wrangler deploy                            # 3. 部署 Worker
- *   然后在应用「云端同步」页填入 Worker URL + accountId + 可选 authToken
+ * 部署（唯一需要配置的就是 D1 的 name 和 id）：
+ *   1. 在 worker/wrangler.toml 的 [[d1_databases]] 填入你的 database_name 与 database_id
+ *      （Cloudflare Dashboard → Workers & Pages → D1 数据库 页面可查）
+ *   2. npm run db:init    # 建表（wrangler d1 execute --remote --file=./schema.sql）
+ *   3. npm run deploy     # 部署 Worker
+ *   然后在应用「云端同步」页填入 Worker URL 即可（accountId 留空自动，authToken 可选）
  */
 import type { D1Database } from '@cloudflare/workers-types';
 

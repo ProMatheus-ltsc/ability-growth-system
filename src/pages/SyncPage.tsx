@@ -65,10 +65,6 @@ export function SyncPage() {
       showToast('API 地址必须以 http/https 开头', 'error');
       return;
     }
-    if (!config.accountId.trim()) {
-      showToast('账户 ID 不能为空', 'error');
-      return;
-    }
     await configureSync(config);
     setConfigured(true);
     showToast('配置已保存', 'success');
@@ -153,12 +149,12 @@ export function SyncPage() {
             />
           </div>
           <div>
-            <label className="label">账户 ID (D1 内区分数据来源)</label>
+            <label className="label">账户 ID (可选, 留空自动)</label>
             <input
               className="input"
               value={config.accountId}
               onChange={(e) => setConfig({ ...config, accountId: e.target.value })}
-              placeholder="user-abc"
+              placeholder="留空则自动使用当前登录账户名"
             />
           </div>
           <div className="md:col-span-2">
