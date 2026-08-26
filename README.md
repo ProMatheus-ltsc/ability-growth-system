@@ -440,6 +440,17 @@ tnpm run preview      # 本地预览生产构建
 3. `cd worker && npm run deploy` 部署 Worker
 4. 在应用「云端同步」页填入 Worker URL 并保存即可开始备份（accountId 留空自动取当前登录账户名；authToken 可选，仅在设置了 `SYNC_AUTH_TOKEN` secret 时需要一致）
 
+#### 可选：GitHub Actions 自动部署（推荐）
+
+已内置 `.github/workflows/deploy-worker.yml`：push 到 main 且 `worker/` 有变更时自动建表 + 部署，也可在 Actions 页手动触发。需要先在 GitHub 仓库 Settings → Secrets and variables → Actions 配置 2 个 Secrets：
+
+| Secret | 说明 |
+|--------|------|
+| `CLOUDFLARE_API_TOKEN` | Cloudflare Dashboard → My Profile → API Tokens 创建，权限需包含 Account 级：Workers Scripts: Edit、D1: Edit、Workers Routes: Edit |
+| `CLOUDFLARE_ACCOUNT_ID` | 你的 Cloudflare 账号 ID（Dashboard 首页右侧可查） |
+
+> 安全提示：`database_id` 只是资源标识（非凭据），明文写在 `wrangler.toml` 可接受；但仓库为 public，**务必**用 `npx wrangler secret put SYNC_AUTH_TOKEN` 设置访问令牌并在前端填入，否则 Worker 端点任何人可读写备份数据。`CLOUDFLARE_API_TOKEN` 为账号级凭据，只能放 GitHub Secrets，绝不能进代码仓库。
+
 ---
 
 ## 10. 版本演进路线
