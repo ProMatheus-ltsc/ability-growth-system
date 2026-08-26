@@ -1,6 +1,6 @@
 -- Cloudflare D1 建表脚本（与 src/services/localDB.ts 的 15 张 store 一一对应）
 -- 使用方式:
---   wrangler d1 execute ability-growth --remote --file=./schema.sql
+--   wrangler d1 execute ability_growth --remote --file=./schema.sql
 -- 说明:
 --   - 每张业务表结构相同: id 主键 + updated_at(排序/合并依据) + data(实体 JSON)
 --   - sync_backups 保存全量备份版本(按时间戳), 前端可列出/恢复历史备份点
