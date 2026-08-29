@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
+import { ResponsiveChart, ResponsiveGrid } from '@shared/core';
 import { BarChart3, Radar as RadarIcon, TrendingUp, ChevronRight } from 'lucide-react';
 import { useAppSession } from '../hooks/useAppSession';
 import { findAbilities, findTrainingsByStudent } from '../services/localDB';
@@ -81,7 +82,7 @@ export function AbilityCenterPage() {
       </div>
 
       {subjectStats && (
-        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+        <ResponsiveGrid minItemWidth="160px" gap="0.75rem">
           <StatBlock label="综合掌握度" value={`${subjectStats.masteryScore}%`} tone="blue" />
           <StatBlock
             label={subjectStats.unfamiliarCorrectRate === null ? '陌生题正确率(无样本)' : '陌生题正确率'}
@@ -94,7 +95,7 @@ export function AbilityCenterPage() {
           />
           <StatBlock label="累计题量" value={subjectStats.totalQuestions} tone="slate" />
           <StatBlock label="累计错题" value={subjectStats.totalErrors} tone="orange" />
-        </div>
+        </ResponsiveGrid>
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
@@ -134,7 +135,8 @@ export function AbilityCenterPage() {
             />
           ) : (
             <>
-              <ResponsiveContainer width="100%" height={280}>
+              <ResponsiveChart minHeight="15rem" maxHeight="17.5rem">
+              <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={growth}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                   <XAxis dataKey="week" tick={{ fontSize: 11 }} />
@@ -162,6 +164,7 @@ export function AbilityCenterPage() {
                   />
                 </LineChart>
               </ResponsiveContainer>
+              </ResponsiveChart>
               {growth.some((p) => p.emergence) && (
                 <div className="text-[10px] text-slate-500 mt-1 leading-relaxed">
                   ✨ <b className="text-purple-700">涌现点</b>:比前 5 周均值跃升 ≥ 12 分——九段心法·涌现的产品挂载, 微小叠加转变成系统力量。 单次循环平淡, 长期坚持会在某刻质变。
@@ -205,7 +208,7 @@ export function AbilityCenterPage() {
         {abilityCards.length === 0 ? (
           <EmptyState icon={BarChart3} title={copy.tagsEmptyTitle} />
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-[500px] overflow-y-auto">
+          <ResponsiveGrid minItemWidth="280px" gap="0.5rem" className="max-h-[500px] overflow-y-auto">
             {abilityCards.map(({ tag, snapshot }) => (
               <div key={tag.path} className="border border-slate-100 rounded-lg p-3">
                 <div className="flex items-center justify-between mb-1">
@@ -221,7 +224,7 @@ export function AbilityCenterPage() {
                 )}
               </div>
             ))}
-          </div>
+          </ResponsiveGrid>
         )}
       </div>
     </div>

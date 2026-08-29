@@ -127,7 +127,7 @@ function EventForm({
 
   return (
     <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="card w-full max-w-md p-6">
+      <div className="card w-full max-w-md p-6 modal-clamp [--modal-max:28rem] [--modal-max-h:90vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-4">
           <h2 className="font-bold">录入协作行为</h2>
           <button onClick={onClose}><X size={18} /></button>

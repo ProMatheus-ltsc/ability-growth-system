@@ -4,6 +4,7 @@
  */
 import { useEffect, useMemo, useState } from 'react';
 import { Zap, TrendingUp, AlertOctagon, Trophy } from 'lucide-react';
+import { ResponsiveGrid, TableScroll } from '@shared/core';
 import { PageHeader } from '../components/PageHeader';
 import { EmptyState } from '../components/EmptyState';
 import { getAllRecords } from '../services/localDB';
@@ -26,11 +27,11 @@ export function PdcaEfficiencyPage() {
     <div className="space-y-5">
       <PageHeader title="PDCA 循环效率分析" description="每轮循环周期统计 · 停滞瓶颈识别 · 成功经验复用推荐" />
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+      <ResponsiveGrid minItemWidth="220px" gap="0.75rem">
         <StatBlock icon={<TrendingUp size={16} />} label="平均循环周期(天)" value={String(avg)} tone="blue" />
         <StatBlock icon={<AlertOctagon size={16} />} label="停滞瓶颈问题数" value={String(bottlenecks.length)} tone="red" />
         <StatBlock icon={<Trophy size={16} />} label="已归档成功经验数" value={String(archived.length)} tone="emerald" />
-      </div>
+      </ResponsiveGrid>
 
       <div className="card p-5">
         <h2 className="font-semibold mb-3 flex items-center gap-2">
@@ -39,6 +40,7 @@ export function PdcaEfficiencyPage() {
         {stats.length === 0 ? (
           <EmptyState icon={Zap} title="尚无循环历史" description="至少完成一次 A 阶段决策后才能统计" />
         ) : (
+          <TableScroll label="每问题循环统计">
           <table className="w-full text-sm">
             <thead>
               <tr className="text-slate-500 text-xs">
@@ -61,6 +63,7 @@ export function PdcaEfficiencyPage() {
               ))}
             </tbody>
           </table>
+          </TableScroll>
         )}
       </div>
 

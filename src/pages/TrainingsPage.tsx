@@ -282,7 +282,7 @@ function TrainingForm({ quick, defaults, studentId, gradeLevel, availableSubject
 
   return (
     <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="card w-full max-w-2xl max-h-[90vh] overflow-y-auto p-6">
+      <div className="card w-full max-w-2xl max-h-[90vh] overflow-y-auto p-6 modal-clamp [--modal-max:42rem] [--modal-max-h:90vh]">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-bold text-slate-900">
             记录训练 · {quick ? '快速模式' : '标准模式'}

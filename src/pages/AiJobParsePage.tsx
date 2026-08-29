@@ -3,7 +3,7 @@
  */
 import { useState } from 'react';
 import { Copy, FileJson, Filter } from 'lucide-react';
-import { useToast } from '@shared/core';
+import { TableScroll, useToast } from '@shared/core';
 import { PageHeader } from '../components/PageHeader';
 import { buildJobParsePrompt, parseJobResponse, importParsedJobsAsRegistrations } from '../services/aiTypeAServices';
 import { useAppSession } from '../hooks/useAppSession';
@@ -83,7 +83,7 @@ export function AiJobParsePage() {
             <label className="label">政治面貌</label>
             <input className="input" value={politicalStatus} onChange={(e) => setPolitical(e.target.value)} />
           </div>
-          <div className="col-span-2">
+          <div className="cq-span-2">
             <label className="label">其他限制</label>
             <input className="input" value={otherLimits} onChange={(e) => setOther(e.target.value)} placeholder='例如: 应届 / 男性 / 服从调剂 / 户籍要求' />
           </div>
@@ -131,6 +131,7 @@ export function AiJobParsePage() {
               </button>
             </div>
           </div>
+          <TableScroll label="解析结果">
           <table className="w-full text-sm">
             <thead className="text-xs text-slate-500">
               <tr>
@@ -161,6 +162,7 @@ export function AiJobParsePage() {
               ))}
             </tbody>
           </table>
+          </TableScroll>
         </div>
       )}
     </div>

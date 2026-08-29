@@ -1243,7 +1243,7 @@ function DimensionRetestModal({
 
   return (
     <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="card w-full max-w-xl max-h-[85vh] overflow-y-auto p-5 space-y-3">
+      <div className="card w-full max-w-xl max-h-[85vh] overflow-y-auto p-5 space-y-3 modal-clamp [--modal-max:36rem] [--modal-max-h:85vh]">
         <div className="flex items-center justify-between">
           <h3 className="font-semibold">
             重测「{dimension}」维度 · {items.length} 题

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { v4 as uuid } from 'uuid';
 import { FlaskConical, PlusCircle, Trash2, Wrench, X, Zap } from 'lucide-react';
-import { useToast } from '@shared/core';
+import { TableScroll, useToast } from '@shared/core';
 import { useAppSession } from '../hooks/useAppSession';
 import { findExams, putRecord, deleteRecord } from '../services/localDB';
 import { PageHeader } from '../components/PageHeader';
@@ -282,7 +282,7 @@ function ExamForm({
 
   return (
     <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="card w-full max-w-2xl max-h-[90vh] overflow-y-auto p-6">
+      <div className="card w-full max-w-2xl max-h-[90vh] overflow-y-auto p-6 modal-clamp [--modal-max:42rem] [--modal-max-h:90vh]">
         <div className="flex items-center justify-between mb-4">
           <h2 className="font-bold flex items-center gap-2">
             <Zap size={18} className="text-orange-500" /> 录入模考结果
@@ -316,6 +316,7 @@ function ExamForm({
 
         <div>
           <div className="label">各模块录入(自动带出该学段/学科模块列表)</div>
+          <TableScroll label="各模块录入">
           <table className="w-full text-sm">
             <thead>
               <tr className="text-left text-xs text-slate-500 border-b border-slate-100">
@@ -353,6 +354,7 @@ function ExamForm({
               ))}
             </tbody>
           </table>
+          </TableScroll>
         </div>
 
         <div className="flex justify-end gap-2 mt-4">

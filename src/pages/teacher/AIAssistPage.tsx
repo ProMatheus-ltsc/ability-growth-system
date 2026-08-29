@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Copy, FileJson, Sparkles, CheckCircle2, AlertTriangle } from 'lucide-react';
-import { useToast } from '@shared/core';
+import { TableScroll, useToast } from '@shared/core';
 import { PageHeader } from '../../components/PageHeader';
 import { getAllRecords, putRecord } from '../../services/localDB';
 import { generatePrompt, parseAIResponse, toAbilitySnapshots, type ParseReport } from '../../services/aiPrompt';
@@ -71,7 +71,7 @@ export function AIAssistPage() {
         description="生成标准提示词 → 粘贴学生答题截图给外部 AI → 系统解析 JSON 并填充学生能力档案。 大幅降低教师手动录入负担。"
       />
 
-      <div className="card p-5">
+      <div className="card p-5 cq">
         <div className="flex items-center gap-2 text-sm font-medium mb-4">
           <StepDot num={1} active={step >= 1} />
           <span>生成提示词</span>
@@ -85,7 +85,7 @@ export function AIAssistPage() {
 
         {step === 1 && (
           <div className="space-y-3">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="cq-grid cq-cols-2 gap-3">
               <div>
                 <label className="label">学生 (可选)</label>
                 <select className="input" value={studentId} onChange={(e) => setStudentId(e.target.value)}>
@@ -180,7 +180,7 @@ export function AIAssistPage() {
               </div>
             )}
 
-            <div className="border border-slate-100 rounded-lg max-h-64 overflow-y-auto">
+            <TableScroll label="能力评估预览" className="border border-slate-100 rounded-lg max-h-64 overflow-y-auto">
               <table className="w-full text-xs">
                 <thead className="bg-slate-50 text-slate-500">
                   <tr>
@@ -203,7 +203,7 @@ export function AIAssistPage() {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </TableScroll>
 
             {parsed.data.summary && (
               <div className="text-sm bg-blue-50 rounded p-3">

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, LineChart, Line, CartesianGrid, Legend } from 'recharts';
+import { ResponsiveChart, ResponsiveGrid } from '@shared/core';
 import { BarChart3, TrendingUp, Wallet, AlertTriangle, Zap, Route } from 'lucide-react';
 import { PageHeader } from '../components/PageHeader';
 import { EmptyState } from '../components/EmptyState';
@@ -87,7 +88,8 @@ export function AnalyticsPage() {
             <EmptyState icon={Wallet} title={copy.effEmptyTitle} description={copy.effEmptyDescription} />
           ) : (
             <>
-              <ResponsiveContainer width="100%" height={280}>
+              <ResponsiveChart minHeight="15rem" maxHeight="17.5rem">
+              <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={roi} margin={{ top: 10, right: 30, left: 0, bottom: 5 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                   <XAxis dataKey="label" tick={{ fontSize: 11 }} />
@@ -96,6 +98,7 @@ export function AnalyticsPage() {
                   <Bar dataKey="perHour" fill="#2563eb" name="每小时能力增量" />
                 </BarChart>
               </ResponsiveContainer>
+              </ResponsiveChart>
               <div className="mt-2 text-sm text-slate-600 space-y-1">
                 {roi.slice(0, 3).map((r) => (
                   <div key={r.trainingType}>
@@ -116,12 +119,12 @@ export function AnalyticsPage() {
             <BarChart3 size={16} className="text-blue-600" />
             <h2 className="font-semibold">近 30 天阶段报告</h2>
           </div>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <ResponsiveGrid minItemWidth="160px" gap="0.75rem">
             <StatCard label="训练次数" value={String(stageReport.trainingsCount)} />
             <StatCard label="累计题量" value={String(stageReport.totalQuestions)} />
             <StatCard label="累计错题" value={String(stageReport.totalErrors)} />
             <StatCard label="总投入(小时)" value={String(stageReport.totalHours)} />
-          </div>
+          </ResponsiveGrid>
 
           <div>
             <div className="font-medium text-slate-800 mb-2">各学科能力增量</div>
@@ -204,7 +207,8 @@ export function AnalyticsPage() {
             <EmptyState icon={TrendingUp} title={copy.transferEmptyTitle} description={copy.transferEmptyDescription} />
           ) : (
             <>
-              <ResponsiveContainer width="100%" height={280}>
+              <ResponsiveChart minHeight="15rem" maxHeight="17.5rem">
+              <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={marginal.points}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                   <XAxis dataKey="cumulativeHours" tick={{ fontSize: 11 }} label={{ value: '累计小时', position: 'bottom', offset: -5, fontSize: 11 }} />
@@ -213,6 +217,7 @@ export function AnalyticsPage() {
                   <Line type="monotone" dataKey="mastery" stroke="#2563eb" strokeWidth={2} dot={{ r: 3 }} name="掌握度" />
                 </LineChart>
               </ResponsiveContainer>
+              </ResponsiveChart>
 
               <div className="mt-4">
                 <div className="font-medium text-slate-800 mb-2 flex items-center gap-2">
@@ -223,7 +228,8 @@ export function AnalyticsPage() {
                     </span>
                   )}
                 </div>
-                <ResponsiveContainer width="100%" height={200}>
+                <ResponsiveChart minHeight="11rem" maxHeight="12.5rem">
+                <ResponsiveContainer width="100%" height="100%">
                   <LineChart data={growthSeries}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                     <XAxis dataKey="week" tick={{ fontSize: 10 }} />
@@ -253,6 +259,7 @@ export function AnalyticsPage() {
                     <Line type="monotone" dataKey="unfamiliar" stroke="#f59e0b" name="陌生题正确率" strokeDasharray="4 4" />
                   </LineChart>
                 </ResponsiveContainer>
+                </ResponsiveChart>
                 {growthSeries.some((p) => p.emergence) && (
                   <div className="text-[10px] text-slate-500 mt-1">
                     ✨ 涌现点:比前 5 周均值跃升 ≥ 12 分——九段心法·涌现的产品挂载(长期积累后的非线性跃迁)

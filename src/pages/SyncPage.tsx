@@ -11,7 +11,7 @@ import {
   ArrowUpCircle,
   ArrowDownCircle,
 } from 'lucide-react';
-import { useToast } from '@shared/core';
+import { ResponsiveGrid, useToast } from '@shared/core';
 import type { SyncResult } from '@shared/core/types';
 import { PageHeader } from '../components/PageHeader';
 import { useSyncStatus } from '../hooks/useSyncStatus';
@@ -110,7 +110,7 @@ export function SyncPage() {
         }
       />
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+      <ResponsiveGrid minItemWidth="220px" gap="0.75rem">
         <StatCard
           icon={status.isOnline ? <Cloud size={18} /> : <CloudOff size={18} />}
           label="连通性"
@@ -129,16 +129,16 @@ export function SyncPage() {
           value={String(status.pendingChanges)}
           tone={status.pendingChanges > 0 ? 'orange' : 'slate'}
         />
-      </div>
+      </ResponsiveGrid>
 
-      <div className="card p-5 space-y-3">
+      <div className="card p-5 space-y-3 cq">
         <h2 className="font-semibold text-slate-900 flex items-center gap-2">
           <Save size={16} /> D1 服务配置
         </h2>
         <p className="text-sm text-slate-500">
           需要先部署 Cloudflare Worker + D1 数据库 (前端只依赖 HTTP API)。 参考端点: <code>/api/sync/push · /api/sync/pull · /api/sync/backup · /api/sync/restore</code>。
         </p>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div className="cq-grid cq-cols-2 gap-3">
           <div>
             <label className="label">API 网关(Worker) 地址</label>
             <input
@@ -157,7 +157,7 @@ export function SyncPage() {
               placeholder="留空则自动使用当前登录账户名"
             />
           </div>
-          <div className="md:col-span-2">
+          <div className="cq-span-2">
             <label className="label">访问令牌 (Bearer Token, 可选)</label>
             <input
               className="input"
@@ -186,7 +186,7 @@ export function SyncPage() {
         <p className="text-sm text-slate-500">
           增量推送/拉取用于日常同步; 全量备份/恢复用于容灾。
         </p>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <ResponsiveGrid minItemWidth="160px" gap="0.75rem">
           <ActionButton
             icon={<ArrowUpCircle size={16} />}
             label="推送本地变更"
@@ -240,7 +240,7 @@ export function SyncPage() {
               await runAction('从 D1 恢复', () => restoreFromD1());
             }}
           />
-        </div>
+        </ResponsiveGrid>
 
         {busy && (
           <div className="text-sm text-slate-500 flex items-center gap-2">

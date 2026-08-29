@@ -165,7 +165,7 @@ function StrategyForm({
 
   return (
     <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="card w-full max-w-lg p-6">
+      <div className="card w-full max-w-lg p-6 modal-clamp [--modal-max:32rem] [--modal-max-h:90vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-4">
           <h2 className="font-bold">记录教学策略</h2>
           <button onClick={onClose}><X size={18} /></button>

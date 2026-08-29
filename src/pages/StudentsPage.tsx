@@ -265,7 +265,7 @@ function StudentForm({
 
   return (
     <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="card w-full max-w-lg max-h-[90vh] overflow-y-auto p-6">
+      <div className="card w-full max-w-lg max-h-[90vh] overflow-y-auto p-6 modal-clamp [--modal-max:32rem] [--modal-max-h:90vh]">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-bold text-slate-900">添加学生</h2>
           <button className="btn-ghost" onClick={onClose}>

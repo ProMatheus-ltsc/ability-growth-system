@@ -47,6 +47,38 @@
   }
 }
 
+/* ===== 容器查询网格（局部适配：按父容器宽度而非视口切换列数） ===== */
+/* 配套 shared-core responsive.css 中的 .cq 容器：父容器加 .cq，网格加 .cq-grid + .cq-cols-N。
+ * 窄容器单列（.cq-cols-4 窄容器保持两列），容器 ≥42rem 时展开为 N 列；
+ * 42rem 对应桌面主内容区（≥1024px 视口）下卡片/弹窗的实际可用宽度，保证桌面列数与原 md:/sm: 断点一致。 */
+.cq-grid {
+  display: grid;
+}
+.cq-grid > * {
+  min-width: 0;
+}
+.cq-cols-2,
+.cq-cols-3 {
+  grid-template-columns: 1fr;
+}
+.cq-cols-4 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.cq-span-2 {
+  grid-column: 1 / -1;
+}
+@container (min-width: 42rem) {
+  .cq-cols-2 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .cq-cols-3 {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .cq-cols-4 {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
 /* V5.11 · 报告 PDF 导出:打印样式(触发 window.print(),用户选"另存为 PDF") */
 @media print {
   /* 隐藏所有非报告内容:侧边栏、导航、Toast 等 */

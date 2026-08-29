@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { LayoutDashboard, Users, TrendingUp, AlertOctagon, Radar as RadarIcon } from 'lucide-react';
+import { ResponsiveGrid, TableScroll } from '@shared/core';
 import { PageHeader } from '../../components/PageHeader';
 import { EmptyState } from '../../components/EmptyState';
 import { MasteryBar } from '../../components/MasteryBar';
@@ -121,12 +122,12 @@ export function ClassOverviewPage() {
         ))}
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <ResponsiveGrid minItemWidth="160px" gap="0.75rem">
         <StatCard icon={<Users size={18} />} label="学生总数" value={filtered.length} tone="blue" />
         <StatCard icon={<TrendingUp size={18} />} label="活跃学生" value={activeCount} tone="emerald" />
         <StatCard icon={<LayoutDashboard size={18} />} label="全班平均掌握度" value={`${avgMastery}%`} tone="slate" />
         <StatCard icon={<AlertOctagon size={18} />} label="高危预警" value={highWarnings} tone="red" />
-      </div>
+      </ResponsiveGrid>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div className="card p-5">
@@ -134,7 +135,7 @@ export function ClassOverviewPage() {
           {filtered.length === 0 ? (
             <EmptyState icon={Users} title="还没有学生" />
           ) : (
-            <div className="overflow-x-auto">
+            <TableScroll label="全班能力热力图">
               <table className="w-full text-xs">
                 <thead>
                   <tr className="text-slate-500">
@@ -152,7 +153,7 @@ export function ClassOverviewPage() {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </TableScroll>
           )}
         </div>
 
