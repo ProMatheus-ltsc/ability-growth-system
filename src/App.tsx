@@ -32,7 +32,7 @@ import { setBusinessAccount } from './services/localDB';
 import { loadSyncConfig } from './services/remoteSync';
 import { Toaster } from './components/Toaster';
 import { TeacherOnly, RoleGuard } from './components/RoleGuard';
-import { NestedLayout, type NestedNavGroup } from './components/NestedLayout';
+import { Layout, type NavGroup } from '@shared/core';
 import { MODULE_VISIBILITY } from './domain/types';
 
 import { LoginPage } from './pages/LoginPage';
@@ -83,7 +83,7 @@ const APP_CONFIG = {
 type Visibility = (typeof MODULE_VISIBILITY)[keyof typeof MODULE_VISIBILITY];
 
 /** 构建学生视图分层导航 */
-function buildStudentGroups(v: Visibility): NestedNavGroup[] {
+function buildStudentGroups(v: Visibility): NavGroup[] {
   return [
     { key: 'home', label: '今日工作台', icon: Home, to: '/', end: true },
     {
@@ -153,7 +153,7 @@ function buildStudentGroups(v: Visibility): NestedNavGroup[] {
 }
 
 /** 构建教师视图分层导航 */
-function buildTeacherGroups(v: Visibility): NestedNavGroup[] {
+function buildTeacherGroups(v: Visibility): NavGroup[] {
   return [
     { key: 'home', label: '今日工作台', icon: Home, to: '/', end: true },
     {
@@ -303,7 +303,7 @@ function AuthenticatedApp() {
     visibility.examRegistration ? <>{children}</> : <Navigate to="/" replace />;
 
   return (
-    <NestedLayout groups={navGroups} appConfig={APP_CONFIG}>
+    <Layout groups={navGroups} appConfig={APP_CONFIG} storageKey="nested-nav-expanded">
       <Toaster />
       <Routes>
         {/* 公共路由 */}
@@ -346,7 +346,7 @@ function AuthenticatedApp() {
 
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
-    </NestedLayout>
+    </Layout>
   );
 }
 
