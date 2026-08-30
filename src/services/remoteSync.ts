@@ -1,23 +1,28 @@
 /**
- * Cloudflare D1 远程备份/同步服务
+ * Cloudflare D1 远程同步 - 薄适配层
  *
- * 设计要点:
+ * D1 同步的通用实现已下沉到 @shared/core（services/cloudflareD1.ts 的
+ * createD1SyncService），本文件只做两件事：
+ * 1. 用 localDB 的导出/导入/增量/元数据函数实现 D1SyncDataAdapter，
+ *    把本项目的 29 张业务 store 映射为通用快照协议 D1SyncSnapshot
+ * 2. 以模块级单例代理 shared-core 同步服务实例，保持原有模块级导出签名
+ *    不变，调用方（App / useSyncStatus / SyncPage）零改动
+ *
+ * 设计要点（与旧实现一致，详见 @shared/core/services/cloudflareD1.ts）：
  * - Local-First: 本地 IndexedDB 为主, D1 仅作为异地备份和多设备同步的容灾存储
- * - Worker 网关: 前端通过 HTTPS 调用部署在 Cloudflare Workers 上的 API,
- *   由 Worker 使用 D1 Binding 完成 SQL 读写
- * - 三种模式: 增量推送(pushChanges) / 增量拉取(pullChanges) / 全量备份/恢复(fullBackup/restore)
- * - 冲突策略: Last-Write-Wins, 冲突数上报便于教师端知情
- *
- * 期望的 Cloudflare Worker 端点(前端不实现,由部署方提供):
- *   POST /api/sync/push       -> 接收 ExportedSnapshot,写入 D1,返回 { conflicts }
- *   GET  /api/sync/pull       -> ?accountId&since=ISO 返回 ExportedSnapshot
- *   POST /api/sync/backup     -> 全量覆盖备份
- *   GET  /api/sync/restore    -> 可选 ?timestamp=xxx 返回历史版本
- *   GET  /api/sync/health     -> 连通性检测
- *   GET  /api/sync/backups    -> 列出历史备份点
+ * - Worker 网关协议不变（已部署的 ability-growth-system/worker/ 无需改动）
+ * - 冲突策略: Last-Write-Wins
  */
-import type { SyncStatus, SyncResult } from '@shared/core/types';
-import { getCurrentAccountId, listAccounts } from '@shared/core';
+import {
+  createD1SyncService,
+  getCurrentAccountId,
+  listAccounts,
+  type BackupPoint,
+  type D1SyncConfig,
+  type D1SyncDataAdapter,
+  type D1SyncSnapshot,
+  type SyncStatus,
+} from '@shared/core';
 import {
   exportSnapshot,
   importSnapshot,
@@ -27,317 +32,116 @@ import {
   type ExportedSnapshot,
 } from './localDB';
 
-export interface D1SyncConfig {
-  apiEndpoint: string;
-  accountId: string;
-  authToken?: string;
-  databaseId?: string;
+export type { BackupPoint, D1SyncConfig };
+
+// ============ 数据访问适配器（localDB -> D1SyncDataAdapter） ============
+
+/**
+ * 映射表：
+ * - exportSnapshot:  localDB.exportSnapshot() 的 ExportedSnapshot 本就是
+ *                    { [storeName]: rows[] } + version/exportedAt 形态，
+ *                    与 D1SyncSnapshot 结构天然兼容，浅拷贝消除 interface
+ *                    缺少 index signature 的类型差异后直接透传
+ * - importSnapshot:  通用快照按 store 名还原为 ExportedSnapshot；
+ *                    mode 语义一致：merge=按 id upsert / replace=清空后覆盖
+ * - getChangesSince: 各 store 按 updatedAt/createdAt/evaluationTime(及
+ *                    vetoOverrides 的 confirmedAt)过滤的增量快照，原样透传
+ * - getMeta/setMeta: localDB 的 meta 表即同步配置/时间戳的持久化通道，
+ *                    键名（d1-sync-config / d1-last-sync-at / d1-last-backup-at）
+ *                    与旧实现一致，老数据无缝衔接
+ */
+const adapter: D1SyncDataAdapter = {
+  async exportSnapshot(): Promise<D1SyncSnapshot> {
+    const snap = await exportSnapshot();
+    return { ...snap };
+  },
+
+  async importSnapshot(snapshot: D1SyncSnapshot, mode: 'merge' | 'replace' = 'merge'): Promise<void> {
+    // 通用快照 -> 项目快照：运行时结构一致(store 名 -> 记录数组)，缺失的
+    // store 由 localDB.importSnapshot 内部的 ?? [] 兜底，类型上经 unknown 中转
+    await importSnapshot(snapshot as unknown as ExportedSnapshot, mode);
+  },
+
+  async getChangesSince(since: string | null): Promise<D1SyncSnapshot> {
+    const changes = await getChangesSince(since);
+    return { ...changes };
+  },
+
+  getMeta<T>(key: string, defaultValue: T): Promise<T> {
+    return getMeta(key, defaultValue);
+  },
+
+  setMeta(key: string, value: unknown): Promise<void> {
+    return setMeta(key, value);
+  },
+};
+
+// ============ accountId 解析（注入 shared-core） ============
+
+/**
+ * 配置里 accountId 留空时解析当前登录账户的用户名；
+ * 取不到（未登录/账户库异常）时返回空串，由 shared-core 兜底 'local-user'。
+ * 完整回退链（与旧实现一致）：显式配置 > 当前登录用户名 > 'local-user'。
+ */
+async function resolveCurrentUsername(): Promise<string> {
+  try {
+    const id = getCurrentAccountId();
+    if (!id) return '';
+    const accounts = await listAccounts();
+    return accounts.find((a) => a.id === id)?.username ?? '';
+  } catch {
+    return '';
+  }
 }
 
-const CONFIG_KEY = 'd1-sync-config';
-const LAST_SYNC_KEY = 'd1-last-sync-at';
-const LAST_BACKUP_KEY = 'd1-last-backup-at';
+// ============ 模块级单例 + 代理导出（签名与旧实现一致，调用方零改动） ============
 
-let runtimeConfig: D1SyncConfig | null = null;
+const syncService = createD1SyncService(adapter, { resolveAccountId: resolveCurrentUsername });
 
-export async function loadSyncConfig(): Promise<D1SyncConfig | null> {
-  const persisted = await getMeta<D1SyncConfig | null>(CONFIG_KEY, null);
-  runtimeConfig = persisted;
-  return persisted;
+export function loadSyncConfig(): Promise<D1SyncConfig | null> {
+  return syncService.loadSyncConfig();
 }
 
-export async function configureSync(config: D1SyncConfig): Promise<void> {
-  runtimeConfig = config;
-  await setMeta(CONFIG_KEY, config);
+export function configureSync(config: D1SyncConfig): Promise<void> {
+  return syncService.configureSync(config);
 }
 
 export function getSyncConfigSync(): D1SyncConfig | null {
-  return runtimeConfig;
+  return syncService.getSyncConfigSync();
 }
 
-/**
- * 解析本次同步使用的 accountId（D1 内区分数据来源）：
- * 1. 配置里显式填写了就用配置值（多设备想共用同一份数据时，各端填相同值即可互通）
- * 2. 否则自动取当前登录账户的用户名（同一用户名跨设备登录即可互通）
- * 3. 兜底用固定值 'local-user'（纯单设备备份场景，零配置）
- */
-async function resolveAccountId(cfg: D1SyncConfig): Promise<string> {
-  if (cfg.accountId?.trim()) return cfg.accountId.trim();
-  try {
-    const id = getCurrentAccountId();
-    if (id) {
-      const accounts = await listAccounts();
-      const acc = accounts.find((a) => a.id === id);
-      if (acc?.username) return acc.username;
-    }
-  } catch {
-    /* 账户库异常时走兜底 */
-  }
-  return 'local-user';
+export function clearSyncConfig(): Promise<void> {
+  return syncService.clearSyncConfig();
 }
 
-export async function clearSyncConfig(): Promise<void> {
-  runtimeConfig = null;
-  await setMeta(CONFIG_KEY, null);
+export function getSyncStatus(): Promise<SyncStatus> {
+  return syncService.getSyncStatus();
 }
 
-function buildUrl(cfg: D1SyncConfig, path: string, params?: Record<string, string | undefined>): string {
-  const base = cfg.apiEndpoint.replace(/\/$/, '');
-  const url = new URL(`${base}${path}`);
-  if (params) {
-    for (const [k, v] of Object.entries(params)) {
-      if (v !== undefined && v !== '') url.searchParams.set(k, v);
-    }
-  }
-  return url.toString();
+export function getLastBackupAt(): Promise<string | null> {
+  return syncService.getLastBackupAt();
 }
 
-async function authHeaders(cfg: D1SyncConfig, extra?: HeadersInit): Promise<Headers> {
-  const headers = new Headers(extra);
-  if (cfg.authToken) headers.set('Authorization', `Bearer ${cfg.authToken}`);
-  headers.set('X-Sync-Account', await resolveAccountId(cfg));
-  return headers;
+export function pushChanges() {
+  return syncService.pushChanges();
 }
 
-async function checkConnectivity(cfg: D1SyncConfig): Promise<boolean> {
-  try {
-    const res = await fetch(buildUrl(cfg, '/api/sync/health'), {
-      method: 'GET',
-      headers: await authHeaders(cfg),
-      signal: AbortSignal.timeout(5000),
-    });
-    return res.ok;
-  } catch {
-    return false;
-  }
+export function pullChanges() {
+  return syncService.pullChanges();
 }
 
-const SNAPSHOT_LISTS: (keyof ExportedSnapshot)[] = [
-  'trainings',
-  'gaps',
-  'abilities',
-  'students',
-  'reviews',
-  'tasks',
-  'templates',
-  'assignments',
-  'assignmentProgress',
-  'exams',
-  'corrections',
-  'strategies',
-  'registrations',
-  'stagePlans',
-  'spacedReviews',
-  'pdcaProblems',
-  'careerAssessments',
-  'careerReports',
-  'subjectiveAnswers',
-  'interviewRecords',
-  'pdcaArtifacts',
-  'customTools',
-  'weeklyChecklists',
-  'collaborationEvents',
-  'vetoOverrides',
-  'politicsHotspots',
-];
-
-function totalRecords(snap: ExportedSnapshot): number {
-  return SNAPSHOT_LISTS.reduce((sum, key) => sum + (Array.isArray(snap[key]) ? (snap[key] as unknown[]).length : 0), 0);
+export function syncBoth() {
+  return syncService.syncBoth();
 }
 
-export async function getSyncStatus(): Promise<SyncStatus> {
-  const cfg = runtimeConfig;
-  const lastSyncAt = await getMeta<string | null>(LAST_SYNC_KEY, null);
-  const pending = await getChangesSince(lastSyncAt);
-  const pendingChanges = totalRecords(pending);
-  const isOnline = cfg ? await checkConnectivity(cfg) : false;
-  return { lastSyncAt, pendingChanges, isOnline };
+export function fullBackupToD1() {
+  return syncService.fullBackupToD1();
 }
 
-export async function getLastBackupAt(): Promise<string | null> {
-  return getMeta<string | null>(LAST_BACKUP_KEY, null);
+export function restoreFromD1(timestamp?: string) {
+  return syncService.restoreFromD1(timestamp);
 }
 
-function emptyResult(error?: string): SyncResult {
-  return {
-    success: !error,
-    pushed: 0,
-    pulled: 0,
-    conflicts: 0,
-    timestamp: new Date().toISOString(),
-    error,
-  };
-}
-
-export async function pushChanges(): Promise<SyncResult> {
-  const cfg = runtimeConfig;
-  if (!cfg) return emptyResult('未配置 D1 同步服务');
-  try {
-    const lastSyncAt = await getMeta<string | null>(LAST_SYNC_KEY, null);
-    const changes = await getChangesSince(lastSyncAt);
-    const total = totalRecords(changes);
-    if (total === 0) return { ...emptyResult(), success: true };
-    const res = await fetch(buildUrl(cfg, '/api/sync/push'), {
-      method: 'POST',
-      headers: await authHeaders(cfg, { 'Content-Type': 'application/json' }),
-      body: JSON.stringify({
-        accountId: await resolveAccountId(cfg),
-        snapshot: changes,
-        since: lastSyncAt,
-        timestamp: new Date().toISOString(),
-      }),
-    });
-    if (!res.ok) throw new Error(`推送失败(HTTP ${res.status}): ${await res.text()}`);
-    const body = (await res.json()) as { conflicts?: number };
-    const now = new Date().toISOString();
-    await setMeta(LAST_SYNC_KEY, now);
-    return { success: true, pushed: total, pulled: 0, conflicts: body.conflicts ?? 0, timestamp: now };
-  } catch (e) {
-    return emptyResult(e instanceof Error ? e.message : '未知错误');
-  }
-}
-
-export async function pullChanges(): Promise<SyncResult> {
-  const cfg = runtimeConfig;
-  if (!cfg) return emptyResult('未配置 D1 同步服务');
-  try {
-    const lastSyncAt = await getMeta<string | null>(LAST_SYNC_KEY, null);
-    const res = await fetch(
-      buildUrl(cfg, '/api/sync/pull', { accountId: await resolveAccountId(cfg), since: lastSyncAt ?? undefined }),
-      { headers: await authHeaders(cfg) },
-    );
-    if (!res.ok) throw new Error(`拉取失败(HTTP ${res.status}): ${await res.text()}`);
-    const remote = (await res.json()) as ExportedSnapshot;
-
-    const local = await exportSnapshot();
-    const merged = mergeSnapshots(local, remote);
-    await importSnapshot(merged.snapshot, 'replace');
-
-    const now = new Date().toISOString();
-    await setMeta(LAST_SYNC_KEY, now);
-    return { success: true, pushed: 0, pulled: merged.pulled, conflicts: merged.conflicts, timestamp: now };
-  } catch (e) {
-    return emptyResult(e instanceof Error ? e.message : '未知错误');
-  }
-}
-
-export async function syncBoth(): Promise<{ push: SyncResult; pull: SyncResult }> {
-  const push = await pushChanges();
-  const pull = await pullChanges();
-  return { push, pull };
-}
-
-export async function fullBackupToD1(): Promise<SyncResult> {
-  const cfg = runtimeConfig;
-  if (!cfg) return emptyResult('未配置 D1 同步服务');
-  try {
-    const snapshot = await exportSnapshot();
-    const res = await fetch(buildUrl(cfg, '/api/sync/backup'), {
-      method: 'POST',
-      headers: await authHeaders(cfg, { 'Content-Type': 'application/json' }),
-      body: JSON.stringify({
-        accountId: await resolveAccountId(cfg),
-        snapshot,
-        timestamp: new Date().toISOString(),
-      }),
-    });
-    if (!res.ok) throw new Error(`备份失败(HTTP ${res.status}): ${await res.text()}`);
-    const now = new Date().toISOString();
-    await setMeta(LAST_SYNC_KEY, now);
-    await setMeta(LAST_BACKUP_KEY, now);
-    return { success: true, pushed: totalRecords(snapshot), pulled: 0, conflicts: 0, timestamp: now };
-  } catch (e) {
-    return emptyResult(e instanceof Error ? e.message : '未知错误');
-  }
-}
-
-export async function restoreFromD1(timestamp?: string): Promise<SyncResult> {
-  const cfg = runtimeConfig;
-  if (!cfg) return emptyResult('未配置 D1 同步服务');
-  try {
-    const res = await fetch(
-      buildUrl(cfg, '/api/sync/restore', { accountId: await resolveAccountId(cfg), timestamp }),
-      { headers: await authHeaders(cfg) },
-    );
-    if (!res.ok) throw new Error(`恢复失败(HTTP ${res.status}): ${await res.text()}`);
-    const snapshot = (await res.json()) as ExportedSnapshot;
-    await importSnapshot(snapshot, 'replace');
-    const now = new Date().toISOString();
-    await setMeta(LAST_SYNC_KEY, now);
-    return { success: true, pushed: 0, pulled: totalRecords(snapshot), conflicts: 0, timestamp: now };
-  } catch (e) {
-    return emptyResult(e instanceof Error ? e.message : '未知错误');
-  }
-}
-
-export interface BackupPoint {
-  timestamp: string;
-  size: number;
-  records: number;
-}
-
-export async function listBackupPoints(): Promise<BackupPoint[]> {
-  const cfg = runtimeConfig;
-  if (!cfg) return [];
-  try {
-    const res = await fetch(buildUrl(cfg, '/api/sync/backups', { accountId: await resolveAccountId(cfg) }), {
-      headers: await authHeaders(cfg),
-    });
-    if (!res.ok) return [];
-    return (await res.json()) as BackupPoint[];
-  } catch {
-    return [];
-  }
-}
-
-interface MergeReport {
-  snapshot: ExportedSnapshot;
-  pulled: number;
-  conflicts: number;
-}
-
-function mergeById<T extends { id: string; updatedAt?: string; createdAt?: string; evaluationTime?: string }>(
-  localList: T[],
-  remoteList: T[],
-): { merged: T[]; pulled: number; conflicts: number } {
-  const localMap = new Map(localList.map((r) => [r.id, r]));
-  let pulled = 0;
-  let conflicts = 0;
-  for (const remote of remoteList) {
-    const local = localMap.get(remote.id);
-    if (!local) {
-      localMap.set(remote.id, remote);
-      pulled++;
-      continue;
-    }
-    const localTs = local.updatedAt ?? local.createdAt ?? local.evaluationTime ?? '';
-    const remoteTs = remote.updatedAt ?? remote.createdAt ?? remote.evaluationTime ?? '';
-    if (remoteTs > localTs) {
-      localMap.set(remote.id, remote);
-      pulled++;
-      conflicts++;
-    }
-  }
-  return { merged: Array.from(localMap.values()), pulled, conflicts };
-}
-
-function mergeSnapshots(local: ExportedSnapshot, remote: ExportedSnapshot): MergeReport {
-  let totalPulled = 0;
-  let totalConflicts = 0;
-  const merged: ExportedSnapshot = { ...local };
-
-  for (const key of SNAPSHOT_LISTS) {
-    const localList = (local[key] as unknown[]) as { id: string; updatedAt?: string; createdAt?: string; evaluationTime?: string }[];
-    const remoteList = ((remote[key] ?? []) as unknown[]) as typeof localList;
-    const { merged: mergedList, pulled, conflicts } = mergeById(localList, remoteList);
-    (merged[key] as unknown) = mergedList;
-    totalPulled += pulled;
-    totalConflicts += conflicts;
-  }
-
-  return {
-    snapshot: { ...merged, version: '4.0.0', exportedAt: new Date().toISOString() },
-    pulled: totalPulled,
-    conflicts: totalConflicts,
-  };
+export function listBackupPoints(): Promise<BackupPoint[]> {
+  return syncService.listBackupPoints();
 }
