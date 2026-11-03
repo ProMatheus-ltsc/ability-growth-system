@@ -211,7 +211,7 @@ export interface AbilitySnapshot {
   score: number;
   level: MasteryLevel;
   confidence: number;
-  source: 'training' | 'exam' | 'external_ai' | 'manual';
+  source: 'training' | 'exam' | 'manual';
   sampleTotal?: number;
   sampleCorrect?: number;
   evidence?: string;
@@ -465,50 +465,6 @@ export interface SpacedReviewItem {
   nextDueDate: string;
   completedDates: string[];
   status: 'active' | 'graduated';
-}
-
-/** 外部 AI 评估导入结果 */
-export interface ExternalAIAssessment {
-  meta: {
-    student_id: string;
-    grade_level: string;
-    subject: Subject;
-    scenario: string;
-    evaluation_time: string;
-    source: 'external_ai';
-    ai_model?: string;
-  };
-  abilities: Array<{
-    tag_path: string;
-    mastery_score: number;
-    mastery_level: MasteryLevel;
-    confidence: number;
-    evidence: string;
-    sample_total?: number;
-    sample_correct?: number;
-  }>;
-  issues: Array<{
-    related_ability: string;
-    issue_type: string;
-    severity: 'light' | 'medium' | 'serious' | '轻微' | '中等' | '严重';
-    frequency?: number;
-    evidence: string;
-    suggestion: string;
-  }>;
-  training_records?: Array<{
-    subject: string;
-    module: string;
-    training_type: string;
-    total_questions: number;
-    correct_count: number;
-    duration_minutes?: number;
-    error_type_distribution?: Record<string, number>;
-  }>;
-  summary: {
-    main_bottlenecks: string[];
-    priority_fixes: string[];
-    next_training_suggestions: string[];
-  };
 }
 
 /** 预警级别 */
@@ -974,10 +930,10 @@ export const ORG_CULTURE_LABEL: Record<OrgCultureTag, string> = {
   'question-encouraged': '鼓励质疑',
 };
 
-/** 职业候选(既可来源于本地库,也可来源于外部 AI) */
+/** 职业候选(来源于本地职业库) */
 export interface CareerCandidate {
   id: string;
-  source: 'builtin' | 'external_ai';
+  source: 'builtin';
   industry: string;
   profession: string;
   position: string;
@@ -992,7 +948,6 @@ export interface CareerCandidate {
     value?: string;
     interest?: string;
   };
-  aiConfidence?: number;
   /** V5.11 §31.6 · 组织文化特征(定性提示,不参与打分) */
   cultureTags?: OrgCultureTag[];
   /** V5.11 · 文化摩擦提示(用户价值观 vs 该职业典型文化) */
@@ -1023,28 +978,6 @@ export interface TridentStructure {
     workDataAssets: string[];   // 作品与数据资产
     targetYears: string;
   };
-}
-
-/** V5.11 §31.10 · AI 拓展候选导入记录(每次导入独立存档,支持多次) */
-export interface CareerAiImport {
-  id: string;
-  reportId: string;
-  assessmentId: string;
-  studentId?: string;
-  /** 场景:职业方向 / 大学专业(高中变体) */
-  scenario: 'career' | 'college-major';
-  /** AI 模型标识(用户可自定义) */
-  aiModel?: string;
-  /** 用户使用的 Prompt(便于溯源) */
-  prompt?: string;
-  /** AI 原始响应 JSON(压缩存储便于回溯) */
-  rawResponse: string;
-  /** 解析后的候选(含系统否决校验结果) */
-  candidates: CareerCandidate[];
-  /** 用户备注 */
-  note?: string;
-  importedAt: string;
-  createdAt: string;
 }
 
 /** 职业定位报告 */
@@ -1220,33 +1153,4 @@ export interface CareerClassStat {
   bottomLineDist: Record<BottomLine, number>;
 }
 
-/** §27 AI 报考信息解析结果 */
-export interface AiJobParseResult {
-  meta: { source: string; parsedAt: string; aiModel?: string };
-  candidates: Array<{
-    postName: string;
-    department?: string;
-    postLevel?: 'central' | 'province' | 'city' | 'county' | 'town';
-    headcount?: number;
-    educationLimit?: string;
-    majorLimit?: string;
-    politicalRequirement?: string;
-    otherLimit?: string;
-    hardFilterPassed: boolean;
-    filterFailReasons?: string[];
-  }>;
-}
 
-/** §27 时政热点素材条目(按月, 按三科映射) */
-export interface PoliticsHotspot {
-  id: string;
-  yearMonth: string;
-  title: string;
-  summary: string;
-  mappedToXingce?: string;
-  mappedToShenlun?: string;
-  mappedToMianshi?: string;
-  source?: string;
-  aiModel?: string;
-  createdAt: string;
-}

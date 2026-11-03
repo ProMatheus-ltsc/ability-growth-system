@@ -20,7 +20,6 @@ import {
   CheckSquare,
   GitCompareArrows,
   Beaker,
-  Bot,
   Compass,
   GraduationCap,
   Navigation2,
@@ -32,7 +31,7 @@ import { setBusinessAccount } from './services/localDB';
 import { loadSyncConfig } from './services/remoteSync';
 import { Toaster } from './components/Toaster';
 import { TeacherOnly, RoleGuard } from './components/RoleGuard';
-import { NestedLayout, type NestedNavGroup } from './components/NestedLayout';
+import { Layout, type NavGroup } from '@shared/core';
 import { MODULE_VISIBILITY } from './domain/types';
 
 import { LoginPage } from './pages/LoginPage';
@@ -61,14 +60,11 @@ import { CareerPage } from './pages/CareerPage';
 import { LiteracyPage } from './pages/LiteracyPage';
 import { LiteracyCollaborationPage } from './pages/LiteracyCollaborationPage';
 import { StudentsBatchImportPage } from './pages/StudentsBatchImportPage';
-import { AiJobParsePage } from './pages/AiJobParsePage';
-import { PoliticsHotspotsPage } from './pages/PoliticsHotspotsPage';
 
 import { ClassOverviewPage } from './pages/teacher/ClassOverviewPage';
 import { AssignmentsPage } from './pages/teacher/AssignmentsPage';
 import { CorrectionPage } from './pages/teacher/CorrectionPage';
 import { StudentComparePage } from './pages/teacher/StudentComparePage';
-import { AIAssistPage } from './pages/teacher/AIAssistPage';
 import { WarningPage } from './pages/teacher/WarningPage';
 import { StudentDetailPage } from './pages/teacher/StudentDetailPage';
 import { TeachingEffectPage } from './pages/teacher/TeachingEffectPage';
@@ -83,7 +79,7 @@ const APP_CONFIG = {
 type Visibility = (typeof MODULE_VISIBILITY)[keyof typeof MODULE_VISIBILITY];
 
 /** 构建学生视图分层导航 */
-function buildStudentGroups(v: Visibility): NestedNavGroup[] {
+function buildStudentGroups(v: Visibility): NavGroup[] {
   return [
     { key: 'home', label: '今日工作台', icon: Home, to: '/', end: true },
     {
@@ -131,16 +127,6 @@ function buildStudentGroups(v: Visibility): NestedNavGroup[] {
       ],
     },
     {
-      key: 'ai',
-      label: 'AI 辅助 (A 类)',
-      icon: Bot,
-      visible: v.examRegistration,
-      children: [
-        { to: '/ai-job-parse', icon: Bot, label: 'AI 岗位解析' },
-        { to: '/politics-hotspots', icon: Bot, label: '时政素材' },
-      ],
-    },
-    {
       key: 'system',
       label: '系统',
       icon: Settings,
@@ -153,7 +139,7 @@ function buildStudentGroups(v: Visibility): NestedNavGroup[] {
 }
 
 /** 构建教师视图分层导航 */
-function buildTeacherGroups(v: Visibility): NestedNavGroup[] {
+function buildTeacherGroups(v: Visibility): NavGroup[] {
   return [
     { key: 'home', label: '今日工作台', icon: Home, to: '/', end: true },
     {
@@ -176,7 +162,6 @@ function buildTeacherGroups(v: Visibility): NestedNavGroup[] {
         { to: '/assignments', icon: ClipboardList, label: '任务下发' },
         { to: '/corrections', icon: CheckSquare, label: '批改评价' },
         { to: '/effect', icon: Beaker, label: '教学效果' },
-        { to: '/ai-assist', icon: Bot, label: 'AI 辅助能力评估' },
       ],
     },
     {
@@ -221,16 +206,6 @@ function buildTeacherGroups(v: Visibility): NestedNavGroup[] {
       children: [
         { to: '/analytics', icon: BarChart3, label: '训练收益' },
         { to: '/insights', icon: Compass, label: '深度洞察' },
-      ],
-    },
-    {
-      key: 'ai',
-      label: 'AI 辅助 (A 类)',
-      icon: Bot,
-      visible: v.examRegistration,
-      children: [
-        { to: '/ai-job-parse', icon: Bot, label: 'AI 岗位解析' },
-        { to: '/politics-hotspots', icon: Bot, label: '时政素材' },
       ],
     },
     {
@@ -299,11 +274,9 @@ function AuthenticatedApp() {
     visibility.career ? <>{children}</> : <Navigate to="/" replace />;
   const ModuleGuardLiteracy = ({ children }: { children: React.ReactNode }) =>
     visibility.literacy ? <>{children}</> : <Navigate to="/" replace />;
-  const ModuleGuardExamReg = ({ children }: { children: React.ReactNode }) =>
-    visibility.examRegistration ? <>{children}</> : <Navigate to="/" replace />;
 
   return (
-    <NestedLayout groups={navGroups} appConfig={APP_CONFIG}>
+    <Layout groups={navGroups} appConfig={APP_CONFIG} storageKey="nested-nav-expanded">
       <Toaster />
       <Routes>
         {/* 公共路由 */}
@@ -328,8 +301,6 @@ function AuthenticatedApp() {
         <Route path="/career" element={<ProtectedRoute><ModuleGuardCareer><CareerPage /></ModuleGuardCareer></ProtectedRoute>} />
         <Route path="/literacy" element={<ProtectedRoute><ModuleGuardLiteracy><LiteracyPage /></ModuleGuardLiteracy></ProtectedRoute>} />
         <Route path="/literacy-collab" element={<ProtectedRoute><ModuleGuardLiteracy><LiteracyCollaborationPage /></ModuleGuardLiteracy></ProtectedRoute>} />
-        <Route path="/ai-job-parse" element={<ProtectedRoute><ModuleGuardExamReg><AiJobParsePage /></ModuleGuardExamReg></ProtectedRoute>} />
-        <Route path="/politics-hotspots" element={<ProtectedRoute><ModuleGuardExamReg><PoliticsHotspotsPage /></ModuleGuardExamReg></ProtectedRoute>} />
 
         {/* 教师专属路由 */}
         <Route path="/class" element={<ProtectedRoute><TeacherOnly><ClassOverviewPage /></TeacherOnly></ProtectedRoute>} />
@@ -341,12 +312,11 @@ function AuthenticatedApp() {
         <Route path="/corrections" element={<ProtectedRoute><TeacherOnly><CorrectionPage /></TeacherOnly></ProtectedRoute>} />
         <Route path="/compare" element={<ProtectedRoute><TeacherOnly><StudentComparePage /></TeacherOnly></ProtectedRoute>} />
         <Route path="/effect" element={<ProtectedRoute><TeacherOnly><TeachingEffectPage /></TeacherOnly></ProtectedRoute>} />
-        <Route path="/ai-assist" element={<ProtectedRoute><TeacherOnly><AIAssistPage /></TeacherOnly></ProtectedRoute>} />
         <Route path="/warnings" element={<ProtectedRoute><TeacherOnly><WarningPage /></TeacherOnly></ProtectedRoute>} />
 
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
-    </NestedLayout>
+    </Layout>
   );
 }
 

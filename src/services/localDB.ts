@@ -36,10 +36,8 @@ import type {
   WeeklyChecklist,
   CollaborationEvent,
   CareerVetoOverride,
-  PoliticsHotspot,
   CareerObservationPoint,
   RetestReflection,
-  CareerAiImport,
 } from '../domain/types';
 
 export const APP_DB_PREFIX = 'ability-growth';
@@ -49,12 +47,13 @@ configureDB(APP_DB_PREFIX);
  *  v1: P0 六大 store
  *  v2: P1 教师端 + 阶段/间隔复习/报考 (9 张)
  *  v3: PRD V5.8 - PDCA / 职业测评 / 职业报告 (3 张)
- *  v4: V5.8 全量补齐 - 申论版本/面试专项/PDCA工具产出/自定义工具/周检查/协作行为/否决解除/时政素材 (8 张)
+ *  v4: V5.8 全量补齐 - 申论版本/面试专项/PDCA工具产出/自定义工具/周检查/协作行为/否决解除 (7 张)
  *  v5: V5.11 作答质量保障版 - 3 个月观察点 + 事后反思 2 问 (2 张)
  *  v6: V5.11 · AI 拓展候选导入记录(每次导入独立存档) (1 张)
- *  v7: 同步墓碑 tombstones - 让删除能跨设备传播，避免拉取时被云端旧数据复活
+ *  v7: 移除 AI 辅助相关 store(时政素材 / AI 导入记录)
+ *  v8: 同步墓碑 tombstones - 让删除能跨设备传播，避免拉取时被云端旧数据复活
  */
-const DB_VERSION = 7;
+const DB_VERSION = 8;
 
 /** 删除墓碑：记录「哪张表的哪条记录、什么时候被删」 */
 export interface Tombstone {
@@ -193,11 +192,6 @@ interface AGSchema extends DBSchema {
     value: CareerVetoOverride;
     indexes: { reportId: string; candidateId: string };
   };
-  politicsHotspots: {
-    key: string;
-    value: PoliticsHotspot;
-    indexes: { yearMonth: string; createdAt: string };
-  };
   careerObservationPoints: {
     key: string;
     value: CareerObservationPoint;
@@ -207,11 +201,6 @@ interface AGSchema extends DBSchema {
     key: string;
     value: RetestReflection;
     indexes: { studentId: string; assessmentId: string; createdAt: string };
-  };
-  careerAiImports: {
-    key: string;
-    value: CareerAiImport;
-    indexes: { studentId: string; reportId: string; assessmentId: string; importedAt: string };
   };
   meta: {
     key: string;
@@ -250,10 +239,8 @@ export type StoreName =
   | 'weeklyChecklists'
   | 'collaborationEvents'
   | 'vetoOverrides'
-  | 'politicsHotspots'
   | 'careerObservationPoints'
-  | 'careerRetestReflections'
-  | 'careerAiImports';
+  | 'careerRetestReflections';
 
 const SYNCED_STORES: StoreName[] = [
   'trainings',
@@ -281,10 +268,8 @@ const SYNCED_STORES: StoreName[] = [
   'weeklyChecklists',
   'collaborationEvents',
   'vetoOverrides',
-  'politicsHotspots',
   'careerObservationPoints',
   'careerRetestReflections',
-  'careerAiImports',
 ];
 
 let currentAccountId: string | undefined;
@@ -436,10 +421,6 @@ function db(): Promise<IDBPDatabase<AGSchema>> {
           const vo = dbi.createObjectStore('vetoOverrides', { keyPath: 'id' });
           vo.createIndex('reportId', 'reportId');
           vo.createIndex('candidateId', 'candidateId');
-
-          const ph = dbi.createObjectStore('politicsHotspots', { keyPath: 'id' });
-          ph.createIndex('yearMonth', 'yearMonth');
-          ph.createIndex('createdAt', 'createdAt');
         }
 
         if (oldVersion < 5) {
@@ -456,13 +437,11 @@ function db(): Promise<IDBPDatabase<AGSchema>> {
           crr.createIndex('createdAt', 'createdAt');
         }
 
-        if (oldVersion < 6) {
-          // V5.11 §31.10 · AI 拓展候选导入记录(每次导入独立存档,支持多次)
-          const cai = dbi.createObjectStore('careerAiImports', { keyPath: 'id' });
-          cai.createIndex('studentId', 'studentId');
-          cai.createIndex('reportId', 'reportId');
-          cai.createIndex('assessmentId', 'assessmentId');
-          cai.createIndex('importedAt', 'importedAt');
+        if (oldVersion < 7) {
+          // AI 辅助模块移除 · 清理历史遗留 store
+          const legacy = dbi as unknown as IDBPDatabase;
+          if (legacy.objectStoreNames.contains('politicsHotspots')) legacy.deleteObjectStore('politicsHotspots');
+          if (legacy.objectStoreNames.contains('careerAiImports')) legacy.deleteObjectStore('careerAiImports');
         }
 
         if (oldVersion < 7) {
@@ -684,10 +663,8 @@ export interface ExportedSnapshot {
   weeklyChecklists: WeeklyChecklist[];
   collaborationEvents: CollaborationEvent[];
   vetoOverrides: CareerVetoOverride[];
-  politicsHotspots: PoliticsHotspot[];
   careerObservationPoints?: CareerObservationPoint[];
   careerRetestReflections?: RetestReflection[];
-  careerAiImports?: CareerAiImport[];
   /** 删除墓碑（跨设备传播删除用，不参与业务统计） */
   tombstones?: Tombstone[];
 }
@@ -727,10 +704,8 @@ export async function exportSnapshot(): Promise<ExportedSnapshot> {
     weeklyChecklists,
     collaborationEvents,
     vetoOverrides,
-    politicsHotspots,
     careerObservationPoints,
     careerRetestReflections,
-    careerAiImports,
   ] = await Promise.all([
     readAll('trainings'),
     readAll('gaps'),
@@ -757,10 +732,8 @@ export async function exportSnapshot(): Promise<ExportedSnapshot> {
     readAll('weeklyChecklists'),
     readAll('collaborationEvents'),
     readAll('vetoOverrides'),
-    readAll('politicsHotspots'),
     readAll('careerObservationPoints'),
     readAll('careerRetestReflections'),
-    readAll('careerAiImports'),
   ]);
   return {
     version: '7.0.0',
@@ -790,10 +763,8 @@ export async function exportSnapshot(): Promise<ExportedSnapshot> {
     weeklyChecklists,
     collaborationEvents,
     vetoOverrides,
-    politicsHotspots,
     careerObservationPoints,
     careerRetestReflections,
-    careerAiImports,
     tombstones: await getTombstones(),
   };
 }
@@ -832,10 +803,8 @@ export async function importSnapshot(snapshot: ExportedSnapshot, mode: 'merge' |
     weeklyChecklists: snapshot.weeklyChecklists ?? [],
     collaborationEvents: snapshot.collaborationEvents ?? [],
     vetoOverrides: snapshot.vetoOverrides ?? [],
-    politicsHotspots: snapshot.politicsHotspots ?? [],
     careerObservationPoints: snapshot.careerObservationPoints ?? [],
     careerRetestReflections: snapshot.careerRetestReflections ?? [],
-    careerAiImports: snapshot.careerAiImports ?? [],
   };
   for (const store of SYNCED_STORES) {
     for (const record of payload[store]) {
@@ -894,11 +863,9 @@ export async function getChangesSince(since: string | null): Promise<ExportedSna
     weeklyChecklists: filterByUpdated(snapshot.weeklyChecklists),
     collaborationEvents: filterByUpdated(snapshot.collaborationEvents),
     vetoOverrides: snapshot.vetoOverrides.filter((r) => (since ? r.confirmedAt > since : true)),
-    politicsHotspots: filterByUpdated(snapshot.politicsHotspots),
-    // 以下三张此前被遗漏，导致 career 观察点/反思/AI 导入永远不上云
+    // 以下两张此前被遗漏，导致 career 观察点/反思永远不上云
     careerObservationPoints: filterByUpdated(snapshot.careerObservationPoints ?? []),
     careerRetestReflections: filterByUpdated(snapshot.careerRetestReflections ?? []),
-    careerAiImports: filterByUpdated(snapshot.careerAiImports ?? []),
     tombstones: (snapshot.tombstones ?? []).filter((t) => laterThan(t.updatedAt)),
   };
 }

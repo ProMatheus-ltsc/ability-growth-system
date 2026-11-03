@@ -221,7 +221,7 @@ function DispatchForm({
 
   return (
     <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="card w-full max-w-lg max-h-[90vh] overflow-y-auto p-6">
+      <div className="card w-full max-w-lg max-h-[90vh] overflow-y-auto p-6 modal-clamp [--modal-max:32rem] [--modal-max-h:90vh]">
         <div className="flex items-center justify-between mb-4">
           <h2 className="font-bold">下发任务</h2>
           <button onClick={onClose}><X size={18} /></button>
@@ -303,7 +303,7 @@ function TemplateForm({ onClose, onSave }: { onClose: () => void; onSave: (tpl: 
 
   return (
     <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="card w-full max-w-md p-6">
+      <div className="card w-full max-w-md p-6 modal-clamp [--modal-max:28rem] [--modal-max-h:90vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-4">
           <h2 className="font-bold">新建任务模板</h2>
           <button onClick={onClose}><X size={18} /></button>

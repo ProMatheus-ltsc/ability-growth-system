@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { GraduationCap, Sparkles, BookOpen, LineChart, Users } from 'lucide-react';
+import { TableScroll } from '@shared/core';
 import { PageHeader } from '../components/PageHeader';
 import { EmptyState } from '../components/EmptyState';
 import { AbilityRadar } from '../components/RadarChart';
@@ -131,6 +132,7 @@ export function LiteracyPage() {
               {profile.map((p) => (
                 <div key={p.dimension} className="border-b border-slate-100 pb-3">
                   <div className="font-medium text-slate-800 mb-2">{LITERACY_DIMENSION_LABEL[p.dimension]}</div>
+                  <TableScroll label={`${LITERACY_DIMENSION_LABEL[p.dimension]}指标`}>
                   <table className="w-full text-xs">
                     <thead className="text-slate-500">
                       <tr>
@@ -151,6 +153,7 @@ export function LiteracyPage() {
                       ))}
                     </tbody>
                   </table>
+                  </TableScroll>
                 </div>
               ))}
             </div>

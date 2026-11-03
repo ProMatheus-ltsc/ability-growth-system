@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine, Legend } from 'recharts';
+import { ResponsiveChart } from '@shared/core';
 import { Lightbulb, Compass, Cpu, GitBranch, Play, Sparkles } from 'lucide-react';
 import { PageHeader } from '../components/PageHeader';
 import { EmptyState } from '../components/EmptyState';
@@ -160,7 +161,8 @@ function ForecastTab({ records, subjects, copy }: { records: TrainingRecord[]; s
         <div className="text-sm text-slate-600 mb-3">
           当前掌握度 <b>{detail.currentMastery}%</b> · 周增长率 <b>{detail.weeklyGrowthRate}%</b> · 达到熟练需 {detail.weeksToTarget.proficient ?? '—'} 周 · 达到精通需 {detail.weeksToTarget.expert ?? '—'} 周
         </div>
-        <ResponsiveContainer width="100%" height={280}>
+        <ResponsiveChart minHeight="15rem" maxHeight="17.5rem">
+        <ResponsiveContainer width="100%" height="100%">
           <LineChart data={chart}>
             <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
             <XAxis dataKey="label" tick={{ fontSize: 11 }} />
@@ -171,6 +173,7 @@ function ForecastTab({ records, subjects, copy }: { records: TrainingRecord[]; s
             <Line type="monotone" dataKey="mastery" stroke="#2563eb" strokeWidth={2} dot={{ r: 3 }} name="预测掌握度" />
           </LineChart>
         </ResponsiveContainer>
+        </ResponsiveChart>
       </div>
     </div>
   );
@@ -196,7 +199,7 @@ function SimulationTab({ records, subjects }: { records: TrainingRecord[]; subje
 
   return (
     <div className="space-y-4">
-      <div className="card p-5 space-y-3">
+      <div className="card p-5 space-y-3 cq">
         <h2 className="font-semibold flex items-center gap-2">
           <Play size={16} className="text-blue-600" /> 个性化训练策略模拟 (What-if)
         </h2>
@@ -204,7 +207,7 @@ function SimulationTab({ records, subjects }: { records: TrainingRecord[]; subje
           假设每周投入 X 小时,按特定训练结构分配,N 周后能力将达到什么水平?
         </p>
 
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="cq-grid cq-cols-4 gap-3">
           <div>
             <label className="label">学科</label>
             <select className="input" value={subject} onChange={(e) => setSubject(e.target.value as Subject)}>
@@ -227,7 +230,7 @@ function SimulationTab({ records, subjects }: { records: TrainingRecord[]; subje
 
         <div>
           <div className="label">训练结构分配(比例, 自动归一化)</div>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div className="cq-grid cq-cols-4 gap-3">
             {(['topic', 'review', 'unfamiliar', 'timed'] as const).map((k) => (
               <div key={k}>
                 <label className="label text-xs">
@@ -262,7 +265,8 @@ function SimulationTab({ records, subjects }: { records: TrainingRecord[]; subje
               初始 {result.currentMastery}% → {weeks} 周后 <b>{result.finalMastery}%</b>
             </span>
           </div>
-          <ResponsiveContainer width="100%" height={260}>
+          <ResponsiveChart minHeight="14rem" maxHeight="16.25rem">
+          <ResponsiveContainer width="100%" height="100%">
             <LineChart data={[{ week: 0, mastery: result.currentMastery }, ...result.trajectory]}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
               <XAxis dataKey="week" tick={{ fontSize: 11 }} label={{ value: '周', position: 'bottom', offset: -5, fontSize: 11 }} />
@@ -273,6 +277,7 @@ function SimulationTab({ records, subjects }: { records: TrainingRecord[]; subje
               <Line type="monotone" dataKey="mastery" stroke="#2563eb" strokeWidth={2} dot={{ r: 2 }} />
             </LineChart>
           </ResponsiveContainer>
+          </ResponsiveChart>
           {result.notes.length > 0 && (
             <div className="mt-3 text-sm text-slate-600 space-y-1">
               {result.notes.map((n) => (
@@ -299,14 +304,14 @@ function CausalTab({ records, gaps, copy }: { records: TrainingRecord[]; gaps: A
   const trainings = graph.nodes.filter((n) => n.kind === 'training');
 
   return (
-    <div className="card p-5">
+    <div className="card p-5 cq">
       <h2 className="font-semibold flex items-center gap-2 mb-3">
         <GitBranch size={16} className="text-purple-600" /> 错误 → 能力缺口 → 训练方式 因果链
       </h2>
       <p className="text-sm text-slate-500 mb-4">
         将过去的错误类型映射到能力短板, 再匹配到最适合的训练方式。 这是系统动力学的浓缩视图。
       </p>
-      <div className="grid grid-cols-3 gap-3">
+      <div className="cq-grid cq-cols-3 gap-3">
         <ColumnBlock title="错误类型" tone="red" items={errors.map((n) => n.label)} />
         <ColumnBlock title="能力短板" tone="orange" items={abilities.map((n) => n.label)} />
         <ColumnBlock title="建议训练" tone="emerald" items={Array.from(new Set(trainings.map((n) => n.label)))} />

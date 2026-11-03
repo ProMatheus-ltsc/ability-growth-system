@@ -33,15 +33,15 @@ export interface Env {
   SYNC_AUTH_TOKEN?: string;
 }
 
-/** 业务表白名单（防止拼接 SQL 注入） */
+/** 业务表白名单（防止拼接 SQL 注入）。与前端 src/services/localDB.ts 的 SYNCED_STORES 保持 27 张一一对应 */
 const STORES = [
   'trainings', 'gaps', 'abilities', 'students', 'reviews', 'tasks',
   'templates', 'assignments', 'assignmentProgress', 'exams', 'corrections',
   'strategies', 'registrations', 'stagePlans', 'spacedReviews',
   'pdcaProblems', 'careerAssessments', 'careerReports', 'subjectiveAnswers',
   'interviewRecords', 'pdcaArtifacts', 'customTools', 'weeklyChecklists',
-  'collaborationEvents', 'vetoOverrides', 'politicsHotspots',
-  'careerObservationPoints', 'careerRetestReflections', 'careerAiImports',
+  'collaborationEvents', 'vetoOverrides',
+  'careerObservationPoints', 'careerRetestReflections',
 ] as const;
 type StoreName = (typeof STORES)[number];
 

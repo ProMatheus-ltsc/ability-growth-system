@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, AlertTriangle, Sparkles, ShieldOff, Compass, Bot, RotateCcw, Trophy, Route, Palette, Printer, Trash2, History } from 'lucide-react';
+import { ArrowLeft, AlertTriangle, Sparkles, ShieldOff, Compass, RotateCcw, Trophy, Route, Palette, Printer } from 'lucide-react';
 import { PageHeader } from '../PageHeader';
 import { AbilityRadar } from '../RadarChart';
 import { useToast } from '@shared/core';
@@ -11,9 +11,7 @@ import {
   VALUE_CLARIFICATION_STEP_LABEL,
   VALUE_COST_LABEL,
   VALUE_DIMENSION_LABEL,
-  type CareerAiImport,
   type CareerAssessment,
-  type CareerCandidate,
   type CareerObservationPoint,
   type CareerReport,
   type CareerVetoOverride,
@@ -57,14 +55,6 @@ import {
   VALUE_CLARIFICATION_STEPS,
 } from '../../services/careerAssessment';
 import { v4 as uuid } from 'uuid';
-import {
-  buildCareerAiPrompt,
-  deleteAiImport,
-  listAiImports,
-  parseCareerAiResponse,
-  saveAiImport,
-  toCareerCandidates,
-} from '../../services/aiTypeAServices';
 import { createProblem, saveProblem } from '../../services/pdca';
 import { useNavigate } from 'react-router-dom';
 
@@ -82,14 +72,6 @@ export function CareerReportView({ report, assessment, onBack }: Props) {
   const [overrides, setOverrides] = useState<CareerVetoOverride[]>([]);
   const [observations, setObservations] = useState<CareerObservationPoint[]>([]);
   const [reflections, setReflections] = useState<RetestReflection[]>([]);
-  const [showAi, setShowAi] = useState(false);
-  const [aiPrompt, setAiPrompt] = useState('');
-  const [aiRaw, setAiRaw] = useState('');
-  // V5.12 · 各学段统一走职业方向(college-major 场景已废弃)
-  const aiScenario = 'career' as const;
-  const [aiModel, setAiModel] = useState('');
-  const [aiNote, setAiNote] = useState('');
-  const [aiImports, setAiImports] = useState<CareerAiImport[]>([]);
   const [showReflectForm, setShowReflectForm] = useState(false);
   const [reflectA1, setReflectA1] = useState('');
   const [reflectA2, setReflectA2] = useState('');
@@ -105,7 +87,6 @@ export function CareerReportView({ report, assessment, onBack }: Props) {
 
   useEffect(() => {
     void listVetoOverrides(report.id).then(setOverrides);
-    void listAiImports(report.id).then(setAiImports);
     if (assessment) {
       void listObservationPoints(assessment.id).then(setObservations);
       void listRetestReflections(assessment.id).then(setReflections);
@@ -641,154 +622,7 @@ export function CareerReportView({ report, assessment, onBack }: Props) {
     </>
   );
 
-  // ==================== § 四 · AI 拓展 (A 类) · 入口 + 历史 ====================
-  const secAiExpand = (
-    <>
-      <div className="card p-5" data-print-hide="true">
-        <h2 className="font-semibold flex items-center gap-2 mb-2">
-          <Bot size={16} className="text-blue-600" /> AI 拓展职业信息 · 生成 & 导入
-        </h2>
-        <div className="text-xs text-slate-500 mb-3">
-          基于测评画像生成 3-5 个候选。 每次 AI 返回的结果会独立保存, 便于跨模型 / 跨轮次对比。 系统仍会执行价值观一票否决过滤 —— AI 无否决权。
-        </div>
-        {!showAi ? (
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              className="btn-primary text-sm"
-              onClick={() => {
-                if (!assessment) return;
-                setAiPrompt(buildCareerAiPrompt(assessment, aiScenario));
-                setShowAi(true);
-              }}
-              disabled={!assessment}
-            >
-              生成职业方向提示词
-            </button>
-          </div>
-        ) : (
-          <div className="space-y-2">
-            <div className="text-xs text-slate-500">1. 复制提示词到外部 AI(建议 GPT-4 / Claude / Gemini):</div>
-            <textarea className="input font-mono text-xs min-h-[140px]" value={aiPrompt} readOnly />
-            <div className="flex flex-wrap gap-2 items-center">
-              <button
-                className="btn-secondary text-xs"
-                onClick={async () => {
-                  await navigator.clipboard.writeText(aiPrompt);
-                  showToast('已复制', 'success');
-                }}
-              >
-                复制提示词
-              </button>
-              <input
-                className="input py-1 text-xs max-w-[140px]"
-                placeholder="AI 模型 (可选)"
-                value={aiModel}
-                onChange={(e) => setAiModel(e.target.value)}
-              />
-              <input
-                className="input py-1 text-xs flex-1"
-                placeholder="本次备注 (可选,如: 主线扩展 / 副线试错)"
-                value={aiNote}
-                onChange={(e) => setAiNote(e.target.value)}
-              />
-            </div>
-            <div className="text-xs text-slate-500">2. 粘贴 AI 返回 JSON:</div>
-            <textarea
-              className="input font-mono text-xs min-h-[140px]"
-              value={aiRaw}
-              onChange={(e) => setAiRaw(e.target.value)}
-              placeholder="粘贴 AI 返回的 JSON..."
-            />
-            <div className="flex gap-2">
-              <button
-                className="btn-primary text-sm"
-                onClick={async () => {
-                  const data = parseCareerAiResponse(aiRaw);
-                  if (!data) {
-                    showToast('JSON 解析失败, 请确保是合法的 JSON', 'error');
-                    return;
-                  }
-                  if (!assessment) return;
-                  const candidates = toCareerCandidates(data, assessment.values.bottomLines);
-                  const vetoedCount = candidates.filter((c) => c.vetoReason).length;
-                  await saveAiImport({
-                    reportId: report.id,
-                    assessmentId: assessment.id,
-                    studentId: assessment.studentId,
-                    scenario: aiScenario,
-                    aiModel: aiModel.trim() || undefined,
-                    prompt: aiPrompt,
-                    rawResponse: aiRaw,
-                    candidates,
-                    note: aiNote.trim() || undefined,
-                    importedAt: new Date().toISOString(),
-                  });
-                  const list = await listAiImports(report.id);
-                  setAiImports(list);
-                  showToast(
-                    `已保存本次 AI 导入:${candidates.length} 个候选(其中 ${vetoedCount} 个被系统否决过滤)`,
-                    'success',
-                  );
-                  setAiRaw('');
-                  setAiNote('');
-                  setShowAi(false);
-                }}
-                disabled={!aiRaw.trim()}
-              >
-                保存本次 AI 导入
-              </button>
-              <button
-                className="btn-ghost text-sm"
-                onClick={() => {
-                  setShowAi(false);
-                  setAiRaw('');
-                  setAiNote('');
-                }}
-              >
-                取消
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
-      {aiImports.length > 0 && (
-        <div className="space-y-3">
-          <div className="flex items-center gap-2 text-xs text-slate-500">
-            <History size={12} /> AI 导入历史 · 共 {aiImports.length} 次
-          </div>
-          {aiImports.map((imp) => (
-            <AiImportCard
-              key={imp.id}
-              record={imp}
-              onDelete={async () => {
-                if (!window.confirm('确认删除本次 AI 导入记录?')) return;
-                await deleteAiImport(imp.id);
-                setAiImports(await listAiImports(report.id));
-                showToast('已删除', 'info');
-              }}
-              onSideline={async (c) => {
-                const problem = createProblem({
-                  studentId: assessment?.studentId,
-                  title: `副线试错(AI):${c.industry} · ${c.profession}`,
-                  description: `来源:AI 拓展候选(${imp.aiModel ?? '未指定模型'})。 计划以低成本试错方式验证该方向, 跑通则升格为主线候选。`,
-                  problemType: 'pursue',
-                  lifeDomain: 'work',
-                  targetState: `完成 ${c.profession} 方向的一次可验证的试错闭环`,
-                  successCriteria: '得出"值得升格 / 需要迭代 / 归档经验"三选一的明确判断',
-                  sensorySignals: ['most'],
-                });
-                await saveProblem(problem);
-                showToast('已生成 PDCA 追求理想型问题', 'success');
-                navigate(`/pdca/detail?id=${problem.id}`);
-              }}
-            />
-          ))}
-        </div>
-      )}
-    </>
-  );
-
-  // ==================== § 五 · 底线过滤 · 一票否决 + 底线价值提示 ====================
+  // ==================== § 四 · 底线过滤 · 一票否决 + 底线价值提示 ====================
   const secBottomLineFilter = (
     <>
       {strategy.showAvoid && report.vetoed.length > 0 && (
@@ -1165,30 +999,26 @@ export function CareerReportView({ report, assessment, onBack }: Props) {
       <SectionDivider index="§ 三" title="定位与结论" hint={copy.reportSectionThreeHint} />
       {secConclusion}
 
-      {/* § 四 · AI 拓展 (A 类) */}
-      <SectionDivider index="§ 四" title="AI 拓展候选(A 类 · 时效性信息)" hint="每次导入独立存档,可多次追加" />
-      {secAiExpand}
-
-      {/* § 五 · 底线过滤 */}
-      <SectionDivider index="§ 五" title="底线过滤" hint="一票否决 + 底线价值提示" />
+      {/* § 四 · 底线过滤 */}
+      <SectionDivider index="§ 四" title="底线过滤" hint="一票否决 + 底线价值提示" />
       {secBottomLineFilter}
 
-      {/* § 六 · 成长路径 · 仅成年人展示三叉戟 */}
+      {/* § 五 · 成长路径 · 仅成年人展示三叉戟 */}
       {secGrowthPath && (
         <>
-          <SectionDivider index="§ 六" title="成长路径" hint="主线深耕 + 副线试错 + 资产底盘" />
+          <SectionDivider index="§ 五" title="成长路径" hint="主线深耕 + 副线试错 + 资产底盘" />
           {secGrowthPath}
         </>
       )}
 
-      {/* § 七 · 价值澄清与迭代 */}
-      <SectionDivider index="§ 七" title="价值澄清与迭代" hint="五步进度 · 小步实践 · 观察点 · 反思 · 投射旁证" />
+      {/* § 六 · 价值澄清与迭代 */}
+      <SectionDivider index="§ 六" title="价值澄清与迭代" hint="五步进度 · 小步实践 · 观察点 · 反思 · 投射旁证" />
       {secValueClarify}
 
-      {/* § 八 · 品控 · 作答可信度评分(报告末尾) */}
+      {/* § 七 · 品控 · 作答可信度评分(报告末尾) */}
       {secQualityScore && (
         <>
-          <SectionDivider index="§ 八" title="作答质量保障" hint="可信度评分(0-100)" />
+          <SectionDivider index="§ 七" title="作答质量保障" hint="可信度评分(0-100)" />
           {secQualityScore}
         </>
       )}
@@ -1243,7 +1073,7 @@ function DimensionRetestModal({
 
   return (
     <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="card w-full max-w-xl max-h-[85vh] overflow-y-auto p-5 space-y-3">
+      <div className="card w-full max-w-xl max-h-[85vh] overflow-y-auto p-5 space-y-3 modal-clamp [--modal-max:36rem] [--modal-max-h:85vh]">
         <div className="flex items-center justify-between">
           <h3 className="font-semibold">
             重测「{dimension}」维度 · {items.length} 题
@@ -1333,130 +1163,6 @@ function DimensionRetestModal({
           </button>
         </div>
       </div>
-    </div>
-  );
-}
-
-function AiImportCard({
-  record,
-  onDelete,
-  onSideline,
-}: {
-  record: CareerAiImport;
-  onDelete: () => void;
-  onSideline: (c: CareerCandidate) => void;
-}) {
-  const survivors = record.candidates.filter((c) => !c.vetoReason);
-  const vetoed = record.candidates.filter((c) => c.vetoReason);
-  const scenarioLabel = record.scenario === 'college-major' ? '大学专业' : '职业方向';
-  return (
-    <div className="card p-4 border-blue-100 bg-blue-50/30">
-      <div className="flex items-start justify-between gap-2 mb-2">
-        <div className="flex-1">
-          <div className="flex items-center flex-wrap gap-2 text-sm">
-            <Bot size={14} className="text-blue-600" />
-            <b className="text-slate-900">AI 导入 · {scenarioLabel}</b>
-            {record.aiModel && (
-              <span className="badge bg-slate-100 text-slate-700 text-[10px]">{record.aiModel}</span>
-            )}
-            <span className="text-[10px] text-slate-400">
-              {record.importedAt.slice(0, 19).replace('T', ' ')}
-            </span>
-          </div>
-          {record.note && <div className="text-xs text-slate-500 mt-1">备注:{record.note}</div>}
-          <div className="text-[10px] text-slate-500 mt-1">
-            共 {record.candidates.length} 个候选 · 幸存 {survivors.length} · 被否决 {vetoed.length}
-          </div>
-        </div>
-        <button
-          className="btn-ghost text-red-500 text-xs"
-          onClick={onDelete}
-          data-print-hide="true"
-          title="删除本次导入记录"
-        >
-          <Trash2 size={12} />
-        </button>
-      </div>
-
-      {survivors.length > 0 && (
-        <div className="mt-2 space-y-2">
-          <div className="text-xs text-slate-600 font-medium">幸存候选({survivors.length}):</div>
-          {survivors.map((c) => (
-            <div key={c.id} className="border border-slate-100 bg-white rounded p-2 text-xs">
-              <div className="flex items-start justify-between gap-2">
-                <div className="flex-1">
-                  <div className="font-medium text-slate-800">
-                    {c.industry} · {c.profession}
-                  </div>
-                  <div className="text-slate-500 mt-0.5">{c.position}</div>
-                  {(c.planB || c.planC) && (
-                    <div className="text-slate-400 mt-0.5">
-                      Plan B: {c.planB ?? '—'} · Plan C: {c.planC ?? '—'}
-                    </div>
-                  )}
-                  {c.reasoning && (
-                    <details className="mt-1 text-slate-500">
-                      <summary className="cursor-pointer">匹配理由(AI)</summary>
-                      <ul className="pl-3 mt-1 space-y-0.5 list-disc list-inside">
-                        {c.reasoning.personality && <li>性格: {c.reasoning.personality}</li>}
-                        {c.reasoning.ability && <li>能力: {c.reasoning.ability}</li>}
-                        {c.reasoning.value && <li>价值: {c.reasoning.value}</li>}
-                        {c.reasoning.interest && <li>兴趣: {c.reasoning.interest}</li>}
-                      </ul>
-                    </details>
-                  )}
-                </div>
-                <div className="flex flex-col items-end gap-1">
-                  {c.valueCostTags[0] !== 'none' && (
-                    <span className="badge bg-yellow-50 text-yellow-700 text-[10px]">
-                      {c.valueCostTags.map((t) => VALUE_COST_LABEL[t]).join(', ')}
-                    </span>
-                  )}
-                  {c.aiConfidence !== undefined && (
-                    <span className="text-[10px] text-slate-400">
-                      置信 {Math.round(c.aiConfidence * 100)}%
-                    </span>
-                  )}
-                  <button
-                    className="btn-ghost text-[10px] text-blue-600"
-                    onClick={() => onSideline(c)}
-                    data-print-hide="true"
-                    title="转为 PDCA 追求理想型问题"
-                  >
-                    → 转副线
-                  </button>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {vetoed.length > 0 && (
-        <details className="mt-2">
-          <summary className="cursor-pointer text-xs text-red-700">
-            系统否决 {vetoed.length} 个候选 · 展开查看
-          </summary>
-          <div className="mt-2 space-y-1">
-            {vetoed.map((c) => (
-              <div key={c.id} className="border border-red-100 bg-red-50/40 rounded p-2 text-xs">
-                <div className="font-medium">
-                  {c.industry} · {c.profession}
-                  <span className="text-slate-500 ml-1">{c.position}</span>
-                </div>
-                <div className="text-red-600 mt-0.5">{c.vetoReason}</div>
-              </div>
-            ))}
-          </div>
-        </details>
-      )}
-
-      <details className="mt-2" data-print-hide="true">
-        <summary className="cursor-pointer text-[10px] text-slate-400">原始 JSON(可复制留档)</summary>
-        <pre className="text-[10px] bg-slate-50 p-2 mt-1 rounded max-h-32 overflow-auto whitespace-pre-wrap">
-          {record.rawResponse}
-        </pre>
-      </details>
     </div>
   );
 }

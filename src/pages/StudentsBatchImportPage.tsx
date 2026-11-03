@@ -5,7 +5,7 @@ import { useMemo, useState } from 'react';
 import { Upload, X, CheckCircle2 } from 'lucide-react';
 import { v4 as uuid } from 'uuid';
 import { useNavigate } from 'react-router-dom';
-import { useToast } from '@shared/core';
+import { TableScroll, useToast } from '@shared/core';
 import { PageHeader } from '../components/PageHeader';
 import { putRecord } from '../services/localDB';
 import {
@@ -129,6 +129,7 @@ export function StudentsBatchImportPage() {
               <CheckCircle2 size={14} /> 确认导入
             </button>
           </div>
+          <TableScroll label="导入预览">
           <table className="w-full text-sm">
             <thead className="text-xs text-slate-500">
               <tr>
@@ -153,6 +154,7 @@ export function StudentsBatchImportPage() {
               ))}
             </tbody>
           </table>
+          </TableScroll>
         </div>
       )}
 

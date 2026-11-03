@@ -9,14 +9,14 @@
 --   * 因此本脚本可以在已有数据库上直接跑，无需备份、无需迁移、不会丢数据
 --
 -- v2 相对 v1 的变化：
---   1. 业务表从 15 张补齐到 29 张（此前 careerObservationPoints / careerRetestReflections /
---      careerAiImports 等 14 张表缺失，前端推上去的数据被静默丢弃）
+--   1. 业务表从 15 张补齐到 27 张（此前 pdcaProblems / careerAssessments /
+--      careerObservationPoints 等 12 张表缺失，前端推上去的数据被静默丢弃）
 --   2. 新增 tombstones 表：让「删除」能跨设备传播
 --      （此前只删本地，下次 pull 会被云端旧数据复活）
 --   3. sync_backups.id 对新备份改为 `${account_id}:${timestamp}`，避免不同账户
 --      同一时刻互相覆盖；读取一律按 created_at，旧备份（纯时间戳 id）仍可正常列出与恢复
 
--- ============ 业务表（29 张，与前端 localDB 的 SYNCED_STORES 一一对应） ============
+-- ============ 业务表（27 张，与前端 localDB 的 SYNCED_STORES 一一对应） ============
 CREATE TABLE IF NOT EXISTS trainings (id TEXT PRIMARY KEY, updated_at TEXT NOT NULL, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS gaps (id TEXT PRIMARY KEY, updated_at TEXT NOT NULL, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS abilities (id TEXT PRIMARY KEY, updated_at TEXT NOT NULL, data TEXT NOT NULL);
@@ -42,10 +42,8 @@ CREATE TABLE IF NOT EXISTS customTools (id TEXT PRIMARY KEY, updated_at TEXT NOT
 CREATE TABLE IF NOT EXISTS weeklyChecklists (id TEXT PRIMARY KEY, updated_at TEXT NOT NULL, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS collaborationEvents (id TEXT PRIMARY KEY, updated_at TEXT NOT NULL, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS vetoOverrides (id TEXT PRIMARY KEY, updated_at TEXT NOT NULL, data TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS politicsHotspots (id TEXT PRIMARY KEY, updated_at TEXT NOT NULL, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS careerObservationPoints (id TEXT PRIMARY KEY, updated_at TEXT NOT NULL, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS careerRetestReflections (id TEXT PRIMARY KEY, updated_at TEXT NOT NULL, data TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS careerAiImports (id TEXT PRIMARY KEY, updated_at TEXT NOT NULL, data TEXT NOT NULL);
 
 -- 索引: 增量拉取按 updated_at 过滤
 CREATE INDEX IF NOT EXISTS idx_trainings_updated ON trainings(updated_at);
@@ -73,10 +71,8 @@ CREATE INDEX IF NOT EXISTS idx_customTools_updated ON customTools(updated_at);
 CREATE INDEX IF NOT EXISTS idx_weeklyChecklists_updated ON weeklyChecklists(updated_at);
 CREATE INDEX IF NOT EXISTS idx_collaborationEvents_updated ON collaborationEvents(updated_at);
 CREATE INDEX IF NOT EXISTS idx_vetoOverrides_updated ON vetoOverrides(updated_at);
-CREATE INDEX IF NOT EXISTS idx_politicsHotspots_updated ON politicsHotspots(updated_at);
 CREATE INDEX IF NOT EXISTS idx_careerObservationPoints_updated ON careerObservationPoints(updated_at);
 CREATE INDEX IF NOT EXISTS idx_careerRetestReflections_updated ON careerRetestReflections(updated_at);
-CREATE INDEX IF NOT EXISTS idx_careerAiImports_updated ON careerAiImports(updated_at);
 
 -- ============ 删除墓碑（新增表，纯增量） ============
 -- 主键用 `${account}:${store}:${recordId}`，天然按账户隔离

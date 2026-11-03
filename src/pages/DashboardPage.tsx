@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Sparkles, Target, CheckCircle2, TrendingUp, CalendarClock, RefreshCw, PlusCircle, CalendarRange, Timer, Star, Flag } from 'lucide-react';
+import { ResponsiveGrid } from '@shared/core';
 import { useAppSession } from '../hooks/useAppSession';
 import { useSyncStatus } from '../hooks/useSyncStatus';
 import { findTrainingsInRange, findGaps, findAbilities, findTasks, findReviews, getAllRecords } from '../services/localDB';
@@ -197,7 +198,7 @@ export function DashboardPage() {
 
       <TodayFocusCard gaps={prioritizedGaps} tasks={tasks} tone={tone} />
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <ResponsiveGrid minItemWidth="220px" gap="1rem">
         <MetricCard
           icon={prefs.gradeLevel === 'primary' ? <Star size={18} /> : <Target size={18} />}
           label={tone.metricGap}
@@ -219,7 +220,7 @@ export function DashboardPage() {
           tone="emerald"
           to="/abilities"
         />
-      </div>
+      </ResponsiveGrid>
 
       <div className="card p-5">
         <div className="flex items-center justify-between mb-3">
