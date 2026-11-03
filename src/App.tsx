@@ -20,7 +20,6 @@ import {
   CheckSquare,
   GitCompareArrows,
   Beaker,
-  Bot,
   Compass,
   GraduationCap,
   Navigation2,
@@ -61,14 +60,11 @@ import { CareerPage } from './pages/CareerPage';
 import { LiteracyPage } from './pages/LiteracyPage';
 import { LiteracyCollaborationPage } from './pages/LiteracyCollaborationPage';
 import { StudentsBatchImportPage } from './pages/StudentsBatchImportPage';
-import { AiJobParsePage } from './pages/AiJobParsePage';
-import { PoliticsHotspotsPage } from './pages/PoliticsHotspotsPage';
 
 import { ClassOverviewPage } from './pages/teacher/ClassOverviewPage';
 import { AssignmentsPage } from './pages/teacher/AssignmentsPage';
 import { CorrectionPage } from './pages/teacher/CorrectionPage';
 import { StudentComparePage } from './pages/teacher/StudentComparePage';
-import { AIAssistPage } from './pages/teacher/AIAssistPage';
 import { WarningPage } from './pages/teacher/WarningPage';
 import { StudentDetailPage } from './pages/teacher/StudentDetailPage';
 import { TeachingEffectPage } from './pages/teacher/TeachingEffectPage';
@@ -131,16 +127,6 @@ function buildStudentGroups(v: Visibility): NavGroup[] {
       ],
     },
     {
-      key: 'ai',
-      label: 'AI 辅助 (A 类)',
-      icon: Bot,
-      visible: v.examRegistration,
-      children: [
-        { to: '/ai-job-parse', icon: Bot, label: 'AI 岗位解析' },
-        { to: '/politics-hotspots', icon: Bot, label: '时政素材' },
-      ],
-    },
-    {
       key: 'system',
       label: '系统',
       icon: Settings,
@@ -176,7 +162,6 @@ function buildTeacherGroups(v: Visibility): NavGroup[] {
         { to: '/assignments', icon: ClipboardList, label: '任务下发' },
         { to: '/corrections', icon: CheckSquare, label: '批改评价' },
         { to: '/effect', icon: Beaker, label: '教学效果' },
-        { to: '/ai-assist', icon: Bot, label: 'AI 辅助能力评估' },
       ],
     },
     {
@@ -221,16 +206,6 @@ function buildTeacherGroups(v: Visibility): NavGroup[] {
       children: [
         { to: '/analytics', icon: BarChart3, label: '训练收益' },
         { to: '/insights', icon: Compass, label: '深度洞察' },
-      ],
-    },
-    {
-      key: 'ai',
-      label: 'AI 辅助 (A 类)',
-      icon: Bot,
-      visible: v.examRegistration,
-      children: [
-        { to: '/ai-job-parse', icon: Bot, label: 'AI 岗位解析' },
-        { to: '/politics-hotspots', icon: Bot, label: '时政素材' },
       ],
     },
     {
@@ -299,8 +274,6 @@ function AuthenticatedApp() {
     visibility.career ? <>{children}</> : <Navigate to="/" replace />;
   const ModuleGuardLiteracy = ({ children }: { children: React.ReactNode }) =>
     visibility.literacy ? <>{children}</> : <Navigate to="/" replace />;
-  const ModuleGuardExamReg = ({ children }: { children: React.ReactNode }) =>
-    visibility.examRegistration ? <>{children}</> : <Navigate to="/" replace />;
 
   return (
     <Layout groups={navGroups} appConfig={APP_CONFIG} storageKey="nested-nav-expanded">
@@ -328,8 +301,6 @@ function AuthenticatedApp() {
         <Route path="/career" element={<ProtectedRoute><ModuleGuardCareer><CareerPage /></ModuleGuardCareer></ProtectedRoute>} />
         <Route path="/literacy" element={<ProtectedRoute><ModuleGuardLiteracy><LiteracyPage /></ModuleGuardLiteracy></ProtectedRoute>} />
         <Route path="/literacy-collab" element={<ProtectedRoute><ModuleGuardLiteracy><LiteracyCollaborationPage /></ModuleGuardLiteracy></ProtectedRoute>} />
-        <Route path="/ai-job-parse" element={<ProtectedRoute><ModuleGuardExamReg><AiJobParsePage /></ModuleGuardExamReg></ProtectedRoute>} />
-        <Route path="/politics-hotspots" element={<ProtectedRoute><ModuleGuardExamReg><PoliticsHotspotsPage /></ModuleGuardExamReg></ProtectedRoute>} />
 
         {/* 教师专属路由 */}
         <Route path="/class" element={<ProtectedRoute><TeacherOnly><ClassOverviewPage /></TeacherOnly></ProtectedRoute>} />
@@ -341,7 +312,6 @@ function AuthenticatedApp() {
         <Route path="/corrections" element={<ProtectedRoute><TeacherOnly><CorrectionPage /></TeacherOnly></ProtectedRoute>} />
         <Route path="/compare" element={<ProtectedRoute><TeacherOnly><StudentComparePage /></TeacherOnly></ProtectedRoute>} />
         <Route path="/effect" element={<ProtectedRoute><TeacherOnly><TeachingEffectPage /></TeacherOnly></ProtectedRoute>} />
-        <Route path="/ai-assist" element={<ProtectedRoute><TeacherOnly><AIAssistPage /></TeacherOnly></ProtectedRoute>} />
         <Route path="/warnings" element={<ProtectedRoute><TeacherOnly><WarningPage /></TeacherOnly></ProtectedRoute>} />
 
         <Route path="*" element={<Navigate to="/" replace />} />

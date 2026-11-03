@@ -554,7 +554,7 @@ function severityMax(a: AbilityGap['severity'], b: AbilityGap['severity']): Abil
  * - 学科 × 模块 一级快照:每次训练后即写入,evaluationTime = record.date
  * - 分档:陌生题正确率 ≥ 85% 精通 · 61-85% 熟练 · 26-60% 初步 · 0-25% 未掌握
  * - 置信度: 陌生题样本 ≥ 5 → 0.9 / 1-4 → 0.6 / 0 → 0.4
- * - source = 'training'(与 external_ai / exam / manual 区分)
+ * - source = 'training'(与 exam / manual 区分)
  */
 export function deriveSnapshotFromTraining(record: TrainingRecord): AbilitySnapshot {
   const correctRate = record.totalQuestions === 0 ? 0 : (record.totalQuestions - record.errorCount) / record.totalQuestions;
