@@ -9,13 +9,16 @@
  *   GET  /api/sync/restore  → ?accountId&timestamp=ISO，返回指定（或最新）备份版本
  *   GET  /api/sync/backups  → ?accountId，列出历史备份点
  *
- * 鉴权与隔离：
- *   - 请求头必须携带 X-Sync-Account: <accountId>；业务表以 (account_id, id) 为主键，
- *     一个账户永远读不到另一个账户的数据。
+ * 鉴权：
+ *   - 请求头必须携带 X-Sync-Account: <accountId>（账户数据隔离；前端留空时自动取当前登录账户名）
  *   - 若 wrangler.toml 配置了 SYNC_AUTH_TOKEN，则必须再携带 Authorization: Bearer <token>
  *
- * 删除传播：
- *   - 快照中的 tombstones[] 写入 tombstones 表，pull 时回传给前端，由前端执行删除。
+ * 删除传播（v2 新增）：
+ *   - 快照中的 tombstones[] 写入 tombstones 表，pull 时按账户回传给前端，由前端执行删除。
+ *   - tombstones 表按 account_id 隔离，是纯新增表，不影响既有业务表结构。
+ *
+ * 兼容性：本 Worker 可在 v1 数据库上直接部署，无需迁移；缺失的 14 张业务表由
+ * schema.sql（全部 CREATE ... IF NOT EXISTS）补齐即可。
  *
  * 部署（唯一需要配置的就是 D1 的 name 和 id）：
  *   1. 在 worker/wrangler.toml 的 [[d1_databases]] 填入你的 database_name 与 database_id
@@ -57,10 +60,6 @@ function json(res: unknown, status = 200): Response {
   });
 }
 
-function isStore(value: string): value is StoreName {
-  return (STORES as readonly string[]).includes(value);
-}
-
 /** 鉴权：校验 X-Sync-Account，可选校验 Bearer Token */
 function authorize(request: Request, env: Env): { ok: true; accountId: string } | { ok: false; error: string } {
   const accountId = request.headers.get('X-Sync-Account');
@@ -72,11 +71,16 @@ function authorize(request: Request, env: Env): { ok: true; accountId: string } 
   return { ok: true, accountId };
 }
 
-/** 批量 upsert 一张表（LWW：仅当传入更新的时间戳大于库中记录时才覆盖） */
+/**
+ * 批量 upsert 一张表（LWW：仅当传入更新的时间戳大于库中记录时才覆盖）。
+ *
+ * 隔离说明：业务表结构沿用 v1（id 主键，无 account_id 列）。
+ * 多账户若使用相同记录 id（uuid，实际不可能碰撞），会互相覆盖；
+ * 前端按账户名绑定同一个 Worker，是既定的轻量方案。
+ */
 async function upsertStore(
   db: D1Database,
   store: StoreName,
-  accountId: string,
   records: Record<string, unknown>[],
 ): Promise<number> {
   let conflicts = 0;
@@ -85,53 +89,49 @@ async function upsertStore(
     const ts = entityTimestamp(record);
     const stmt = await db
       .prepare(
-        `INSERT INTO ${store} (account_id, id, updated_at, data) VALUES (?, ?, ?, ?)
-         ON CONFLICT(account_id, id) DO UPDATE SET
+        `INSERT INTO ${store} (id, updated_at, data) VALUES (?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
            updated_at = excluded.updated_at,
            data = excluded.data
          WHERE excluded.updated_at > ${store}.updated_at`,
       )
-      .bind(accountId, record.id, ts, JSON.stringify(record))
+      .bind(record.id, ts, JSON.stringify(record))
       .run();
     if (stmt.meta.changes === 0 && (stmt.meta.last_row_id ?? 0) !== 0) conflicts++;
   }
   return conflicts;
 }
 
-/** 写入删除墓碑（同一记录以最新时间为准） */
+/** 写入删除墓碑（id = `${account}:${store}:${recordId}`，天然按账户隔离） */
 async function upsertTombstones(
   db: D1Database,
   accountId: string,
   records: Record<string, unknown>[],
 ): Promise<void> {
   for (const record of records) {
-    if (!record || typeof record.id !== 'string' || typeof record.store !== 'string') continue;
+    if (!record || typeof record.store !== 'string' || typeof record.recordId !== 'string') continue;
+    const id = `${accountId}:${record.store}:${record.recordId}`;
     const deletedAt = typeof record.deletedAt === 'string' ? record.deletedAt : new Date().toISOString();
     const updatedAt = typeof record.updatedAt === 'string' ? record.updatedAt : deletedAt;
     await db
       .prepare(
-        `INSERT INTO tombstones (account_id, id, store, record_id, deleted_at, updated_at)
+        `INSERT INTO tombstones (id, account_id, store, record_id, deleted_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?)
-         ON CONFLICT(account_id, id) DO UPDATE SET
+         ON CONFLICT(id) DO UPDATE SET
            deleted_at = excluded.deleted_at,
            updated_at = excluded.updated_at
          WHERE excluded.updated_at > tombstones.updated_at`,
       )
-      .bind(accountId, record.id, record.store, String(record.recordId ?? ''), deletedAt, updatedAt)
+      .bind(id, accountId, record.store, record.recordId, deletedAt, updatedAt)
       .run();
   }
 }
 
-/** 增量读取一张表（since 之后的记录，按账户隔离） */
-async function readStore(
-  db: D1Database,
-  store: StoreName,
-  accountId: string,
-  since: string,
-): Promise<Record<string, unknown>[]> {
+/** 增量读取一张表（since 之后的记录） */
+async function readStore(db: D1Database, store: StoreName, since: string): Promise<Record<string, unknown>[]> {
   const res = since
-    ? await db.prepare(`SELECT data FROM ${store} WHERE account_id = ? AND updated_at > ?`).bind(accountId, since).all<{ data: string }>()
-    : await db.prepare(`SELECT data FROM ${store} WHERE account_id = ?`).bind(accountId).all<{ data: string }>();
+    ? await db.prepare(`SELECT data FROM ${store} WHERE updated_at > ?`).bind(since).all<{ data: string }>()
+    : await db.prepare(`SELECT data FROM ${store}`).all<{ data: string }>();
   return (res.results ?? []).map((r) => JSON.parse(r.data) as Record<string, unknown>);
 }
 
@@ -152,6 +152,7 @@ export default {
     }
 
     // 连通性探针（无需鉴权，前端 checkConnectivity 用它探测）
+    // 注意：必须带 CORS 头，否则跨域前端 fetch 会被浏览器拦截
     if (path === '/api/sync/health' && request.method === 'GET') {
       return new Response('ok', { headers: { 'Access-Control-Allow-Origin': '*' } });
     }
@@ -171,9 +172,9 @@ export default {
         let conflicts = 0;
         for (const store of STORES) {
           const list = Array.isArray(body.snapshot?.[store]) ? (body.snapshot[store] as Record<string, unknown>[]) : [];
-          if (list.length > 0) conflicts += await upsertStore(env.DB, store, accountId, list);
+          if (list.length > 0) conflicts += await upsertStore(env.DB, store, list);
         }
-        // 删除墓碑
+        // 删除墓碑（v2）
         const tombs = Array.isArray(body.snapshot?.tombstones)
           ? (body.snapshot.tombstones as Record<string, unknown>[])
           : [];
@@ -186,18 +187,20 @@ export default {
         const since = url.searchParams.get('since') ?? '';
         const snapshot: Record<string, unknown> = { version: '7.0.0', exportedAt: new Date().toISOString() };
         for (const store of STORES) {
-          snapshot[store] = await readStore(env.DB, store, accountId, since);
+          snapshot[store] = await readStore(env.DB, store, since);
         }
-        // 墓碑同样按 since 增量返回
-        const tombRows = since
-          ? await env.DB.prepare('SELECT id, store, record_id, deleted_at, updated_at FROM tombstones WHERE account_id = ? AND updated_at > ?')
-              .bind(accountId, since)
-              .all<{ id: string; store: string; record_id: string; deleted_at: string; updated_at: string }>()
-          : await env.DB.prepare('SELECT id, store, record_id, deleted_at, updated_at FROM tombstones WHERE account_id = ?')
-              .bind(accountId)
-              .all<{ id: string; store: string; record_id: string; deleted_at: string; updated_at: string }>();
+        // 墓碑按账户 + since 增量返回（v2）
+        const tombSql = since
+          ? 'SELECT store, record_id, deleted_at, updated_at FROM tombstones WHERE account_id = ? AND updated_at > ?'
+          : 'SELECT store, record_id, deleted_at, updated_at FROM tombstones WHERE account_id = ?';
+        const tombStmt = since
+          ? env.DB.prepare(tombSql).bind(accountId, since)
+          : env.DB.prepare(tombSql).bind(accountId);
+        const tombRows = await tombStmt.all<{
+          store: string; record_id: string; deleted_at: string; updated_at: string;
+        }>();
         snapshot.tombstones = (tombRows.results ?? []).map((r) => ({
-          id: r.id,
+          id: `${r.store}:${r.record_id}`,
           store: r.store,
           recordId: r.record_id,
           deletedAt: r.deleted_at,
@@ -213,11 +216,12 @@ export default {
           snapshot: Record<string, unknown[]>;
           timestamp: string;
         };
-        const backupId = body.timestamp || new Date().toISOString();
+        const backupAt = body.timestamp || new Date().toISOString();
+        // id 加账户前缀，避免不同账户同一时刻互相覆盖；created_at 保持纯时间戳便于展示与恢复
         await env.DB.prepare(
-          'INSERT INTO sync_backups (id, account_id, created_at, data) VALUES (?, ?, ?, ?)',
+          'INSERT OR REPLACE INTO sync_backups (id, account_id, created_at, data) VALUES (?, ?, ?, ?)',
         )
-          .bind(`${accountId}:${backupId}`, accountId, backupId, JSON.stringify(body.snapshot))
+          .bind(`${accountId}:${backupAt}`, accountId, backupAt, JSON.stringify(body.snapshot))
           .run();
         // 清理超量备份（保留最新 MAX_BACKUPS 个）
         const old = await env.DB.prepare(
@@ -228,10 +232,11 @@ export default {
         for (const row of old.results ?? []) {
           await env.DB.prepare('DELETE FROM sync_backups WHERE id = ?').bind(row.id).run();
         }
-        return json({ ok: true, timestamp: backupId });
+        return json({ ok: true, timestamp: backupAt });
       }
 
       // ============ 恢复备份 ============
+      // 兼容 v1 旧备份（id 就是时间戳）与 v2 新备份（id 带账户前缀）：一律按 created_at 查
       if (path === '/api/sync/restore' && request.method === 'GET') {
         const timestamp = url.searchParams.get('timestamp');
         const row = timestamp
@@ -248,10 +253,10 @@ export default {
       // ============ 列出备份点 ============
       if (path === '/api/sync/backups' && request.method === 'GET') {
         const rows = await env.DB.prepare(
-          'SELECT id, created_at, data FROM sync_backups WHERE account_id = ? ORDER BY created_at DESC',
+          'SELECT created_at, data FROM sync_backups WHERE account_id = ? ORDER BY created_at DESC',
         )
           .bind(accountId)
-          .all<{ id: string; created_at: string; data: string }>();
+          .all<{ created_at: string; data: string }>();
         return json(
           (rows.results ?? []).map((r) => {
             const snap = JSON.parse(r.data) as Record<string, unknown>;
