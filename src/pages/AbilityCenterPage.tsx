@@ -9,6 +9,7 @@ import { MasteryBar } from '../components/MasteryBar';
 import { EmptyState } from '../components/EmptyState';
 import { AbilityRadar } from '../components/RadarChart';
 import { getAbilityTags, getModules } from '../domain/abilityTags';
+import { normalizeAbilityPath, normalizeModule } from '../domain/moduleNormalize';
 import type { AbilitySnapshot, Subject, TrainingRecord } from '../domain/types';
 import { SUBJECT_LABEL } from '../domain/types';
 import { getAbilityCopy } from '../domain/abilityCopy';
@@ -34,7 +35,10 @@ export function AbilityCenterPage() {
   const moduleMastery = useMemo(() => {
     const modules = getModules(prefs.gradeLevel, subject);
     return modules.map((m) => {
-      const scoped = trainings.filter((r) => r.subject === subject && r.module === m);
+      // 归一化后再比较: 导入数据的 `判断推理/图形推理` / `言语理解与表达` 也能归到一级模块
+      const scoped = trainings.filter(
+        (r) => r.subject === subject && normalizeModule(r.module, subject, prefs.gradeLevel) === m,
+      );
       const total = scoped.reduce((s, r) => s + r.totalQuestions, 0);
       const err = scoped.reduce((s, r) => s + r.errorCount, 0);
       const score = total === 0 ? null : Math.round(((total - err) / total) * 100);
@@ -44,13 +48,28 @@ export function AbilityCenterPage() {
 
   const abilityCards = useMemo(() => {
     const tags = getAbilityTags(prefs.gradeLevel, subject);
+    // 归一化能力路径后建索引，保证二级/一级粒度的历史快照都能对上标签
     const bySnapshotPath = new Map<string, AbilitySnapshot>();
     for (const a of abilities) {
       if (a.subject !== subject) continue;
-      const prev = bySnapshotPath.get(a.abilityPath);
-      if (!prev || a.evaluationTime > prev.evaluationTime) bySnapshotPath.set(a.abilityPath, a);
+      const key = normalizeAbilityPath(a.abilityPath, subject, prefs.gradeLevel);
+      const prev = bySnapshotPath.get(key);
+      if (!prev || a.evaluationTime > prev.evaluationTime) bySnapshotPath.set(key, a);
     }
-    return tags.map((t) => ({ tag: t, snapshot: bySnapshotPath.get(t.path) }));
+    // 一级模块的最近快照（用于给同模块下的未测能力点提供兜底参考）
+    const byModule = new Map<string, AbilitySnapshot>();
+    for (const [key, snap] of bySnapshotPath) {
+      const parts = key.split('/');
+      const module = parts[1];
+      if (!module) continue;
+      const prev = byModule.get(module);
+      if (!prev || snap.evaluationTime > prev.evaluationTime) byModule.set(module, snap);
+    }
+    return tags.map((t) => {
+      const exact = bySnapshotPath.get(t.path);
+      const moduleSnap = byModule.get(t.module);
+      return { tag: t, snapshot: exact, moduleSnapshot: exact ? undefined : moduleSnap };
+    });
   }, [prefs.gradeLevel, subject, abilities]);
 
   const stats = aggregateBySubject(trainings);
@@ -206,7 +225,7 @@ export function AbilityCenterPage() {
           <EmptyState icon={BarChart3} title={copy.tagsEmptyTitle} />
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-[500px] overflow-y-auto">
-            {abilityCards.map(({ tag, snapshot }) => (
+            {abilityCards.map(({ tag, snapshot, moduleSnapshot }) => (
               <div key={tag.path} className="border border-slate-100 rounded-lg p-3">
                 <div className="flex items-center justify-between mb-1">
                   <div className="text-sm text-slate-700">
@@ -216,6 +235,13 @@ export function AbilityCenterPage() {
                 </div>
                 {snapshot ? (
                   <MasteryBar score={snapshot.score} />
+                ) : moduleSnapshot ? (
+                  <div>
+                    <MasteryBar score={moduleSnapshot.score} />
+                    <div className="text-[10px] text-slate-400 mt-1">
+                      参考同模块整体掌握度（该考点暂无单独测评）
+                    </div>
+                  </div>
                 ) : (
                   <div className="text-xs text-slate-400">未测评 · 掌握周期 {tag.cycle}</div>
                 )}

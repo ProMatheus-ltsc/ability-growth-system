@@ -6,7 +6,7 @@ import { useAppSession } from '../hooks/useAppSession';
 import { getTrainingsCopy } from '../domain/trainingsCopy';
 import { findTrainingsByStudent, findGaps, putRecord, deleteRecord, getMeta, setMeta } from '../services/localDB';
 import { deriveGapsFromTraining, deriveSnapshotFromTraining } from '../services/analytics';
-import { getModules } from '../domain/abilityTags';
+import { getAbilityTags, getModules } from '../domain/abilityTags';
 import {
   SUBJECT_LABEL,
   SUBJECT_MATRIX,
@@ -230,6 +230,8 @@ function TrainingForm({ quick, defaults, studentId, gradeLevel, availableSubject
   const moduleOptions = getModules(gradeLevel, subject);
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [moduleName, setModuleName] = useState<string>(defaults?.module ?? moduleOptions[0] ?? '');
+  // 二级考点（可选）：选了就写进 module，形成 `模块/考点` 两级路径，与导入数据同粒度
+  const [pointName, setPointName] = useState<string>('');
   const [trainingType, setTrainingType] = useState<TrainingType>(defaults?.trainingType ?? 'topic');
   const [total, setTotal] = useState<number>(defaults?.totalQuestions ?? 15);
   const [errors, setErrors] = useState<number>(0);
@@ -240,6 +242,9 @@ function TrainingForm({ quick, defaults, studentId, gradeLevel, availableSubject
   const [saving, setSaving] = useState(false);
 
   const errorLibrary = getErrorLibrary(subject);
+  const pointOptions = getPoints(gradeLevel, subject, moduleName);
+  /** 实际写入记录的 module：有考点则两级，否则一级 */
+  const effectiveModule = pointName ? `${moduleName}/${pointName}` : moduleName;
 
   const toggleCategory = (c: ErrorCategory) => {
     setCategories((prev) => (prev.includes(c) ? prev.filter((x) => x !== c) : [...prev, c]));
@@ -251,8 +256,13 @@ function TrainingForm({ quick, defaults, studentId, gradeLevel, availableSubject
     }
   }, [subject]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // 换模块时清空考点，避免残留跨模块的考点
+  useEffect(() => {
+    setPointName('');
+  }, [moduleName, subject]);
+
   const submit = async () => {
-    if (!moduleName) return;
+    if (!effectiveModule) return;
     setSaving(true);
     const now = new Date().toISOString();
     const record: TrainingRecord = {
@@ -261,7 +271,7 @@ function TrainingForm({ quick, defaults, studentId, gradeLevel, availableSubject
       date,
       gradeLevel,
       subject,
-      module: moduleName,
+      module: effectiveModule,
       trainingType,
       totalQuestions: total,
       correctCount: total - errors,
@@ -320,6 +330,31 @@ function TrainingForm({ quick, defaults, studentId, gradeLevel, availableSubject
             ) : (
               <input className="input" value={moduleName} onChange={(e) => setModuleName(e.target.value)} placeholder="输入模块名称" />
             )}
+          </div>
+          <div>
+            <label className="label">
+              二级考点 <span className="text-slate-400 font-normal">（选填，选得更细能力缺口更准）</span>
+            </label>
+            {pointOptions.length > 0 ? (
+              <select className="input" value={pointName} onChange={(e) => setPointName(e.target.value)}>
+                <option value="">不指定（只记到模块）</option>
+                {pointOptions.map((p) => (
+                  <option key={p} value={p}>
+                    {p}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                className="input"
+                value={pointName}
+                onChange={(e) => setPointName(e.target.value)}
+                placeholder="该模块暂无内置考点，可手填"
+              />
+            )}
+            <div className="text-xs text-slate-400 mt-1">
+              写入路径：{effectiveModule || '—'}
+            </div>
           </div>
           <div>
             <label className="label">训练类型</label>
@@ -420,13 +455,21 @@ function TrainingForm({ quick, defaults, studentId, gradeLevel, availableSubject
           <button className="btn-secondary" onClick={onClose}>
             取消
           </button>
-          <button className="btn-primary" onClick={submit} disabled={saving || !moduleName}>
+          <button className="btn-primary" onClick={submit} disabled={saving || !effectiveModule}>
             保存
           </button>
         </div>
       </div>
     </div>
   );
+}
+
+/** 取某学科+模块下的二级考点名（来自三级能力标签库） */
+function getPoints(gradeLevel: TrainingRecord['gradeLevel'], subject: Subject, module: string): string[] {
+  if (!module) return [];
+  return getAbilityTags(gradeLevel, subject)
+    .filter((t) => t.module === module)
+    .map((t) => t.point);
 }
 
 function getErrorLibrary(subject: Subject): ErrorCategory[] {

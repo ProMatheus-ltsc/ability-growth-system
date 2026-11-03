@@ -24,6 +24,7 @@ import {
   getChangesSince,
   getMeta,
   setMeta,
+  pruneTombstones,
   type ExportedSnapshot,
 } from './localDB';
 
@@ -35,8 +36,13 @@ export interface D1SyncConfig {
 }
 
 const CONFIG_KEY = 'd1-sync-config';
-const LAST_SYNC_KEY = 'd1-last-sync-at';
+/** push 游标：只由 push 推进，记录「本地变更已推到云端的截止时间」 */
+const LAST_PUSH_KEY = 'd1-last-push-at';
+/** pull 游标：只由 pull 推进，记录「云端变更已拉到本地的截止时间」 */
+const LAST_PULL_KEY = 'd1-last-pull-at';
 const LAST_BACKUP_KEY = 'd1-last-backup-at';
+/** 旧版共用的单一游标键（用于首次升级时迁移，避免重复推送/漏拉） */
+const LEGACY_SYNC_KEY = 'd1-last-sync-at';
 
 let runtimeConfig: D1SyncConfig | null = null;
 
@@ -139,16 +145,47 @@ const SNAPSHOT_LISTS: (keyof ExportedSnapshot)[] = [
   'collaborationEvents',
   'vetoOverrides',
   'politicsHotspots',
+  'careerObservationPoints',
+  'careerRetestReflections',
+  'careerAiImports',
 ];
 
+/**
+ * 读取游标。首次运行时把旧版共用的 d1-last-sync-at 迁移到新键，
+ * 避免升级后把历史数据全量重推一遍（push 幂等，但仍会白跑流量）。
+ */
+async function getCursor(key: string): Promise<string | null> {
+  const value = await getMeta<string | null>(key, null);
+  if (value) return value;
+  const legacy = await getMeta<string | null>(LEGACY_SYNC_KEY, null);
+  if (!legacy) return null;
+  await setMeta(key, legacy);
+  return legacy;
+}
+
+/** 读取 push 游标 */
+function getPushCursor(): Promise<string | null> {
+  return getCursor(LAST_PUSH_KEY);
+}
+
+/** 读取 pull 游标 */
+function getPullCursor(): Promise<string | null> {
+  return getCursor(LAST_PULL_KEY);
+}
+
 function totalRecords(snap: ExportedSnapshot): number {
-  return SNAPSHOT_LISTS.reduce((sum, key) => sum + (Array.isArray(snap[key]) ? (snap[key] as unknown[]).length : 0), 0);
+  return SNAPSHOT_LISTS.reduce((sum, key) => sum + (Array.isArray(snap[key]) ? (snap[key] as unknown[]).length : 0), 0)
+    + (snap.tombstones?.length ?? 0);
 }
 
 export async function getSyncStatus(): Promise<SyncStatus> {
   const cfg = runtimeConfig;
-  const lastSyncAt = await getMeta<string | null>(LAST_SYNC_KEY, null);
-  const pending = await getChangesSince(lastSyncAt);
+  const lastPushAt = await getPushCursor();
+  const lastPullAt = await getPullCursor();
+  // 取两者较晚者作为「上次同步时间」展示
+  const lastSyncAt =
+    lastPushAt && lastPullAt ? (lastPushAt > lastPullAt ? lastPushAt : lastPullAt) : (lastPushAt ?? lastPullAt);
+  const pending = await getChangesSince(lastPushAt);
   const pendingChanges = totalRecords(pending);
   const isOnline = cfg ? await checkConnectivity(cfg) : false;
   return { lastSyncAt, pendingChanges, isOnline };
@@ -173,8 +210,8 @@ export async function pushChanges(): Promise<SyncResult> {
   const cfg = runtimeConfig;
   if (!cfg) return emptyResult('未配置 D1 同步服务');
   try {
-    const lastSyncAt = await getMeta<string | null>(LAST_SYNC_KEY, null);
-    const changes = await getChangesSince(lastSyncAt);
+    const pushCursor = await getPushCursor();
+    const changes = await getChangesSince(pushCursor);
     const total = totalRecords(changes);
     if (total === 0) return { ...emptyResult(), success: true };
     const res = await fetch(buildUrl(cfg, '/api/sync/push'), {
@@ -183,14 +220,14 @@ export async function pushChanges(): Promise<SyncResult> {
       body: JSON.stringify({
         accountId: await resolveAccountId(cfg),
         snapshot: changes,
-        since: lastSyncAt,
+        since: pushCursor,
         timestamp: new Date().toISOString(),
       }),
     });
     if (!res.ok) throw new Error(`推送失败(HTTP ${res.status}): ${await res.text()}`);
     const body = (await res.json()) as { conflicts?: number };
     const now = new Date().toISOString();
-    await setMeta(LAST_SYNC_KEY, now);
+    await setMeta(LAST_PUSH_KEY, now);
     return { success: true, pushed: total, pulled: 0, conflicts: body.conflicts ?? 0, timestamp: now };
   } catch (e) {
     return emptyResult(e instanceof Error ? e.message : '未知错误');
@@ -201,9 +238,10 @@ export async function pullChanges(): Promise<SyncResult> {
   const cfg = runtimeConfig;
   if (!cfg) return emptyResult('未配置 D1 同步服务');
   try {
-    const lastSyncAt = await getMeta<string | null>(LAST_SYNC_KEY, null);
+    // 用独立的 pull 游标：push 刚推进过时间戳也不会让本次拉取变成空查询
+    const pullCursor = await getPullCursor();
     const res = await fetch(
-      buildUrl(cfg, '/api/sync/pull', { accountId: await resolveAccountId(cfg), since: lastSyncAt ?? undefined }),
+      buildUrl(cfg, '/api/sync/pull', { accountId: await resolveAccountId(cfg), since: pullCursor ?? undefined }),
       { headers: await authHeaders(cfg) },
     );
     if (!res.ok) throw new Error(`拉取失败(HTTP ${res.status}): ${await res.text()}`);
@@ -214,7 +252,7 @@ export async function pullChanges(): Promise<SyncResult> {
     await importSnapshot(merged.snapshot, 'replace');
 
     const now = new Date().toISOString();
-    await setMeta(LAST_SYNC_KEY, now);
+    await setMeta(LAST_PULL_KEY, now);
     return { success: true, pushed: 0, pulled: merged.pulled, conflicts: merged.conflicts, timestamp: now };
   } catch (e) {
     return emptyResult(e instanceof Error ? e.message : '未知错误');
@@ -224,6 +262,14 @@ export async function pullChanges(): Promise<SyncResult> {
 export async function syncBoth(): Promise<{ push: SyncResult; pull: SyncResult }> {
   const push = await pushChanges();
   const pull = await pullChanges();
+  // 同步完成后顺手清理过期墓碑，避免 tombstones 表无限增长
+  if (push.success && pull.success) {
+    try {
+      await pruneTombstones();
+    } catch {
+      /* 清理失败不影响主流程 */
+    }
+  }
   return { push, pull };
 }
 
@@ -243,7 +289,8 @@ export async function fullBackupToD1(): Promise<SyncResult> {
     });
     if (!res.ok) throw new Error(`备份失败(HTTP ${res.status}): ${await res.text()}`);
     const now = new Date().toISOString();
-    await setMeta(LAST_SYNC_KEY, now);
+    // 只记录备份时间，绝不动 push/pull 游标：
+    // 全量备份写的是 sync_backups 表，不改变业务表，推进游标会让未推送的变更永远丢失。
     await setMeta(LAST_BACKUP_KEY, now);
     return { success: true, pushed: totalRecords(snapshot), pulled: 0, conflicts: 0, timestamp: now };
   } catch (e) {
@@ -263,7 +310,9 @@ export async function restoreFromD1(timestamp?: string): Promise<SyncResult> {
     const snapshot = (await res.json()) as ExportedSnapshot;
     await importSnapshot(snapshot, 'replace');
     const now = new Date().toISOString();
-    await setMeta(LAST_SYNC_KEY, now);
+    // 恢复后本地内容与云端一致，两个游标都推进
+    await setMeta(LAST_PUSH_KEY, now);
+    await setMeta(LAST_PULL_KEY, now);
     return { success: true, pushed: 0, pulled: totalRecords(snapshot), conflicts: 0, timestamp: now };
   } catch (e) {
     return emptyResult(e instanceof Error ? e.message : '未知错误');
@@ -296,6 +345,15 @@ interface MergeReport {
   conflicts: number;
 }
 
+/** 墓碑的最小结构（与 localDB.Tombstone 对齐，store 用宽松 string 以兼容远端数据） */
+interface TombsoneLike {
+  id: string;
+  store: string;
+  recordId: string;
+  deletedAt: string;
+  updatedAt: string;
+}
+
 function mergeById<T extends { id: string; updatedAt?: string; createdAt?: string; evaluationTime?: string }>(
   localList: T[],
   remoteList: T[],
@@ -326,17 +384,40 @@ function mergeSnapshots(local: ExportedSnapshot, remote: ExportedSnapshot): Merg
   let totalConflicts = 0;
   const merged: ExportedSnapshot = { ...local };
 
+  // 两侧墓碑取并集：同一记录被任一设备删除，就在合并结果里删掉
+  const tombstoneMap = new Map<string, TombsoneLike>();
+  for (const t of [...(local.tombstones ?? []), ...(remote.tombstones ?? [])]) {
+    const prev = tombstoneMap.get(t.id);
+    if (!prev || t.updatedAt > prev.updatedAt) tombstoneMap.set(t.id, t);
+  }
+  const tombstones = Array.from(tombstoneMap.values());
+
   for (const key of SNAPSHOT_LISTS) {
     const localList = (local[key] as unknown[]) as { id: string; updatedAt?: string; createdAt?: string; evaluationTime?: string }[];
     const remoteList = ((remote[key] ?? []) as unknown[]) as typeof localList;
     const { merged: mergedList, pulled, conflicts } = mergeById(localList, remoteList);
-    (merged[key] as unknown) = mergedList;
+
+    // 剔除已被墓碑标记的记录：删除必须能压过「远端还有这条旧数据」
+    const surviving = mergedList.filter((r) => {
+      const t = tombstoneMap.get(`${key}:${r.id}`);
+      if (!t) return true;
+      const ts = r.updatedAt ?? r.createdAt ?? r.evaluationTime ?? '';
+      // 墓碑晚于记录更新时间 → 确认删除；记录在删除之后又被更新 → 保留（用户重新创建）
+      return ts > t.deletedAt;
+    });
+
+    (merged[key] as unknown) = surviving;
     totalPulled += pulled;
     totalConflicts += conflicts;
   }
 
   return {
-    snapshot: { ...merged, version: '4.0.0', exportedAt: new Date().toISOString() },
+    snapshot: {
+      ...merged,
+      version: '7.0.0',
+      exportedAt: new Date().toISOString(),
+      tombstones: tombstones as ExportedSnapshot['tombstones'],
+    },
     pulled: totalPulled,
     conflicts: totalConflicts,
   };

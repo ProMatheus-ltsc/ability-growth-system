@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { v4 as uuid } from 'uuid';
-import { AlertOctagon, CheckCircle2, PlusCircle, Trash2, X } from 'lucide-react';
+import { AlertOctagon, CheckCircle2, PlusCircle, Trash2, X, ListTodo } from 'lucide-react';
 import { useToast } from '@shared/core';
 import { useAppSession } from '../hooks/useAppSession';
-import { findGaps, findTrainingsByStudent, putRecord, deleteRecord } from '../services/localDB';
+import { findGaps, findTasks, findTrainingsByStudent, putRecord, deleteRecord } from '../services/localDB';
 import { calcErrorRecurrence, prioritizeGaps } from '../services/analytics';
 import { PageHeader } from '../components/PageHeader';
 import { EmptyState } from '../components/EmptyState';
@@ -13,6 +13,7 @@ import {
   SUBJECT_LABEL,
   type AbilityGap,
   type ErrorCategory,
+  type FixTask,
   type Subject,
   type TrainingRecord,
 } from '../domain/types';
@@ -55,6 +56,43 @@ export function ProblemCenterPage() {
     await deleteRecord('gaps', id);
     void refresh();
     showToast('已删除', 'info');
+  };
+
+  /**
+   * 从能力缺口一键生成修复任务，并把缺口推进到「修复中」。
+   * 这是 PRD 闭环（训练 → 反馈 → 修复 → 验证）里此前缺失的一环。
+   */
+  const createFixTask = async (gap: AbilityGap) => {
+    const now = new Date().toISOString();
+    // 同一缺口已有未完成任务时不重复创建
+    const existing = await findTasks(prefs.currentStudentId);
+    const dup = existing.find(
+      (t) => t.relatedGapId === gap.id && t.status !== 'done',
+    );
+    if (dup) {
+      showToast('该问题已有未完成的修复任务', 'info');
+      return;
+    }
+    const task: FixTask = {
+      id: uuid(),
+      studentId: gap.studentId,
+      subject: gap.subject,
+      abilityPath: gap.abilityPath,
+      relatedGapId: gap.id,
+      type: 'fix',
+      status: 'pending',
+      suggestedAt: now,
+      // 默认 3 天内完成，可按练习节奏调整
+      dueAt: new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10),
+      createdAt: now,
+      updatedAt: now,
+    };
+    await putRecord('tasks', task);
+    if (gap.status === 'unresolved') {
+      await putRecord('gaps', { ...gap, status: 'in-progress', updatedAt: now });
+    }
+    void refresh();
+    showToast('已生成修复任务，可在今日工作台看到', 'success');
   };
 
   return (
@@ -106,6 +144,7 @@ export function ProblemCenterPage() {
               )}
               onUpdate={(patch) => updateGap(g, patch)}
               onDelete={() => deleteGap(g.id)}
+              onCreateTask={() => createFixTask(g)}
             />
           ))}
         </div>
@@ -133,11 +172,13 @@ function GapCard({
   recurrence,
   onUpdate,
   onDelete,
+  onCreateTask,
 }: {
   gap: AbilityGap;
   recurrence: number;
   onUpdate: (patch: Partial<AbilityGap>) => void;
   onDelete: () => void;
+  onCreateTask: () => void;
 }) {
   const point = gap.abilityPath.split('/').slice(-1)[0];
   const module = gap.abilityPath.split('/').slice(-2)[0];
@@ -218,6 +259,11 @@ function GapCard({
             <option value="in-progress">修复中</option>
             <option value="verified">已验证</option>
           </select>
+          {gap.status !== 'verified' && (
+            <button className="btn-secondary text-xs py-1 px-2 w-28 justify-center" onClick={onCreateTask}>
+              <ListTodo size={12} /> 修复任务
+            </button>
+          )}
           <button className="btn-ghost text-red-500 hover:bg-red-50" onClick={onDelete}>
             <Trash2 size={14} />
           </button>

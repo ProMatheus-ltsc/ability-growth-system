@@ -21,6 +21,7 @@ import type {
 } from '../domain/types';
 import { scoreToLevel, TRAINING_TYPE_LABEL } from '../domain/types';
 import { getRadarDimensions } from '../domain/abilityTags';
+import { normalizeModule, pathBelongsToModule } from '../domain/moduleNormalize';
 
 export interface SubjectStats {
   subject: Subject;
@@ -124,7 +125,7 @@ export function buildRadarSlices(
 
   return dims.map((dim) => {
     const relatedSnapshots = Array.from(abilityByPath.values()).filter((a) =>
-      dim.modules.some((m) => a.abilityPath.includes(`/${m}/`)),
+      dim.modules.some((m) => pathBelongsToModule(a.abilityPath, m, subject, gradeLevel)),
     );
     let score = 0;
     if (relatedSnapshots.length > 0) {
@@ -132,7 +133,9 @@ export function buildRadarSlices(
         relatedSnapshots.reduce((s, a) => s + a.score, 0) / relatedSnapshots.length,
       );
     } else {
-      const moduleRecs = scoped.filter((r) => dim.modules.includes(r.module));
+      const moduleRecs = scoped.filter(
+        (r) => dim.modules.some((m) => normalizeModule(r.module, subject, gradeLevel) === m),
+      );
       const q = moduleRecs.reduce((s, r) => s + r.totalQuestions, 0);
       const err = moduleRecs.reduce((s, r) => s + r.errorCount, 0);
       score = q === 0 ? 50 : Math.round(((q - err) / q) * 100);

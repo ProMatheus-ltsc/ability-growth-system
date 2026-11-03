@@ -143,6 +143,10 @@ const XINGCE: AbilityTag[] = [
   t('xingce', '数量关系', '排列组合', 5, '1月', '排列组合', 'adult'),
   t('xingce', '常识判断', '时政热点', 3, '1周', '时政题', 'adult'),
   t('xingce', '常识判断', '法律', 4, '1月', '法律题', 'adult'),
+  t('xingce', '政治理论', '新思想', 3, '1周', '政治理论题', 'adult'),
+  t('xingce', '政治理论', '时事政治', 3, '1周', '时政题', 'adult'),
+  t('xingce', '政治理论', '马克思主义', 4, '2周', '政治理论题', 'adult'),
+  t('xingce', '政治理论', '政治经济学', 4, '2周', '政治理论题', 'adult'),
 ];
 
 /** 申论 */
@@ -295,7 +299,7 @@ export const RADAR_DIMENSIONS: Partial<Record<`${GradeLevel}-${Subject}`, RadarD
     { key: 'material', label: '资料分析', weight: 25, modules: ['资料分析'] },
     { key: 'language', label: '言语理解', weight: 20, modules: ['言语理解'] },
     { key: 'common', label: '常识判断', weight: 12, modules: ['常识判断'] },
-    { key: 'politics', label: '政治理论', weight: 10, modules: [] },
+    { key: 'politics', label: '政治理论', weight: 10, modules: ['政治理论'] },
     { key: 'quantity', label: '数量关系', weight: 8, modules: ['数量关系'] },
   ],
   'adult-shenlun': [

@@ -52,8 +52,20 @@ configureDB(APP_DB_PREFIX);
  *  v4: V5.8 全量补齐 - 申论版本/面试专项/PDCA工具产出/自定义工具/周检查/协作行为/否决解除/时政素材 (8 张)
  *  v5: V5.11 作答质量保障版 - 3 个月观察点 + 事后反思 2 问 (2 张)
  *  v6: V5.11 · AI 拓展候选导入记录(每次导入独立存档) (1 张)
+ *  v7: 同步墓碑 tombstones - 让删除能跨设备传播，避免拉取时被云端旧数据复活
  */
-const DB_VERSION = 6;
+const DB_VERSION = 7;
+
+/** 删除墓碑：记录「哪张表的哪条记录、什么时候被删」 */
+export interface Tombstone {
+  /** 复合主键 `${store}:${recordId}` */
+  id: string;
+  store: StoreName;
+  recordId: string;
+  /** 删除时间，同时充当 LWW 合并时间戳 */
+  deletedAt: string;
+  updatedAt: string;
+}
 
 interface AGSchema extends DBSchema {
   trainings: {
@@ -204,6 +216,11 @@ interface AGSchema extends DBSchema {
   meta: {
     key: string;
     value: { key: string; value: unknown };
+  };
+  tombstones: {
+    key: string;
+    value: Tombstone;
+    indexes: { store: string; updatedAt: string };
   };
 }
 
@@ -447,6 +464,13 @@ function db(): Promise<IDBPDatabase<AGSchema>> {
           cai.createIndex('assessmentId', 'assessmentId');
           cai.createIndex('importedAt', 'importedAt');
         }
+
+        if (oldVersion < 7) {
+          // 同步墓碑：删除跨设备传播的依据（不含在业务 store 内，单独一张表）
+          const tomb = dbi.createObjectStore('tombstones', { keyPath: 'id' });
+          tomb.createIndex('store', 'store');
+          tomb.createIndex('updatedAt', 'updatedAt');
+        }
       },
     });
   }
@@ -475,6 +499,61 @@ export async function getAllRecords<S extends StoreName>(store: S): Promise<Stor
 export async function deleteRecord<S extends StoreName>(store: S, id: string): Promise<void> {
   const dbi = await db();
   await (dbi as unknown as { delete: (s: S, k: string) => Promise<void> }).delete(store, id);
+  // 打墓碑：否则下次 pull 会把云端这条旧记录当成「本地缺失」重新塞回来
+  const now = new Date().toISOString();
+  const tombstone: Tombstone = {
+    id: `${store}:${id}`,
+    store: store as StoreName,
+    recordId: id,
+    deletedAt: now,
+    updatedAt: now,
+  };
+  await dbi.put('tombstones', tombstone);
+}
+
+/** 读取全部删除墓碑（同步时上报云端） */
+export async function getTombstones(): Promise<Tombstone[]> {
+  const dbi = await db();
+  return dbi.getAll('tombstones');
+}
+
+/** 读取 since 之后产生的墓碑 */
+export async function getTombstonesSince(since: string | null): Promise<Tombstone[]> {
+  const all = await getTombstones();
+  if (!since) return all;
+  return all.filter((t) => t.updatedAt > since);
+}
+
+/**
+ * 应用远端墓碑：把本地对应记录真正删掉。
+ * 返回被删除的条数。
+ */
+export async function applyTombstones(tombstones: Tombstone[]): Promise<number> {
+  if (tombstones.length === 0) return 0;
+  const dbi = await db();
+  let removed = 0;
+  for (const t of tombstones) {
+    if (!SYNCED_STORES.includes(t.store)) continue;
+    const existing = await (dbi as unknown as { get: (s: StoreName, k: string) => Promise<unknown> })
+      .get(t.store, t.recordId);
+    if (existing !== undefined) {
+      await (dbi as unknown as { delete: (s: StoreName, k: string) => Promise<void> }).delete(t.store, t.recordId);
+      removed++;
+    }
+    // 本地也留一份墓碑，避免下次 push 又把这条推上去
+    await dbi.put('tombstones', t);
+  }
+  return removed;
+}
+
+/** 清理超过 N 天的墓碑（默认 180 天，足够所有设备完成一次同步） */
+export async function pruneTombstones(olderThanDays = 180): Promise<number> {
+  const dbi = await db();
+  const cutoff = new Date(Date.now() - olderThanDays * 86400000).toISOString();
+  const all = await dbi.getAll('tombstones');
+  const stale = all.filter((t) => t.deletedAt < cutoff);
+  for (const t of stale) await dbi.delete('tombstones', t.id);
+  return stale.length;
 }
 
 export async function bulkPut<S extends StoreName>(store: S, records: StoreValue<S>[]): Promise<void> {
@@ -609,6 +688,8 @@ export interface ExportedSnapshot {
   careerObservationPoints?: CareerObservationPoint[];
   careerRetestReflections?: RetestReflection[];
   careerAiImports?: CareerAiImport[];
+  /** 删除墓碑（跨设备传播删除用，不参与业务统计） */
+  tombstones?: Tombstone[];
 }
 
 async function readAll<S extends StoreName>(store: S): Promise<StoreValue<S>[]> {
@@ -682,7 +763,7 @@ export async function exportSnapshot(): Promise<ExportedSnapshot> {
     readAll('careerAiImports'),
   ]);
   return {
-    version: '6.0.0',
+    version: '7.0.0',
     exportedAt: new Date().toISOString(),
     trainings,
     gaps,
@@ -713,6 +794,7 @@ export async function exportSnapshot(): Promise<ExportedSnapshot> {
     careerObservationPoints,
     careerRetestReflections,
     careerAiImports,
+    tombstones: await getTombstones(),
   };
 }
 
@@ -760,12 +842,19 @@ export async function importSnapshot(snapshot: ExportedSnapshot, mode: 'merge' |
       await (dbi as unknown as { put: (s: StoreName, v: unknown) => Promise<string> }).put(store, record);
     }
   }
+
+  // 落库墓碑，并把已被墓碑标记的记录从本地清掉（relpace 模式已清空则无需再删）
+  if (Array.isArray(snapshot.tombstones) && snapshot.tombstones.length > 0) {
+    await applyTombstones(snapshot.tombstones);
+  }
 }
 
 export async function clearAllBusinessData(): Promise<void> {
   const dbi = await db();
-  const tx = dbi.transaction([...SYNCED_STORES, 'meta'], 'readwrite');
-  await Promise.all([...SYNCED_STORES, 'meta'].map((s) => tx.objectStore(s as StoreName).clear()));
+  const tx = dbi.transaction([...SYNCED_STORES, 'meta', 'tombstones'], 'readwrite');
+  await Promise.all(
+    [...SYNCED_STORES, 'meta', 'tombstones'].map((s) => tx.objectStore(s as StoreName | 'tombstones').clear()),
+  );
   await tx.done;
 }
 
@@ -806,5 +895,10 @@ export async function getChangesSince(since: string | null): Promise<ExportedSna
     collaborationEvents: filterByUpdated(snapshot.collaborationEvents),
     vetoOverrides: snapshot.vetoOverrides.filter((r) => (since ? r.confirmedAt > since : true)),
     politicsHotspots: filterByUpdated(snapshot.politicsHotspots),
+    // 以下三张此前被遗漏，导致 career 观察点/反思/AI 导入永远不上云
+    careerObservationPoints: filterByUpdated(snapshot.careerObservationPoints ?? []),
+    careerRetestReflections: filterByUpdated(snapshot.careerRetestReflections ?? []),
+    careerAiImports: filterByUpdated(snapshot.careerAiImports ?? []),
+    tombstones: (snapshot.tombstones ?? []).filter((t) => laterThan(t.updatedAt)),
   };
 }
