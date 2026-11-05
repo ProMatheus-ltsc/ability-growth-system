@@ -96,6 +96,9 @@ jobs:
           } > ../reports/seed-verify.md
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          # 显式带上 GITHUB_TOKEN：runner 的 checkout 只在 fetch 时用了 token，
+          # 裸 `git push` 没有凭据 → 报 "fatal error in commit_refs_rules"（实为认证失败）。
+          git remote set-url origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
           git add ../reports/seed-verify.md
           if git diff --staged --quiet; then
             echo "报告无变化，跳过提交"
