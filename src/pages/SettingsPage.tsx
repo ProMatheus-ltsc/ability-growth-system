@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import { useToast } from '@shared/core';
-import { Download, Upload, Trash2, RefreshCw } from 'lucide-react';
+import { Trash2, RefreshCw } from 'lucide-react';
 import { useAppSession, type Role } from '../hooks/useAppSession';
 import { PageHeader } from '../components/PageHeader';
-import { clearAllBusinessData, exportSnapshot, importSnapshot, type ExportedSnapshot } from '../services/localDB';
+import { clearAllBusinessData } from '../services/localDB';
 import {
   GRADE_LEVEL_LABEL,
   SUBJECT_LABEL,
@@ -35,41 +35,10 @@ export function SettingsPage() {
     showToast('偏好已保存', 'success');
   };
 
-  const doExport = async () => {
-    const data = await exportSnapshot();
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `ability-growth-backup-${new Date().toISOString().slice(0, 10)}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-    showToast('已导出到本地', 'success');
-  };
-
-  const doImport = () => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = 'application/json';
-    input.onchange = async () => {
-      const file = input.files?.[0];
-      if (!file) return;
-      try {
-        const text = await file.text();
-        const data = JSON.parse(text) as ExportedSnapshot;
-        await importSnapshot(data, 'merge');
-        showToast('已导入 (合并模式)', 'success');
-      } catch (e) {
-        showToast(e instanceof Error ? e.message : '导入失败', 'error');
-      }
-    };
-    input.click();
-  };
-
   const doClear = async () => {
-    if (!window.confirm('确认清空所有本地训练/能力/复盘/学生数据？此操作不可撤销')) return;
+    if (!window.confirm('确认清空当前账户的云端训练/能力/复盘/学生数据？此操作不可撤销')) return;
     await clearAllBusinessData();
-    showToast('已清空本地业务数据', 'warning');
+    showToast('已清空云端业务数据', 'warning');
   };
 
   const availableSubjects = SUBJECT_MATRIX[gradeLevel];
@@ -78,7 +47,7 @@ export function SettingsPage() {
 
   return (
     <div className="space-y-5">
-      <PageHeader title="设置" description="个人偏好、数据导入导出、危险操作。" />
+      <PageHeader title="设置" description="个人偏好、危险操作。" />
 
       <div className="card p-5 space-y-4">
         <h2 className="font-semibold text-slate-900">身份与学段</h2>
@@ -150,20 +119,15 @@ export function SettingsPage() {
       <div className="card p-5 space-y-3">
         <h2 className="font-semibold text-slate-900">数据管理</h2>
         <p className="text-sm text-slate-500">
-          本系统数据默认存储在浏览器 IndexedDB (Local-First)。 云端备份请到「云端同步」页面配置 Cloudflare D1。
+          业务数据仅存储于 Cloudflare D1（按用户名隔离，多设备共享）。 清空操作直接作用于云端，
+          备份与恢复请到「数据存储」页面。
         </p>
         <div className="flex flex-wrap items-center gap-2">
-          <button className="btn-secondary" onClick={doExport}>
-            <Download size={16} /> 导出本地数据 (JSON)
-          </button>
-          <button className="btn-secondary" onClick={doImport}>
-            <Upload size={16} /> 从 JSON 导入 (合并)
-          </button>
           <button
             className="btn-secondary text-red-600 border-red-200 hover:bg-red-50"
             onClick={doClear}
           >
-            <Trash2 size={16} /> 清空本地数据
+            <Trash2 size={16} /> 清空云端数据
           </button>
         </div>
       </div>

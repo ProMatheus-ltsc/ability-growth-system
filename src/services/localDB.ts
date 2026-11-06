@@ -1,12 +1,8 @@
 /**
- * 通用能力增长系统 - IndexedDB 本地存储层
+ * 通用能力增长系统 - 数据访问层
  *
- * 采用 Local-First 架构：所有业务数据实时写入 IndexedDB；
- * Cloudflare D1 仅作为远程备份/同步目标(见 src/services/remoteSync.ts)。
- *
- * 领域实体独立分库(11 张 store + meta)，便于按维度查询与增量同步。
- * 复用 @shared/core 的账户 meta 数据库(shared-core 的 db.ts)，
- * 通过 configureDB() 保持数据库前缀一致。
+ * Cloudflare D1 是业务数据的唯一数据源，读写经 Pages 同域 /api（见 d1Client.ts）。
+ * 浏览器 IndexedDB 仅保留设备级元数据（登录偏好、最近一次录入默认值等）。
  */
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
 import { configureDB } from '@shared/core/services/db';
@@ -27,6 +23,8 @@ import type {
   StagePlan,
   SpacedReviewItem,
 } from '../domain/types';
+import type { StoreName } from './snapshot';
+import * as d1 from './d1Client';
 
 export const APP_DB_PREFIX = 'ability-growth';
 configureDB(APP_DB_PREFIX);
@@ -115,41 +113,6 @@ interface AGSchema extends DBSchema {
     value: { key: string; value: unknown };
   };
 }
-
-export type StoreName =
-  | 'trainings'
-  | 'gaps'
-  | 'abilities'
-  | 'students'
-  | 'reviews'
-  | 'tasks'
-  | 'templates'
-  | 'assignments'
-  | 'assignmentProgress'
-  | 'exams'
-  | 'corrections'
-  | 'strategies'
-  | 'registrations'
-  | 'stagePlans'
-  | 'spacedReviews';
-
-const SYNCED_STORES: StoreName[] = [
-  'trainings',
-  'gaps',
-  'abilities',
-  'students',
-  'reviews',
-  'tasks',
-  'templates',
-  'assignments',
-  'assignmentProgress',
-  'exams',
-  'corrections',
-  'strategies',
-  'registrations',
-  'stagePlans',
-  'spacedReviews',
-];
 
 let currentAccountId: string | undefined;
 let dbPromise: Promise<IDBPDatabase<AGSchema>> | undefined;
@@ -256,36 +219,28 @@ function db(): Promise<IDBPDatabase<AGSchema>> {
   return dbPromise;
 }
 
-// ============ 通用 CRUD ============
+// ============ 通用 CRUD（D1 直连） ============
 
 type StoreValue<S extends StoreName> = AGSchema[S]['value'];
 
 export async function putRecord<S extends StoreName>(store: S, value: StoreValue<S>): Promise<void> {
-  const dbi = await db();
-  await (dbi as unknown as { put: (s: S, v: StoreValue<S>) => Promise<string> }).put(store, value);
+  await d1.putRecord(store, value as StoreValue<S> & { id: string });
 }
 
 export async function getRecord<S extends StoreName>(store: S, id: string): Promise<StoreValue<S> | undefined> {
-  const dbi = await db();
-  return (dbi as unknown as { get: (s: S, k: string) => Promise<StoreValue<S> | undefined> }).get(store, id);
+  return d1.getRecord<StoreValue<S>>(store, id);
 }
 
 export async function getAllRecords<S extends StoreName>(store: S): Promise<StoreValue<S>[]> {
-  const dbi = await db();
-  return (dbi as unknown as { getAll: (s: S) => Promise<StoreValue<S>[]> }).getAll(store);
+  return d1.listRecords<StoreValue<S>>(store);
 }
 
 export async function deleteRecord<S extends StoreName>(store: S, id: string): Promise<void> {
-  const dbi = await db();
-  await (dbi as unknown as { delete: (s: S, k: string) => Promise<void> }).delete(store, id);
+  await d1.deleteRecord(store, id);
 }
 
 export async function bulkPut<S extends StoreName>(store: S, records: StoreValue<S>[]): Promise<void> {
-  if (records.length === 0) return;
-  const dbi = await db();
-  for (const record of records) {
-    await (dbi as unknown as { put: (s: S, v: StoreValue<S>) => Promise<string> }).put(store, record);
-  }
+  await d1.bulkPut(store, records as (StoreValue<S> & { id: string })[]);
 }
 
 // ============ 领域查询辅助 ============
@@ -378,155 +333,8 @@ export async function setMeta(key: string, value: unknown): Promise<void> {
   await dbi.put('meta', { key, value });
 }
 
-// ============ 导入导出 ============
-
-export interface ExportedSnapshot {
-  version: string;
-  exportedAt: string;
-  trainings: TrainingRecord[];
-  gaps: AbilityGap[];
-  abilities: AbilitySnapshot[];
-  students: StudentProfile[];
-  reviews: ReviewRecord[];
-  tasks: FixTask[];
-  templates: TaskTemplate[];
-  assignments: Assignment[];
-  assignmentProgress: AssignmentProgress[];
-  exams: ExamRecord[];
-  corrections: Correction[];
-  strategies: TeachingStrategy[];
-  registrations: ExamRegistration[];
-  stagePlans: StagePlan[];
-  spacedReviews: SpacedReviewItem[];
-}
-
-async function readAll<S extends StoreName>(store: S): Promise<StoreValue<S>[]> {
-  try {
-    return await getAllRecords(store);
-  } catch {
-    return [];
-  }
-}
-
-export async function exportSnapshot(): Promise<ExportedSnapshot> {
-  const [
-    trainings,
-    gaps,
-    abilities,
-    students,
-    reviews,
-    tasks,
-    templates,
-    assignments,
-    assignmentProgress,
-    exams,
-    corrections,
-    strategies,
-    registrations,
-    stagePlans,
-    spacedReviews,
-  ] = await Promise.all([
-    readAll('trainings'),
-    readAll('gaps'),
-    readAll('abilities'),
-    readAll('students'),
-    readAll('reviews'),
-    readAll('tasks'),
-    readAll('templates'),
-    readAll('assignments'),
-    readAll('assignmentProgress'),
-    readAll('exams'),
-    readAll('corrections'),
-    readAll('strategies'),
-    readAll('registrations'),
-    readAll('stagePlans'),
-    readAll('spacedReviews'),
-  ]);
-  return {
-    version: '2.0.0',
-    exportedAt: new Date().toISOString(),
-    trainings,
-    gaps,
-    abilities,
-    students,
-    reviews,
-    tasks,
-    templates,
-    assignments,
-    assignmentProgress,
-    exams,
-    corrections,
-    strategies,
-    registrations,
-    stagePlans,
-    spacedReviews,
-  };
-}
-
-export async function importSnapshot(snapshot: ExportedSnapshot, mode: 'merge' | 'replace' = 'merge'): Promise<void> {
-  const dbi = await db();
-  if (mode === 'replace') {
-    const tx = dbi.transaction(SYNCED_STORES, 'readwrite');
-    await Promise.all(SYNCED_STORES.map((s) => tx.objectStore(s).clear()));
-    await tx.done;
-  }
-
-  const payload: Record<StoreName, unknown[]> = {
-    trainings: snapshot.trainings ?? [],
-    gaps: snapshot.gaps ?? [],
-    abilities: snapshot.abilities ?? [],
-    students: snapshot.students ?? [],
-    reviews: snapshot.reviews ?? [],
-    tasks: snapshot.tasks ?? [],
-    templates: snapshot.templates ?? [],
-    assignments: snapshot.assignments ?? [],
-    assignmentProgress: snapshot.assignmentProgress ?? [],
-    exams: snapshot.exams ?? [],
-    corrections: snapshot.corrections ?? [],
-    strategies: snapshot.strategies ?? [],
-    registrations: snapshot.registrations ?? [],
-    stagePlans: snapshot.stagePlans ?? [],
-    spacedReviews: snapshot.spacedReviews ?? [],
-  };
-  for (const store of SYNCED_STORES) {
-    for (const record of payload[store]) {
-      await (dbi as unknown as { put: (s: StoreName, v: unknown) => Promise<string> }).put(store, record);
-    }
-  }
-}
+// ============ 云端业务数据清理 ============
 
 export async function clearAllBusinessData(): Promise<void> {
-  const dbi = await db();
-  const tx = dbi.transaction([...SYNCED_STORES, 'meta'], 'readwrite');
-  await Promise.all([...SYNCED_STORES, 'meta'].map((s) => tx.objectStore(s as StoreName).clear()));
-  await tx.done;
-}
-
-/** 增量同步：返回自 since 之后更新的所有实体 */
-export async function getChangesSince(since: string | null): Promise<ExportedSnapshot> {
-  const snapshot = await exportSnapshot();
-  const cutoff = since ?? '';
-  const laterThan = (u: string) => (cutoff ? u > cutoff : true);
-
-  const filterByUpdated = <T extends { updatedAt?: string; createdAt?: string; evaluationTime?: string }>(list: T[]): T[] =>
-    list.filter((r) => laterThan(r.updatedAt ?? r.createdAt ?? r.evaluationTime ?? ''));
-
-  return {
-    ...snapshot,
-    trainings: filterByUpdated(snapshot.trainings),
-    gaps: filterByUpdated(snapshot.gaps),
-    abilities: filterByUpdated(snapshot.abilities),
-    students: filterByUpdated(snapshot.students),
-    reviews: filterByUpdated(snapshot.reviews),
-    tasks: filterByUpdated(snapshot.tasks),
-    templates: filterByUpdated(snapshot.templates),
-    assignments: filterByUpdated(snapshot.assignments),
-    assignmentProgress: filterByUpdated(snapshot.assignmentProgress),
-    exams: filterByUpdated(snapshot.exams),
-    corrections: filterByUpdated(snapshot.corrections),
-    strategies: filterByUpdated(snapshot.strategies),
-    registrations: filterByUpdated(snapshot.registrations),
-    stagePlans: filterByUpdated(snapshot.stagePlans),
-    spacedReviews: filterByUpdated(snapshot.spacedReviews),
-  };
+  await d1.clearWorkspace();
 }

@@ -12,11 +12,12 @@
 | 框架 | React 19 + TypeScript + Vite 8 |
 | 样式 | Tailwind CSS 3 |
 | 路由 | react-router-dom 6 |
-| 本地存储 | IndexedDB（idb），按账户隔离 15 张 store |
-| 远程备份 | Cloudflare D1（可选，Worker + REST 网关） |
+| 业务存储 | Cloudflare D1（唯一数据源，经 Pages Functions 同域 `/api` 直连 CRUD） |
+| 账户体系 | 服务端用户名 + 密码（PBKDF2-SHA256），HttpOnly 会话 Cookie（30 天） |
+| 本机存储 | IndexedDB（仅偏好设置） |
 | 图表 | recharts |
-| 共享基座 | [`@shared/core`](https://github.com/ProMatheus-ltsc/shared-core)（GitHub git 依赖，复用表单引擎/认证/工具层） |
-| 部署 | Cloudflare Pages（GitHub 集成自动构建） |
+| 共享基座 | [`@shared/core`](https://github.com/ProMatheus-ltsc/shared-core)（GitHub git 依赖，复用表单引擎/UI 组件/工具层） |
+| 部署 | Cloudflare Pages + Pages Functions（GitHub 集成自动构建） |
 
 ---
 
@@ -38,7 +39,10 @@
 
 - **淡化分数,强化能力**: 以「能力掌握度」为唯一核心指标,而非分数。 分数仅作为诊断输入信号。
 - **North Star Metric**: 单位有效学习时间产生的能力掌握度增长。
-- **Local-First**: 全部业务数据默认存储在浏览器 IndexedDB 中;Cloudflare D1 仅作为可选异地备份。
+- **D1 唯一数据源**: 全部业务数据直接存储在 Cloudflare D1，通过 Pages Functions 同域 `/api` 完成 CRUD；
+  浏览器只保留偏好设置。
+- **服务端账户**: 用户名 + 密码注册登录，会话由服务端写入 HttpOnly Cookie；暂不接入邮箱找回。
+- **按用户名分工作空间**: 工作空间 = 登录用户名（转小写），同一用户名在不同设备自动共享数据。
 - **少输入 / 多默认 / 强可视 / 短路径**: 让用户把时间花在训练/反馈/修复上,而不是花在填表单上。
 - **心理安全**: 训练时不显示历史表现;错误改称「待修复问题」,防止失败回避与过度自我监控。
 
@@ -50,15 +54,15 @@
 
 | 模块 | 页面 | 说明 |
 |------|------|------|
-| 今日工作台 | `/` | 每日核心任务、待修复问题、复盘提醒、能力变化、云端同步状态 |
+| 今日工作台 | `/` | 每日核心任务、待修复问题、复盘提醒、能力变化、云端存储状态 |
 | 训练记录 | `/trainings` | 支持多学段多学科的训练记录,含标准/快速模式、错误 chips、陌生题标记 |
 | 能力中心 | `/abilities` | 能力雷达图、增长曲线、模块掌握度、三级能力标签明细 |
 | 问题中心 | `/problems` | 跨学科统一管理未修复能力缺口,含错误复现率、修复→验证状态机 |
 | 复盘中心 | `/reviews` | 日 / 周 / 月三级复盘,自动带出训练摘要与短板推荐 |
 | 学段学科配置 | `Onboarding` | 5 分钟启动引导:身份 → 学段 → 学科 |
 | 学生管理 (教师) | `/students` | 添加/编辑学生,含学段/年级/学科/分组/考试类型 |
-| 设置 | `/settings` | 身份/学段/学科偏好,数据导入导出,清空本地数据 |
-| 云端同步 | `/sync` | Cloudflare D1 配置、增量推拉、全量备份、历史恢复 |
+| 设置 | `/settings` | 身份/学段/学科偏好,清空云端数据 |
+| 数据存储 | `/storage` | D1 连通性、工作空间记录数、云端备份与恢复 |
 
 ### 3.2 P1 · 学生端进阶
 
@@ -115,8 +119,9 @@
 │  ├── planner.ts     艾宾浩斯间隔复习 / 阶段规划 / 今日推荐            │
 │  ├── aiPrompt.ts    外部 AI 提示词生成 + JSON 解析                   │
 │  ├── taskTemplates.ts   内置任务模板库 + 评语库                      │
-│  ├── localDB.ts     IndexedDB 15 张 store, 按账户隔离                │
-│  └── remoteSync.ts  Cloudflare D1 增量同步 / 全量备份 / LWW 冲突     │
+│  ├── localDB.ts     业务 CRUD 门面（转调 d1Client）+ 设备级元数据        │
+│  ├── d1Client.ts    Pages 同域 /api 请求层（Cookie 会话，credentials 同源）│
+│  └── snapshot.ts    15 张表名单 + 快照类型的唯一来源                  │
 ├─────────────────────────────────────────────────────────────────────┤
 │  Domain                                                              │
 │  ├── types.ts       15+ 领域实体类型定义                             │
@@ -124,9 +129,14 @@
 │  └── abilityTransfer.ts   能力迁移矩阵 (PRD §12B/§15B)               │
 ├─────────────────────────────────────────────────────────────────────┤
 │  Persistence                                                         │
-│  IndexedDB (本地)                    Cloudflare D1 (远程可选)         │
-│  按账户隔离, 15 张 store              Worker + D1 Binding             │
-│  即写即存, 断网可用                    异地备份 + 多端同步              │
+│  Cloudflare Pages Functions (functions/api/[[path]].ts)              │
+│  └── 同域 /api → D1 Binding "DB"                                     │
+│      ├── 服务端账户: users / sessions / auth_attempts                │
+│      ├── 15 张业务表: (workspace, id, updated_at, data)               │
+│      ├── workspace = 用户名（小写），多设备共享                        │
+│      └── sync_backups: 每账户最近 20 个备份点                         │
+│  IndexedDB（本机）                                                   │
+│  └── 仅偏好设置                                                      │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -142,17 +152,20 @@ ability-growth-system/
 │   │   ├── abilityTags.ts          # 三级能力标签体系
 │   │   └── abilityTransfer.ts      # 能力迁移矩阵
 │   ├── services/                   # 服务层
-│   │   ├── localDB.ts              # IndexedDB 抽象（15 store，复用 @shared/core configureDB）
-│   │   ├── remoteSync.ts           # Cloudflare D1 同步
+│   │   ├── localDB.ts              # 业务 CRUD 门面（转调 D1）+ 设备级元数据
+│   │   ├── d1Client.ts             # Pages 同域 /api 请求层
+│   │   ├── snapshot.ts             # 15 张表名单 / 快照类型
 │   │   ├── analytics.ts            # 基础分析引擎
 │   │   ├── insights.ts             # P2 深度洞察引擎
 │   │   ├── planner.ts              # 学习规划器
 │   │   ├── aiPrompt.ts             # 外部 AI 辅助
 │   │   └── taskTemplates.ts        # 任务模板 / 快捷短语
 │   ├── hooks/
+│   │   ├── useAuth.tsx             # 服务端登录/注册/退出 + 会话状态
 │   │   ├── useAppSession.tsx       # 身份/学段/学科/当前学生偏好
-│   │   └── useSyncStatus.tsx       # 云端同步状态
+│   │   └── useSyncStatus.tsx       # D1 连通性 + 云端记录数
 │   ├── components/
+│   │   ├── AppLayout.tsx           # 侧边栏外壳 + 退出登录
 │   │   ├── RoleGuard.tsx           # 路由权限守卫（教师专属）
 │   │   ├── Toaster.tsx / MasteryBar.tsx / RadarChart.tsx ...
 │   ├── pages/                      # 学生端页面
@@ -166,7 +179,7 @@ ability-growth-system/
 │   │   ├── AnalyticsPage.tsx
 │   │   ├── InsightsPage.tsx        # P2 深度洞察
 │   │   ├── ExamRegistrationPage.tsx
-│   │   ├── SyncPage.tsx
+│   │   ├── StoragePage.tsx         # 数据存储 / 备份恢复
 │   │   ├── SettingsPage.tsx
 │   │   ├── LoginPage.tsx
 │   │   └── OnboardingPage.tsx
@@ -180,6 +193,13 @@ ability-growth-system/
 │       ├── TeachingEffectPage.tsx
 │       ├── AIAssistPage.tsx
 │       └── WarningPage.tsx
+├── functions/
+│   ├── api/[[path]].ts             # Pages Functions: 账户会话 + /api CRUD + 备份
+│   └── tsconfig.json
+├── migrations/0001_init.sql        # D1 建表脚本（15 张业务表 + sync_backups）
+├── migrations/0002_auth.sql        # users / sessions / auth_attempts
+├── public/_redirects               # SPA 路由回退
+├── wrangler.toml                   # Pages 构建输出 + D1 绑定
 ├── .github/workflows/              # CI（当前无，部署走 Cloudflare Pages 集成）
 ├── package.json
 ├── vite.config.ts                  # host 0.0.0.0 · port 3000 · strictPort
@@ -195,11 +215,21 @@ ability-growth-system/
 
 ## 5. 数据模型
 
-### 5.1 IndexedDB 分库
+### 5.1 D1 表结构
 
-按认证账户隔离:`ability-growth-app-<accountId>`。 共 15 张 store 加 1 张 meta:
+15 张业务表结构一致，主键为 `id`，`workspace` 为登录用户名（小写）：
 
-| Store | 实体 | 主要字段 |
+```sql
+CREATE TABLE trainings (
+  workspace  TEXT NOT NULL DEFAULT '',
+  id         TEXT PRIMARY KEY,
+  updated_at TEXT NOT NULL,
+  data       TEXT NOT NULL           -- 实体 JSON
+);
+CREATE INDEX idx_trainings_workspace_updated ON trainings(workspace, updated_at);
+```
+
+| 表 | 实体 | 主要字段 |
 |-------|-------|---------|
 | `trainings` | 训练记录 | date · subject · module · totalQuestions · errorCount · errorCategories · isUnfamiliar |
 | `gaps` | 能力缺口 | subject · abilityPath · severity · status · occurrenceCount |
@@ -217,22 +247,41 @@ ability-growth-system/
 | `stagePlans` | 阶段规划 | stage · startDate · endDate · focusModules |
 | `spacedReviews` | 艾宾浩斯间隔复习 | abilityPath · intervals · currentIndex · nextDueDate |
 
-### 5.2 Cloudflare D1 同步
+另有 `sync_backups(id, account_id, created_at, data)` 保存每个工作空间最近 20 个全量备份点。
 
-前端只依赖 HTTP,与 Cloudflare Worker 通过如下 REST 端点通信:
+账户相关表：
 
-| 端点 | 说明 |
-|------|------|
-| `POST /api/sync/push` | 增量推送 (自 lastSyncAt 起的所有变更) |
-| `GET  /api/sync/pull` | 增量拉取 (可传 `?since=` 时间戳) |
-| `POST /api/sync/backup` | 全量备份到 D1 |
-| `GET  /api/sync/restore` | 全量恢复 (可传 `?timestamp=` 选取历史备份点) |
-| `GET  /api/sync/health` | 连通性探针 |
-| `GET  /api/sync/backups` | 列出历史备份点 |
+| 表 | 说明 |
+|-------|------|
+| `users` | `username_normalized` 唯一；密码以 `pbkdf2-sha256$<iterations>$<salt>$<hash>` 存储 |
+| `sessions` | 只保存会话令牌的 SHA-256 哈希，30 天过期 |
+| `auth_attempts` | 按 IP 哈希统计注册/登录失败次数，10 分钟窗口限流 |
 
-**冲突策略**: Last-Write-Wins,合并时对每个实体按 `updatedAt / createdAt / evaluationTime` 逐条比对; 冲突数会上报便于教师端知情。
+浏览器 IndexedDB 仅保留偏好设置（`meta`），不存储业务数据和登录令牌。
 
-**完整 Worker 实现**：见 [`worker/`](./worker) 目录（`wrangler.toml` + `schema.sql` + `src/index.ts`），六个端点全部实现，部署步骤见 §9.2。
+### 5.2 Pages Functions API
+
+前端只依赖同域 `/api`。账户端点用用户名 + 密码换取 HttpOnly 会话 Cookie，浏览器自动随请求携带；
+业务端点在服务端校验会话，并把工作空间固定为该账户的用户名，客户端无法指定其他工作空间。
+
+| 端点 | 鉴权 | 说明 |
+|------|:----:|------|
+| `POST   /api/auth/register` | 公开 | 注册并自动登录（用户名 3-32 位，密码 8-72 位） |
+| `POST   /api/auth/login` | 公开 | 登录并签发会话 Cookie |
+| `POST   /api/auth/logout` | 会话 | 删除当前会话并清除 Cookie |
+| `GET    /api/auth/me` | 会话 | 当前登录用户与工作空间 |
+| `GET    /api/health` | 公开 | 连通性探针（D1 可用性） |
+| `GET    /api/stats` | 会话 | 当前工作空间各表记录数 |
+| `GET    /api/stores/:store` | 会话 | 列出记录 |
+| `GET    /api/stores/:store/:id` | 会话 | 读取单条 |
+| `PUT    /api/stores/:store/:id` | 会话 | 新增/覆盖单条 |
+| `DELETE /api/stores/:store/:id` | 会话 | 删除单条 |
+| `POST   /api/stores/:store/bulk` | 会话 | 批量 upsert |
+| `DELETE /api/stores` | 会话 | 清空当前工作空间 |
+| `GET/POST /api/backups` | 会话 | 备份列表 / 创建备份 |
+| `POST   /api/backups/:id/restore` | 会话 | 用备份覆盖当前工作空间 |
+
+**冲突策略**: Last-Write-Wins，按 `updatedAt / createdAt / evaluationTime` 逐条比对，保留较新版本。
 
 ---
 
@@ -252,7 +301,7 @@ ability-growth-system/
 | `/analytics` 训练收益 | ✅ | ✅ | 同上 |
 | `/insights` 深度洞察 (P2) | ✅ | ✅ | 同上 |
 | `/registrations` 公考报考 | ✅ | ✅ | 公考学生备考专用 |
-| `/sync` 云端同步 | ✅ | ✅ | 账户级备份 |
+| `/storage` 数据存储 | ✅ | ✅ | D1 连通性 / 备份恢复 |
 | `/settings` 设置 | ✅ | ✅ | 身份切换/学科配置/数据管理 |
 | `/class` 班级总览 | ❌ | ✅ | **教师专属** |
 | `/students` 学生管理 | ❌ | ✅ | **教师专属** |
@@ -333,8 +382,13 @@ for each week:
 
 ```bash
 npm install
-npm run dev
-# 访问 http://localhost:3000
+
+# 终端 1：本地 D1 + Pages Functions（读取 wrangler.toml，默认 http://127.0.0.1:8788）
+npm run db:migrate:local      # 首次：建业务表 + 账户表（旧库会自动补 workspace 列）
+npm run pages:dev             # 构建前端并启动 Pages dev
+
+# 终端 2：前端热更新（Vite 代理 /api → 127.0.0.1:8788）
+npm run dev                   # 访问 http://localhost:3000
 ```
 
 > 若本机网络代理导致 GitHub tarball 下载证书校验失败，可临时用 `NPM_CONFIG_STRICT_SSL=false npm install`；
@@ -343,62 +397,71 @@ npm run dev
 ### 8.3 类型检查 & 构建
 
 ```bash
-npm run typecheck    # 独立类型检查 (不生成文件)
-npm run build        # Vite 构建 (不含 tsc)
-npm run preview      # 本地预览生产构建
+npm run typecheck    # 前端 + functions 独立类型检查 (不生成文件)
+npm run build        # Vite 构建
+npm run preview      # 本地预览生产构建（不含 /api）
 ```
 
-### 8.4 Vite 服务器配置
+### 8.4 本地联调说明
 
-`vite.config.ts` 中强制 `host: '0.0.0.0'` + `port: 3000` + `strictPort: true`,确保沙箱外可访问。
+- `vite.config.ts` 将 `/api` 代理到 `http://127.0.0.1:8788`，必须同时运行 `npm run pages:dev` 才能读写 D1。
+- 本地 D1 数据保存在 `.wrangler/state/v3/d1`（已 gitignore）。
+- 直接用浏览器访问 `http://127.0.0.1:8788` 时，由 Pages dev 同时提供静态页面和 `/api`。
 
 ---
 
 ## 9. 部署
 
-### 9.1 前端：Cloudflare Pages（GitHub 集成）
+### 9.1 前端 + API：Cloudflare Pages
 
-项目通过 Cloudflare Pages 的 **GitHub 集成**部署：在 Cloudflare Dashboard 创建 Pages 项目并连接本仓库后，
-每次 push 到 `main` 自动构建：
+项目通过 Cloudflare Pages 的 **GitHub 集成**部署：在 Dashboard 创建 Pages 项目并连接本仓库后，
+每次 push 到 `main` 自动构建。`functions/` 目录会随 Pages 一起发布，提供同域 `/api`。
 
 | 配置项 | 值 |
 |--------|-----|
 | 构建命令 | `npm ci && npm run build` |
 | 输出目录 | `dist` |
 | Node 版本 | 20 |
+| Pages 项目名 | `ability-growth-system` |
+| 访问域名 | `https://<项目名>.<你的 Pages 子域>.pages.dev`（不使用 workers.dev） |
 
-构建时 `npm ci` 会从 GitHub 拉取 `@shared/core`（public 仓库，无需凭据）。
-
-### 9.2 远程备份：Cloudflare D1
-
-仓库已提供可直接部署的 Worker 实现（`worker/` 目录），与前端 `src/services/remoteSync.ts` 的 API 契约一一对应。
-接入步骤：
+也可命令行部署：
 
 ```bash
-# 1. 创建 D1 数据库（记下输出的 database_id）
-npx wrangler d1 create ability-growth
-
-# 2. 把 database_id 填入 worker/wrangler.toml
-
-# 3. 建表（15 张业务表 + 备份版本表）
-npx wrangler d1 execute ability-growth --remote --file=./worker/schema.sql
-
-# 4. 部署 Worker
-npx wrangler deploy
+npm run pages:deploy    # 构建并 wrangler pages deploy dist
 ```
 
-然后在应用「云端同步」页填入：
-- **Worker URL**（如 `https://ability-growth-sync.<你的子域>.workers.dev`）
-- **accountId**（任意账户标识，用于多账户数据隔离，请求头 `X-Sync-Account`）
-- **authToken**（可选；若在 `wrangler.toml` 的 `SYNC_AUTH_TOKEN` 中配置了，则此处必须一致）
+### 9.2 绑定 Cloudflare D1
 
-Worker 端点说明见 §5.2，冲突策略为 Last-Write-Wins。
+1. 创建数据库并记下 `database_id`：
+
+   ```bash
+   npx wrangler d1 create ability_growth
+   ```
+
+2. 把 `database_id` 填入根目录 [`wrangler.toml`](./wrangler.toml) 的 `[[d1_databases]]`；
+   或在 Pages 项目 **Settings → Functions → D1 database bindings** 中绑定：
+   - Variable name: `DB`
+   - D1 database: `ability_growth`
+
+3. 执行建表（业务表 + `users` / `sessions` / `auth_attempts`）：
+
+   ```bash
+   npm run db:migrate:remote
+   ```
+
+4. 部署后访问 `https://<项目>.pages.dev/api/health`，返回 `{"ok":true,"storage":"d1"}` 即连通。
+   首次使用在登录页注册用户名和密码即可；暂不接入邮箱，因此没有找回密码流程。
+
+> 若旧数据已按用户名存放在 `workspace` 列，用同一个用户名注册后即可看到原有数据。
+> D1 是业务数据的唯一来源，应用不提供本地数据导入/合并，也不提供 JSON 导出。
+> 备份与恢复都在云端完成（`sync_backups` 表，每个工作空间保留最近 20 个版本）。
 
 ---
 
 ## 10. 版本演进路线
 
-- **v0.1.0 (当前)**: P0 + P1 + P2 全需求覆盖,单账户 IndexedDB + 可选 D1 同步；接入 `@shared/core` 共享基座包
+- **v0.1.0 (当前)**: P0 + P1 + P2 全需求覆盖；业务数据直连 Cloudflare D1（Pages Functions），服务端用户名/密码登录 + HttpOnly 会话 Cookie，按用户名分工作空间；接入 `@shared/core` 共享基座包
 - v0.2 (规划): 语文/英语/化学/生物 能力标签库补齐
 - v0.3 (规划): 教师端多设备协同、批改照片上传、语音批改
 - v1.0 (规划): 移动端 PWA、离线优先架构完善、多语言

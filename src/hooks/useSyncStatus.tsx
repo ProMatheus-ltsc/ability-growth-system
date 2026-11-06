@@ -1,21 +1,23 @@
 import { useCallback, useEffect, useState } from 'react';
-import { getSyncStatus, getSyncConfigSync } from '../services/remoteSync';
-import type { SyncStatus } from '@shared/core/types';
+import { checkHealth, getStats } from '../services/d1Client';
 
-const EMPTY: SyncStatus = { lastSyncAt: null, pendingChanges: 0, isOnline: false };
+export interface StorageStatus {
+  isOnline: boolean;
+  totalRecords: number;
+  lastSyncAt: string | null;
+}
 
-export function useSyncStatus(intervalMs: number = 30000) {
-  const [status, setStatus] = useState<SyncStatus>(EMPTY);
+const EMPTY: StorageStatus = { isOnline: false, totalRecords: 0, lastSyncAt: null };
+
+export function useSyncStatus(intervalMs: number = 60000) {
+  const [status, setStatus] = useState<StorageStatus>(EMPTY);
   const [refreshing, setRefreshing] = useState(false);
 
   const refresh = useCallback(async () => {
-    if (!getSyncConfigSync()) {
-      setStatus(EMPTY);
-      return;
-    }
     setRefreshing(true);
     try {
-      setStatus(await getSyncStatus());
+      const [isOnline, stats] = await Promise.all([checkHealth(), getStats().catch(() => null)]);
+      setStatus({ isOnline, totalRecords: stats?.total ?? 0, lastSyncAt: null });
     } finally {
       setRefreshing(false);
     }

@@ -128,10 +128,10 @@ export function DashboardPage() {
 
       <div className="card p-4 flex items-center justify-between text-sm">
         <span className="text-slate-600">
-          云端同步状态：{status.isOnline ? '在线' : '未连接'} · 待同步 {status.pendingChanges} 条
+          云端存储：{status.isOnline ? '在线' : '未连接'} · 共 {status.totalRecords} 条记录
         </span>
-        <Link to="/sync" className="text-blue-600 hover:underline">
-          管理云端备份 →
+        <Link to="/storage" className="text-blue-600 hover:underline">
+          管理数据存储 →
         </Link>
       </div>
     </div>

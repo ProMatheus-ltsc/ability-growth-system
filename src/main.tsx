@@ -1,7 +1,8 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
-import { AuthProvider, ToastProvider } from '@shared/core';
+import { ToastProvider } from '@shared/core';
+import { AuthProvider } from './hooks/useAuth';
 import { App } from './App';
 import './styles/index.css';
 

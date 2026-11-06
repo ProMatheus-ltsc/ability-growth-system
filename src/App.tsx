@@ -1,9 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Route, Routes, Navigate } from 'react-router-dom';
-import { useAuth, setCurrentAccountId } from '@shared/core';
-import { Layout } from '@shared/core/components/Layout';
+import { useToast } from '@shared/core';
 import { LoadingSpinner } from '@shared/core/components/LoadingSpinner';
-import { ProtectedRoute } from '@shared/core/components/ProtectedRoute';
 import {
   Home,
   BookOpen,
@@ -12,7 +10,7 @@ import {
   Calendar,
   Users,
   Settings,
-  CloudUpload,
+  Database,
   Sparkles,
   Timer,
   FlaskConical,
@@ -27,9 +25,11 @@ import {
   Compass,
 } from 'lucide-react';
 
+import { useAuth } from './hooks/useAuth';
 import { AppSessionProvider, useAppSession } from './hooks/useAppSession';
 import { setBusinessAccount } from './services/localDB';
-import { loadSyncConfig } from './services/remoteSync';
+import { consumePendingError, DATA_ERROR_EVENT } from './services/d1Client';
+import { AppLayout, type NavItem } from './components/AppLayout';
 import { Toaster } from './components/Toaster';
 import { TeacherOnly } from './components/RoleGuard';
 
@@ -42,7 +42,7 @@ import { ProblemCenterPage } from './pages/ProblemCenterPage';
 import { ReviewPage } from './pages/ReviewPage';
 import { StudentsPage } from './pages/StudentsPage';
 import { SettingsPage } from './pages/SettingsPage';
-import { SyncPage } from './pages/SyncPage';
+import { StoragePage } from './pages/StoragePage';
 
 import { TimelinePage } from './pages/TimelinePage';
 import { ExamDiagnosisPage } from './pages/ExamDiagnosisPage';
@@ -67,7 +67,7 @@ const APP_CONFIG = {
 /** 学生视图导航
  *  学生只能看到自己的训练/能力/复盘/时间线/收益分析等自用能力
  */
-const STUDENT_NAV = [
+const STUDENT_NAV: NavItem[] = [
   { to: '/', icon: Home, label: '今日工作台', end: true },
   { to: '/trainings', icon: BookOpen, label: '训练记录' },
   { to: '/abilities', icon: Activity, label: '能力中心' },
@@ -78,14 +78,14 @@ const STUDENT_NAV = [
   { to: '/analytics', icon: BarChart3, label: '训练收益' },
   { to: '/insights', icon: Compass, label: '深度洞察' },
   { to: '/registrations', icon: Briefcase, label: '公考报考' },
-  { to: '/sync', icon: CloudUpload, label: '云端同步' },
+  { to: '/storage', icon: Database, label: '数据存储' },
   { to: '/settings', icon: Settings, label: '设置' },
 ];
 
 /** 教师视图导航
  *  教师拥有全部学生能力,并额外获得班级管理/任务下发/批改/对比/AI 辅助/预警等能力
  */
-const TEACHER_NAV = [
+const TEACHER_NAV: NavItem[] = [
   { to: '/', icon: Home, label: '今日工作台', end: true },
   { to: '/class', icon: LayoutDashboard, label: '班级总览' },
   { to: '/students', icon: Users, label: '学生管理' },
@@ -103,19 +103,19 @@ const TEACHER_NAV = [
   { to: '/reviews', icon: Calendar, label: '复盘中心' },
   { to: '/timeline', icon: Timer, label: '学习时间线' },
   { to: '/analytics', icon: BarChart3, label: '训练收益' },
-  { to: '/sync', icon: CloudUpload, label: '云端同步' },
+  { to: '/storage', icon: Database, label: '数据存储' },
   { to: '/settings', icon: Settings, label: '设置' },
 ];
 
 export function App() {
   const { state, account } = useAuth();
+  // 等待账户上下文写入后再挂载 AppSessionProvider（其内部会读取本机 meta）
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
     if (state === 'authenticated' && account) {
-      setCurrentAccountId(account.id);
       setBusinessAccount(account.id);
-      void loadSyncConfig().finally(() => setReady(true));
+      setReady(true);
     } else {
       setBusinessAccount(undefined);
       setReady(false);
@@ -137,9 +137,24 @@ export function App() {
 
   return (
     <AppSessionProvider>
+      <DataErrorToast />
       <AuthenticatedApp />
     </AppSessionProvider>
   );
+}
+
+function DataErrorToast() {
+  const { showToast } = useToast();
+
+  useEffect(() => {
+    const pending = consumePendingError();
+    if (pending) showToast(pending, 'error');
+    const handler = (event: Event) => showToast((event as CustomEvent<string>).detail, 'error');
+    window.addEventListener(DATA_ERROR_EVENT, handler);
+    return () => window.removeEventListener(DATA_ERROR_EVENT, handler);
+  }, [showToast]);
+
+  return null;
 }
 
 function AuthenticatedApp() {
@@ -150,63 +165,36 @@ function AuthenticatedApp() {
   if (!prefs.onboardingDone) return <OnboardingPage />;
 
   return (
-    <Layout navItems={navItems} appConfig={APP_CONFIG}>
+    <AppLayout navItems={navItems} appConfig={APP_CONFIG}>
       <Toaster />
       <Routes>
         {/* 公共路由 - 学生 / 教师均可访问 */}
-        <Route path="/" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
-        <Route path="/trainings" element={<ProtectedRoute><TrainingsPage /></ProtectedRoute>} />
-        <Route path="/abilities" element={<ProtectedRoute><AbilityCenterPage /></ProtectedRoute>} />
-        <Route path="/problems" element={<ProtectedRoute><ProblemCenterPage /></ProtectedRoute>} />
-        <Route path="/exams" element={<ProtectedRoute><ExamDiagnosisPage /></ProtectedRoute>} />
-        <Route path="/reviews" element={<ProtectedRoute><ReviewPage /></ProtectedRoute>} />
-        <Route path="/timeline" element={<ProtectedRoute><TimelinePage /></ProtectedRoute>} />
-        <Route path="/analytics" element={<ProtectedRoute><AnalyticsPage /></ProtectedRoute>} />
-        <Route path="/insights" element={<ProtectedRoute><InsightsPage /></ProtectedRoute>} />
-        <Route path="/registrations" element={<ProtectedRoute><ExamRegistrationPage /></ProtectedRoute>} />
-        <Route path="/sync" element={<ProtectedRoute><SyncPage /></ProtectedRoute>} />
-        <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
+        <Route path="/" element={<DashboardPage />} />
+        <Route path="/trainings" element={<TrainingsPage />} />
+        <Route path="/abilities" element={<AbilityCenterPage />} />
+        <Route path="/problems" element={<ProblemCenterPage />} />
+        <Route path="/exams" element={<ExamDiagnosisPage />} />
+        <Route path="/reviews" element={<ReviewPage />} />
+        <Route path="/timeline" element={<TimelinePage />} />
+        <Route path="/analytics" element={<AnalyticsPage />} />
+        <Route path="/insights" element={<InsightsPage />} />
+        <Route path="/registrations" element={<ExamRegistrationPage />} />
+        <Route path="/storage" element={<StoragePage />} />
+        <Route path="/settings" element={<SettingsPage />} />
 
         {/* 教师专属路由 - 学生尝试访问将重定向到工作台 */}
-        <Route
-          path="/class"
-          element={<ProtectedRoute><TeacherOnly><ClassOverviewPage /></TeacherOnly></ProtectedRoute>}
-        />
-        <Route
-          path="/students"
-          element={<ProtectedRoute><TeacherOnly><StudentsPage /></TeacherOnly></ProtectedRoute>}
-        />
-        <Route
-          path="/students/detail"
-          element={<ProtectedRoute><TeacherOnly><StudentDetailPage /></TeacherOnly></ProtectedRoute>}
-        />
-        <Route
-          path="/assignments"
-          element={<ProtectedRoute><TeacherOnly><AssignmentsPage /></TeacherOnly></ProtectedRoute>}
-        />
-        <Route
-          path="/corrections"
-          element={<ProtectedRoute><TeacherOnly><CorrectionPage /></TeacherOnly></ProtectedRoute>}
-        />
-        <Route
-          path="/compare"
-          element={<ProtectedRoute><TeacherOnly><StudentComparePage /></TeacherOnly></ProtectedRoute>}
-        />
-        <Route
-          path="/effect"
-          element={<ProtectedRoute><TeacherOnly><TeachingEffectPage /></TeacherOnly></ProtectedRoute>}
-        />
-        <Route
-          path="/ai-assist"
-          element={<ProtectedRoute><TeacherOnly><AIAssistPage /></TeacherOnly></ProtectedRoute>}
-        />
-        <Route
-          path="/warnings"
-          element={<ProtectedRoute><TeacherOnly><WarningPage /></TeacherOnly></ProtectedRoute>}
-        />
+        <Route path="/class" element={<TeacherOnly><ClassOverviewPage /></TeacherOnly>} />
+        <Route path="/students" element={<TeacherOnly><StudentsPage /></TeacherOnly>} />
+        <Route path="/students/detail" element={<TeacherOnly><StudentDetailPage /></TeacherOnly>} />
+        <Route path="/assignments" element={<TeacherOnly><AssignmentsPage /></TeacherOnly>} />
+        <Route path="/corrections" element={<TeacherOnly><CorrectionPage /></TeacherOnly>} />
+        <Route path="/compare" element={<TeacherOnly><StudentComparePage /></TeacherOnly>} />
+        <Route path="/effect" element={<TeacherOnly><TeachingEffectPage /></TeacherOnly>} />
+        <Route path="/ai-assist" element={<TeacherOnly><AIAssistPage /></TeacherOnly>} />
+        <Route path="/warnings" element={<TeacherOnly><WarningPage /></TeacherOnly>} />
 
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
-    </Layout>
+    </AppLayout>
   );
 }

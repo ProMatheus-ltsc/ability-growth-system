@@ -37,3 +37,6 @@ coverage
 .env.local
 .env.*.local
 *.tsbuildinfo
+
+# Cloudflare local state
+.wrangler/
