@@ -326,8 +326,17 @@ async function initSchema(db: D1Database): Promise<void> {
     .run();
 }
 
-async function runBatches(db: D1Database, statements: D1PreparedStatement[]): Promise<void> {
-  for (let index = 0; index < statements.length; index += BATCH_SIZE) {
+async function claimLegacyWorkspace(db: D1Database, workspace: string): Promise<void> {
+  for (const store of STORE_NAMES) {
+    await db.prepare(`UPDATE ${store} SET workspace = ? WHERE workspace = ''`).bind(workspace).run();
+  }
+  await db
+    .prepare('UPDATE sync_backups SET account_id = ? WHERE account_id <> ?')
+    .bind(workspace, workspace)
+    .run();
+}
+
+async function runBatches(db: D1Database, statements: D1PreparedStatement[]): Promise<void> {  for (let index = 0; index < statements.length; index += BATCH_SIZE) {
     await db.batch(statements.slice(index, index + BATCH_SIZE));
   }
 }
@@ -490,6 +499,9 @@ async function handle(request: Request, env: Env): Promise<Response> {
         throw error;
       }
       await recordAuthAttempt(env.DB, key, true);
+      // 旧版同步库的业务行 workspace 为空；首个账号注册时把它们归入该账号，避免历史数据不可见
+      const userCount = await env.DB.prepare('SELECT COUNT(*) AS n FROM users').first<{ n: number }>();
+      if (Number(userCount?.n ?? 0) === 1) await claimLegacyWorkspace(env.DB, name.normalized);
       const cookie = await createSession(env.DB, request, userId);
       return json(
         { user: { id: userId, username: name.username }, workspace: name.normalized },

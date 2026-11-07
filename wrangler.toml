@@ -1,5 +1,5 @@
 # Cloudflare Pages + Pages Functions（同域 /api 直连 D1）
-# 部署方式见 README §9。database_id 可在 Dashboard 的 Pages 项目绑定里查看/配置。
+# 部署方式见 README §9。database_id 与 Cloudflare 上的 ability_growth 数据库一致。
 name = "ability-growth-system"
 compatibility_date = "2025-01-01"
 pages_build_output_dir = "dist"
@@ -7,5 +7,5 @@ pages_build_output_dir = "dist"
 [[d1_databases]]
 binding = "DB"
 database_name = "ability_growth"
-database_id = "<your-d1-id>"
+database_id = "88b2a816-77bc-4f51-b2c7-d54c7a27e273"
 migrations_dir = "migrations"
