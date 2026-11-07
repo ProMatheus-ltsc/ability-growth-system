@@ -224,7 +224,7 @@ ability-growth-system/
 │   └── 0002_auth.sql               # users / sessions / auth_attempts
 ├── public/_redirects               # SPA 路由回退
 ├── scripts/cf-pages-build.sh       # Pages 构建：克隆 shared-core + npm ci + build
-├── worker/                         # 旧版独立同步 Worker + 种子数据（前端不再使用）
+├── worker/                         # 仅保留粉笔练习数据播种 SQL（旧 Worker 已删除）
 ├── wrangler.toml                   # Pages 输出目录 + D1 绑定
 ├── package.json
 ├── vite.config.ts                  # host 0.0.0.0 · port 3000 · /api 代理
