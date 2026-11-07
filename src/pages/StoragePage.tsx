@@ -81,7 +81,7 @@ export function StoragePage() {
           <History size={16} /> 云端备份
         </h2>
         <p className="text-sm text-slate-500">
-          备份保存在 D1 的 <code>sync_backups</code> 表，每个账户保留最近 20 个版本。恢复会用备份覆盖当前账户的 15 张业务表。
+          备份保存在 D1 的 <code>sync_backups</code> 表，每个账户保留最近 20 个版本。恢复会用备份覆盖当前账户的 27 张业务表。
         </p>
         <button className="btn-primary" onClick={backupNow} disabled={busy}>
           <Upload size={16} /> 立即备份

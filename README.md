@@ -1,7 +1,8 @@
 # 通用能力增长系统
 
 > **副标题**: 覆盖小学 · 初中 · 高中 · 公考等多学段多学科的能力增长与教学管理系统
-> **项目版本**: v0.1.0 ｜ **PRD 版本**: V5.1 (交互体验增强版) ｜ **PRD 覆盖**: P0 / P1 / P2 全需求
+> **版本**: V5.8
+> **PRD 覆盖**: P0 / P1 / P2 全需求 + §30 PDCA 问题跟进 + §31 职业选择 + §18A 学习素养
 
 ---
 
@@ -12,12 +13,12 @@
 | 框架 | React 19 + TypeScript + Vite 8 |
 | 样式 | Tailwind CSS 3 |
 | 路由 | react-router-dom 6 |
-| 业务存储 | Cloudflare D1（唯一数据源，经 Pages Functions 同域 `/api` 直连 CRUD） |
-| 账户体系 | 服务端用户名 + 密码（PBKDF2-SHA256），HttpOnly 会话 Cookie（30 天） |
-| 本机存储 | IndexedDB（仅偏好设置） |
+| 业务存储 | Cloudflare D1（唯一数据源，Pages Functions 同域 `/api`） |
+| 本机存储 | IndexedDB（仅设备级偏好） |
+| 认证 | 用户名 + 密码，PBKDF2 哈希，HttpOnly 会话 Cookie |
 | 图表 | recharts |
-| 共享基座 | [`@shared/core`](https://github.com/ProMatheus-ltsc/shared-core)（GitHub git 依赖，复用表单引擎/UI 组件/工具层） |
-| 部署 | Cloudflare Pages + Pages Functions（GitHub 集成自动构建） |
+| 共享基座 | [`@shared/core`](https://github.com/ProMatheus-ltsc/shared-core)（`file:../shared-core`） |
+| 部署 | Cloudflare Pages + Pages Functions |
 
 ---
 
@@ -39,10 +40,9 @@
 
 - **淡化分数,强化能力**: 以「能力掌握度」为唯一核心指标,而非分数。 分数仅作为诊断输入信号。
 - **North Star Metric**: 单位有效学习时间产生的能力掌握度增长。
-- **D1 唯一数据源**: 全部业务数据直接存储在 Cloudflare D1，通过 Pages Functions 同域 `/api` 完成 CRUD；
-  浏览器只保留偏好设置。
-- **服务端账户**: 用户名 + 密码注册登录，会话由服务端写入 HttpOnly Cookie；暂不接入邮箱找回。
-- **按用户名分工作空间**: 工作空间 = 登录用户名（转小写），同一用户名在不同设备自动共享数据。
+- **D1 唯一数据源**: 全部业务数据直接存储在 Cloudflare D1，经 Pages Functions 同域 `/api` 完成 CRUD；
+  浏览器 IndexedDB 仅保留登录偏好等设备级元数据。
+- **按用户名分工作空间**: 工作空间 = 登录用户名（转小写），同一账号在不同设备自动共享数据；工作空间由服务端会话决定，前端不可指定。
 - **少输入 / 多默认 / 强可视 / 短路径**: 让用户把时间花在训练/反馈/修复上,而不是花在填表单上。
 - **心理安全**: 训练时不显示历史表现;错误改称「待修复问题」,防止失败回避与过度自我监控。
 
@@ -62,7 +62,7 @@
 | 学段学科配置 | `Onboarding` | 5 分钟启动引导:身份 → 学段 → 学科 |
 | 学生管理 (教师) | `/students` | 添加/编辑学生,含学段/年级/学科/分组/考试类型 |
 | 设置 | `/settings` | 身份/学段/学科偏好,清空云端数据 |
-| 数据存储 | `/storage` | D1 连通性、工作空间记录数、云端备份与恢复 |
+| 云端存储 | `/storage` | D1 连通性、工作空间记录数、云端备份与恢复 |
 
 ### 3.2 P1 · 学生端进阶
 
@@ -83,7 +83,6 @@
 | 批改评价 | `/corrections` | 问题标签 chips + 快捷评语库 + 星级评分,自动关联能力缺口 |
 | 学生对比 | `/compare` | 2-5 学生能力雷达并列对比 + 投入 vs 错题率 |
 | 教学效果 | `/effect` | 记录教师策略,一段时间后自动量化前后能力差 |
-| AI 辅助评估 | `/ai-assist` | 生成 5 学科提示词 → 粘贴 AI 返回 JSON → 校验后填充学生能力档案 |
 | 预警中心 | `/warnings` | 三级预警 (长期未训练 / 停滞 / 退步) |
 
 ### 3.4 P2 · 深度洞察 (`/insights`)
@@ -99,6 +98,50 @@
 ### 3.5 学科扩展 (PRD P2)
 
 学科枚举已扩展支持: 数学 / 物理 / 行测 / 申论 / 面试 / **语文 / 英语 / 化学 / 生物**。 后 4 科在 v1 中作为占位接口, 用户可自建模块与训练记录, 能力标签库随版本迭代补充。
+
+### 3.6 PRD V5.8 · 问题跟进 PDCA (成年人学段, §30)
+
+| 模块 | 页面 | 说明 |
+|------|------|------|
+| 问题清单 | `/pdca` | 六阶段状态机(P1/P2/P3/D/C/A) · 三种问题类型 · 生活域分类 · 停滞风险排序 |
+| 问题详情 | `/pdca/detail` | 状态轴 + 根因 + 对策(5W1H) + ORID 检查 + **内嵌 iframe 工具** + **产出物归档** + **拉伸区自查** + A 阶段三出口 |
+| 问题日历 | `/pdca-calendar` | 月/周/日视图 · 甘特事件条 · 三色域 · **拖拽改期** · 公考时间线并存 |
+| 周检查清单 | `/pdca-weekly` | 循环衔接触发器: 每周固定推送 D/C/A 阶段问题, 强制填写检查结果 |
+| PDCA 工具箱 | `/pdca-tools` | 自定义工具注册: 名称 + 链接 + 适用阶段 + 嵌入方式 |
+| PDCA 效率分析 | `/pdca-efficiency` | 循环周期统计 · 停滞瓶颈识别 · 成功经验复用池 |
+
+**下一轮 P 计划预生成草稿**: A 阶段选择"下一轮" 时, 系统自动延续高影响根因, 清空对策等待重制。
+
+### 3.7 PRD V5.8 · 职业选择 (初中/高中/成年人, §31)
+
+| 模块 | 页面 | 说明 |
+|------|------|------|
+| 职业测评 | `/career` | 简短版 15+28+20 + 完整版 45+93+60 双题库支持 |
+| 报告页 | `/career` (报告 tab) | 兴趣×能力四象限 + 一票否决 + 三定 + 双路线 + **成就动机细分** + **差异提示** |
+| 学段化输出 | 自动切换 | 初中: 不显示避坑清单 · 高中: 双路线 + 大学专业 · 成年人: 完整三定 |
+| 一票否决可解除 | 报告页 | 二次确认 + 理由留档到 D1 |
+| 高中专业变体 | 报告页(自动) | 大学专业名称 / 选科要求 / 就业去向 |
+| 教师班级汇总 | `/career-class` | 匿名统计: MBTI 分布 + 四象限分布 + 底线价值分布 |
+
+### 3.8 PRD V5.8 · 学习素养 (K12 通用, §18A)
+
+| 模块 | 页面 | 说明 |
+|------|------|------|
+| 素养五维雷达 | `/literacy` | 元认知 / 时间管理 / 信息检索 / 批判性思维 / 协作沟通 |
+| 行为锚点 | 页面内 | L1/L2/L3 分级, 数据来自训练/复盘/能力缺口 |
+| 协作行为录入 | `/literacy-collab` | 讲题 / 小组任务 / 互助修复 专项行为记录 |
+| 学期报告 | (数据服务) | `buildTermReport` 可派生学期成长报告(每学期) |
+| 与职业选择联动 | 自动 | 高中素养数据校准职业选择·能力检测的自评偏差 |
+
+### 3.9 P1 补齐 · 特殊学科能力
+
+| 模块 | 页面 | 说明 |
+|------|------|------|
+| 申论作答版本管理 (§14.4) | `/subjective-answers` | 原始答案 → 教师批改 → 二次修改 版本链 |
+| 面试专项训练 (§15.1) | `/interview` | 音频录制 · 思考时间 · 答题时间 · 自评+他评 |
+| 学生 CSV 批量导入 (§29.2) | `/students/import` | CSV/表格粘贴 · 学段/学科自动校验 |
+| 模考诊断→修复任务 | `/exams` | 一键把 <60% 模块转为能力缺口 + 修复任务 |
+| 键盘快捷键 (§29.5) | 全局 | Ctrl+N 新建训练 · Ctrl+R 日复盘 · Ctrl+M 快速标记 |
 
 ---
 
@@ -117,26 +160,24 @@
 │  ├── analytics.ts   聚合统计 / 训练收益 / 阶段报告 / 预警 / 边际收益 │
 │  ├── insights.ts    P2 策略推荐 / 收益预测 / 因果建模 / What-if      │
 │  ├── planner.ts     艾宾浩斯间隔复习 / 阶段规划 / 今日推荐            │
-│  ├── aiPrompt.ts    外部 AI 提示词生成 + JSON 解析                   │
 │  ├── taskTemplates.ts   内置任务模板库 + 评语库                      │
-│  ├── localDB.ts     业务 CRUD 门面（转调 d1Client）+ 设备级元数据        │
-│  ├── d1Client.ts    Pages 同域 /api 请求层（Cookie 会话，credentials 同源）│
-│  └── snapshot.ts    15 张表名单 + 快照类型的唯一来源                  │
+│  ├── localDB.ts     业务 CRUD 门面（转调 d1Client）+ 设备级元数据    │
+│  ├── d1Client.ts    Pages 同域 /api 请求层（Cookie 会话）            │
+│  └── snapshot.ts    27 张表名单 + 快照类型的唯一来源                 │
 ├─────────────────────────────────────────────────────────────────────┤
 │  Domain                                                              │
-│  ├── types.ts       15+ 领域实体类型定义                             │
+│  ├── types.ts       30+ 领域实体类型定义                             │
 │  ├── abilityTags.ts 5 学科三级能力标签体系 (PRD §11-15)              │
 │  └── abilityTransfer.ts   能力迁移矩阵 (PRD §12B/§15B)               │
 ├─────────────────────────────────────────────────────────────────────┤
 │  Persistence                                                         │
 │  Cloudflare Pages Functions (functions/api/[[path]].ts)              │
 │  └── 同域 /api → D1 Binding "DB"                                     │
-│      ├── 服务端账户: users / sessions / auth_attempts                │
-│      ├── 15 张业务表: (workspace, id, updated_at, data)               │
-│      ├── workspace = 用户名（小写），多设备共享                        │
-│      └── sync_backups: 每账户最近 20 个备份点                         │
+│      ├── 27 张业务表: (workspace, id, updated_at, data)               │
+│      ├── 服务端账号: users / sessions / auth_attempts                 │
+│      └── sync_backups: 每工作空间最近 20 个备份点                     │
 │  IndexedDB（本机）                                                   │
-│  └── 仅偏好设置                                                      │
+│  └── 仅登录偏好 / 设备级元数据                                        │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -146,70 +187,53 @@
 ability-growth-system/
 ├── src/
 │   ├── App.tsx                     # 路由 + 身份感知导航 + RoleGuard
-│   ├── main.tsx                    # 入口: BrowserRouter + Providers
+│   ├── main.tsx                    # 入口: BrowserRouter + AuthProvider
 │   ├── domain/                     # 领域模型
-│   │   ├── types.ts                # 15+ 实体类型
+│   │   ├── types.ts                # 30+ 实体类型 + 学段模块可见性
 │   │   ├── abilityTags.ts          # 三级能力标签体系
 │   │   └── abilityTransfer.ts      # 能力迁移矩阵
 │   ├── services/                   # 服务层
-│   │   ├── localDB.ts              # 业务 CRUD 门面（转调 D1）+ 设备级元数据
+│   │   ├── localDB.ts              # 业务 CRUD 门面（转调 d1Client）+ 设备元数据
 │   │   ├── d1Client.ts             # Pages 同域 /api 请求层
-│   │   ├── snapshot.ts             # 15 张表名单 / 快照类型
+│   │   ├── snapshot.ts             # 27 张表名单 / 快照类型
 │   │   ├── analytics.ts            # 基础分析引擎
 │   │   ├── insights.ts             # P2 深度洞察引擎
 │   │   ├── planner.ts              # 学习规划器
-│   │   ├── aiPrompt.ts             # 外部 AI 辅助
+│   │   ├── pdca.ts                 # PDCA 状态机 / 效率分析
+│   │   ├── careerAssessment.ts     # 职业测评与报告
+│   │   ├── literacy.ts             # 学习素养维度
 │   │   └── taskTemplates.ts        # 任务模板 / 快捷短语
 │   ├── hooks/
-│   │   ├── useAuth.tsx             # 服务端登录/注册/退出 + 会话状态
+│   │   ├── useAuth.tsx             # 会话登录/注册/登出
 │   │   ├── useAppSession.tsx       # 身份/学段/学科/当前学生偏好
-│   │   └── useSyncStatus.tsx       # D1 连通性 + 云端记录数
-│   ├── components/
-│   │   ├── AppLayout.tsx           # 侧边栏外壳 + 退出登录
-│   │   ├── RoleGuard.tsx           # 路由权限守卫（教师专属）
-│   │   ├── Toaster.tsx / MasteryBar.tsx / RadarChart.tsx ...
-│   ├── pages/                      # 学生端页面
-│   │   ├── DashboardPage.tsx
-│   │   ├── TrainingsPage.tsx
-│   │   ├── AbilityCenterPage.tsx
-│   │   ├── ProblemCenterPage.tsx
-│   │   ├── ExamDiagnosisPage.tsx
-│   │   ├── ReviewPage.tsx
-│   │   ├── TimelinePage.tsx
-│   │   ├── AnalyticsPage.tsx
-│   │   ├── InsightsPage.tsx        # P2 深度洞察
-│   │   ├── ExamRegistrationPage.tsx
-│   │   ├── StoragePage.tsx         # 数据存储 / 备份恢复
-│   │   ├── SettingsPage.tsx
-│   │   ├── LoginPage.tsx
-│   │   └── OnboardingPage.tsx
-│   └── pages/teacher/              # 教师端页面
-│       ├── ClassOverviewPage.tsx
-│       ├── StudentsPage.tsx        (从 pages/ 复用)
-│       ├── StudentDetailPage.tsx
-│       ├── AssignmentsPage.tsx
-│       ├── CorrectionPage.tsx
-│       ├── StudentComparePage.tsx
-│       ├── TeachingEffectPage.tsx
-│       ├── AIAssistPage.tsx
-│       └── WarningPage.tsx
+│   │   ├── useSyncStatus.tsx       # D1 连通性 + 云端记录数
+│   │   └── useKeyboardShortcuts.tsx
+│   ├── components/                 # RoleGuard / Toaster / 图表 / PDCA 组件 ...
+│   └── pages/                      # 学生端页面
+│       ├── DashboardPage.tsx / TrainingsPage.tsx / AbilityCenterPage.tsx ...
+│       ├── PdcaPage.tsx / CareerPage.tsx / LiteracyPage.tsx ...
+│       ├── StoragePage.tsx         # D1 存储状态 / 备份恢复
+│       ├── SettingsPage.tsx
+│       ├── LoginPage.tsx           # 登录 / 注册
+│       └── teacher/                # 教师端页面
 ├── functions/
-│   ├── api/[[path]].ts             # Pages Functions: 账户会话 + /api CRUD + 备份
+│   ├── api/[[path]].ts             # Pages Functions: 鉴权 + /api CRUD + 备份
 │   └── tsconfig.json
-├── migrations/0001_init.sql        # D1 建表脚本（15 张业务表 + sync_backups）
-├── migrations/0002_auth.sql        # users / sessions / auth_attempts
+├── migrations/
+│   ├── 0001_init.sql               # 27 张业务表 + sync_backups
+│   └── 0002_auth.sql               # users / sessions / auth_attempts
 ├── public/_redirects               # SPA 路由回退
-├── wrangler.toml                   # Pages 构建输出 + D1 绑定
-├── .github/workflows/              # CI（当前无，部署走 Cloudflare Pages 集成）
+├── scripts/cf-pages-build.sh       # Pages 构建：克隆 shared-core + npm ci + build
+├── worker/                         # 旧版独立同步 Worker + 种子数据（前端不再使用）
+├── wrangler.toml                   # Pages 输出目录 + D1 绑定
 ├── package.json
-├── vite.config.ts                  # host 0.0.0.0 · port 3000 · strictPort
+├── vite.config.ts                  # host 0.0.0.0 · port 3000 · /api 代理
 ├── tailwind.config.js
 └── tsconfig.app.json
 ```
 
-> **共享基座 @shared/core**：通过 `git+https://github.com/ProMatheus-ltsc/shared-core.git` 引入（见 package.json），
-> 安装到 `node_modules/@shared/core`，提供表单引擎（RHF 增强版）、认证、Layout、PasswordInput、图表等基础能力；
-> tailwind.config.js 已将其 `src` 纳入 content 扫描。
+> **共享基座 @shared/core**：以 `file:../shared-core` 方式引入，提供表单引擎、Layout、PasswordInput、Toast、图表等基础能力。
+> `tailwind.config.js` 已将其 `src` 纳入 content 扫描；Cloudflare Pages 构建由 `scripts/cf-pages-build.sh` 自动 clone 该仓库。
 
 ---
 
@@ -217,7 +241,7 @@ ability-growth-system/
 
 ### 5.1 D1 表结构
 
-15 张业务表结构一致，主键为 `id`，`workspace` 为登录用户名（小写）：
+27 张业务表结构一致，主键为 `id`，`workspace` 为登录用户名（小写）：
 
 ```sql
 CREATE TABLE trainings (
@@ -246,42 +270,52 @@ CREATE INDEX idx_trainings_workspace_updated ON trainings(workspace, updated_at)
 | `registrations` | 公考报考信息 | postName · department · examType · examDate |
 | `stagePlans` | 阶段规划 | stage · startDate · endDate · focusModules |
 | `spacedReviews` | 艾宾浩斯间隔复习 | abilityPath · intervals · currentIndex · nextDueDate |
+| `pdcaProblems` | PDCA 问题 | currentStage · problemType · lifeDomain · rootCause |
+| `careerAssessments` | 职业测评 | gradeLevel · answers · result |
+| `careerReports` | 职业报告 | assessmentId · quadrants · recommendations · vetoes |
+| `subjectiveAnswers` | 申论作答版本 | parentId · version · content · review |
+| `interviewRecords` | 面试训练 | questions · thinkingSeconds · answeringSeconds · selfReview |
+| `pdcaArtifacts` | PDCA 产出物 | problemId · stage · title · content |
+| `customTools` | 自定义 PDCA 工具 | name · url · stage · embedMode |
+| `weeklyChecklists` | 周检查清单 | weekStart · items |
+| `collaborationEvents` | 协作行为 | studentId · kind · date · detail |
+| `vetoOverrides` | 一票否决解除 | reportId · candidateId · reason |
+| `careerObservationPoints` | 3 个月观察点 | assessmentId · triggeredAt · note |
+| `careerRetestReflections` | 复测反思 | assessmentId · answers · createdAt |
 
-另有 `sync_backups(id, account_id, created_at, data)` 保存每个工作空间最近 20 个全量备份点。
+辅助表：
 
-账户相关表：
+- `users(id, username, password_hash, created_at)` — 用户名唯一（小写）。
+- `sessions(token_hash, user_id, created_at, expires_at, user_agent, ip_hash)` — 仅保存令牌 SHA-256。
+- `auth_attempts(ip_hash, kind, attempted_at)` — 注册/登录失败限流。
+- `sync_backups(id, account_id, created_at, data)` — 每个工作空间最近 20 个全量备份点。
 
-| 表 | 说明 |
-|-------|------|
-| `users` | `username_normalized` 唯一；密码以 `pbkdf2-sha256$<iterations>$<salt>$<hash>` 存储 |
-| `sessions` | 只保存会话令牌的 SHA-256 哈希，30 天过期 |
-| `auth_attempts` | 按 IP 哈希统计注册/登录失败次数，10 分钟窗口限流 |
-
-浏览器 IndexedDB 仅保留偏好设置（`meta`），不存储业务数据和登录令牌。
+浏览器 IndexedDB 仅保留设备级 `meta`（偏好、最近录入默认值），不存储业务数据。
 
 ### 5.2 Pages Functions API
 
-前端只依赖同域 `/api`。账户端点用用户名 + 密码换取 HttpOnly 会话 Cookie，浏览器自动随请求携带；
-业务端点在服务端校验会话，并把工作空间固定为该账户的用户名，客户端无法指定其他工作空间。
+前端只依赖同域 `/api`，通过 HttpOnly 会话 Cookie 鉴权；业务路由的工作空间由服务端会话推导，客户端无法指定。
 
-| 端点 | 鉴权 | 说明 |
-|------|:----:|------|
-| `POST   /api/auth/register` | 公开 | 注册并自动登录（用户名 3-32 位，密码 8-72 位） |
-| `POST   /api/auth/login` | 公开 | 登录并签发会话 Cookie |
-| `POST   /api/auth/logout` | 会话 | 删除当前会话并清除 Cookie |
-| `GET    /api/auth/me` | 会话 | 当前登录用户与工作空间 |
-| `GET    /api/health` | 公开 | 连通性探针（D1 可用性） |
-| `GET    /api/stats` | 会话 | 当前工作空间各表记录数 |
-| `GET    /api/stores/:store` | 会话 | 列出记录 |
-| `GET    /api/stores/:store/:id` | 会话 | 读取单条 |
-| `PUT    /api/stores/:store/:id` | 会话 | 新增/覆盖单条 |
-| `DELETE /api/stores/:store/:id` | 会话 | 删除单条 |
-| `POST   /api/stores/:store/bulk` | 会话 | 批量 upsert |
-| `DELETE /api/stores` | 会话 | 清空当前工作空间 |
-| `GET/POST /api/backups` | 会话 | 备份列表 / 创建备份 |
-| `POST   /api/backups/:id/restore` | 会话 | 用备份覆盖当前工作空间 |
+| 端点 | 说明 |
+|------|------|
+| `GET  /api/health` | 连通性探针（D1 可用性） |
+| `POST /api/auth/register` | 注册（用户名 + 密码），成功后写入会话 Cookie |
+| `POST /api/auth/login` | 登录 |
+| `POST /api/auth/logout` | 登出并清除 Cookie |
+| `GET  /api/auth/me` | 当前会话用户 |
+| `GET  /api/stats` | 当前工作空间各表记录数 |
+| `GET  /api/stores/:store` | 列出记录 |
+| `GET  /api/stores/:store/:id` | 读取单条 |
+| `PUT  /api/stores/:store/:id` | 新增/覆盖单条 |
+| `DELETE /api/stores/:store/:id` | 删除单条 |
+| `POST   /api/stores/:store/bulk` | 批量 upsert |
+| `DELETE /api/stores` | 清空当前工作空间 |
+| `GET/POST /api/backups` | 备份列表 / 创建备份 |
+| `POST   /api/backups/:id/restore` | 用备份覆盖当前工作空间 |
 
 **冲突策略**: Last-Write-Wins，按 `updatedAt / createdAt / evaluationTime` 逐条比对，保留较新版本。
+**账号安全**: 密码使用 PBKDF2-SHA256（10 万次迭代）加盐哈希；会话令牌 30 天有效，仅存哈希；
+同一 IP 10 分钟内注册失败 8 次或登录失败 10 次会被限流。
 
 ---
 
@@ -310,7 +344,6 @@ CREATE INDEX idx_trainings_workspace_updated ON trainings(workspace, updated_at)
 | `/corrections` 批改评价 | ❌ | ✅ | **教师专属** |
 | `/compare` 学生对比 | ❌ | ✅ | **教师专属** |
 | `/effect` 教学效果 | ❌ | ✅ | **教师专属** |
-| `/ai-assist` AI 辅助评估 | ❌ | ✅ | **教师专属** |
 | `/warnings` 预警中心 | ❌ | ✅ | **教师专属** |
 
 学生访问教师路由时,`<TeacherOnly>` 会重定向到 `/` 工作台。 用户可在「设置」中切换身份。
@@ -375,60 +408,64 @@ for each week:
 
 ### 8.1 环境要求
 
-- Node.js ≥ 20
-- npm ≥ 10（依赖从官方 npm 源安装）
+- Node.js ≥ 20.19（Vite 8 要求 `^20.19.0 || >=22.12.0`）
+- npm ≥ 10
+- 共享基座目录 `../shared-core`（`@shared/core` 以 `file:` 依赖引入）
 
 ### 8.2 安装与启动
 
 ```bash
 npm install
 
-# 终端 1：本地 D1 + Pages Functions（读取 wrangler.toml，默认 http://127.0.0.1:8788）
-npm run db:migrate:local      # 首次：建业务表 + 账户表（旧库会自动补 workspace 列）
+# 终端 1：本地 D1 + Pages Functions（默认 http://127.0.0.1:8788）
+npm run db:migrate:local      # 首次：建表
 npm run pages:dev             # 构建前端并启动 Pages dev
 
 # 终端 2：前端热更新（Vite 代理 /api → 127.0.0.1:8788）
 npm run dev                   # 访问 http://localhost:3000
 ```
 
-> 若本机网络代理导致 GitHub tarball 下载证书校验失败，可临时用 `NPM_CONFIG_STRICT_SSL=false npm install`；
-> `@shared/core` 为 git 依赖，首次安装会从 GitHub 拉取。
+> 本地 D1 数据保存在 `.wrangler/state/v3/d1`（已 gitignore）。
+> 直接用浏览器访问 `http://127.0.0.1:8788` 时，由 Pages dev 同时提供静态页面和 `/api`。
 
 ### 8.3 类型检查 & 构建
 
 ```bash
 npm run typecheck    # 前端 + functions 独立类型检查 (不生成文件)
+npm run lint         # oxlint
 npm run build        # Vite 构建
 npm run preview      # 本地预览生产构建（不含 /api）
 ```
 
-### 8.4 本地联调说明
+### 8.4 首次使用
 
-- `vite.config.ts` 将 `/api` 代理到 `http://127.0.0.1:8788`，必须同时运行 `npm run pages:dev` 才能读写 D1。
-- 本地 D1 数据保存在 `.wrangler/state/v3/d1`（已 gitignore）。
-- 直接用浏览器访问 `http://127.0.0.1:8788` 时，由 Pages dev 同时提供静态页面和 `/api`。
+打开应用 → 注册用户名和密码 → 进入学段/学科引导 → 开始记录。
+再次访问时自动使用当前会话；同一用户名在其它设备登录即可看到相同数据。
+
+### 8.5 Vite 服务器配置
+
+`vite.config.ts` 固定 `host: '0.0.0.0'` + `port: 3000` + `strictPort: true`，并将 `/api` 代理到本地 Pages dev。
 
 ---
 
-## 9. 部署
+## 9. 部署（Cloudflare Pages + Pages Functions + D1）
 
-### 9.1 前端 + API：Cloudflare Pages
+### 9.1 Cloudflare Pages（前端 + API）
 
-项目通过 Cloudflare Pages 的 **GitHub 集成**部署：在 Dashboard 创建 Pages 项目并连接本仓库后，
-每次 push 到 `main` 自动构建。`functions/` 目录会随 Pages 一起发布，提供同域 `/api`。
+通过 Cloudflare Pages 的 GitHub 集成部署：push 到 `main` 自动构建，`functions/` 目录随 Pages 一起发布，提供同域 `/api`。
 
-| 配置项 | 值 |
-|--------|-----|
-| 构建命令 | `npm ci && npm run build` |
-| 输出目录 | `dist` |
-| Node 版本 | 20 |
-| Pages 项目名 | `ability-growth-system` |
-| 访问域名 | `https://<项目名>.<你的 Pages 子域>.pages.dev`（不使用 workers.dev） |
+- **Build command**: `bash scripts/cf-pages-build.sh`
+- **Build output directory**: `dist`
+- **Environment variables**: `NODE_VERSION = 22`
+
+> `@shared/core` 以 `file:../shared-core` 方式引入，构建时要求项目父目录存在该公共包；
+> `scripts/cf-pages-build.sh` 会在构建前自动 clone `github.com/ProMatheus-ltsc/shared-core` 到父目录并安装其依赖。
+> 本地手动 `wrangler pages deploy dist` 无需该脚本（本地已存在 shared-core）。
 
 也可命令行部署：
 
 ```bash
-npm run pages:deploy    # 构建并 wrangler pages deploy dist
+npm run pages:deploy
 ```
 
 ### 9.2 绑定 Cloudflare D1
@@ -439,29 +476,35 @@ npm run pages:deploy    # 构建并 wrangler pages deploy dist
    npx wrangler d1 create ability_growth
    ```
 
-2. 把 `database_id` 填入根目录 [`wrangler.toml`](./wrangler.toml) 的 `[[d1_databases]]`；
+2. 把 `database_id` 填入根目录 `wrangler.toml` 的 `[[d1_databases]]`；
    或在 Pages 项目 **Settings → Functions → D1 database bindings** 中绑定：
    - Variable name: `DB`
    - D1 database: `ability_growth`
 
-3. 执行建表（业务表 + `users` / `sessions` / `auth_attempts`）：
+3. 执行建表（27 张业务表 + 账户/会话表）：
 
    ```bash
    npm run db:migrate:remote
    ```
 
-4. 部署后访问 `https://<项目>.pages.dev/api/health`，返回 `{"ok":true,"storage":"d1"}` 即连通。
-   首次使用在登录页注册用户名和密码即可；暂不接入邮箱，因此没有找回密码流程。
+   Pages Functions 首次请求也会自动补建缺失的表，因此旧库无需手工迁移。
 
-> 若旧数据已按用户名存放在 `workspace` 列，用同一个用户名注册后即可看到原有数据。
+4. 部署后访问 `https://<项目>.pages.dev/api/health`，返回 `{"ok":true,"storage":"d1"}` 即连通。
+
 > D1 是业务数据的唯一来源，应用不提供本地数据导入/合并，也不提供 JSON 导出。
 > 备份与恢复都在云端完成（`sync_backups` 表，每个工作空间保留最近 20 个版本）。
+> 账号密码与会话完全由 Pages Functions 管理，无需额外环境变量或访问令牌。
+
+### 9.3 旧版 Worker（可选，兼容保留）
+
+`worker/` 目录是早期独立同步 Worker 与种子数据管线，当前前端已不再使用。
+如需继续维护种子数据，可参考 `worker/README` / `worker/wrangler.toml` 单独部署；它与 Pages Functions 共用同一个 D1 数据库时请勿写入业务表。
 
 ---
 
 ## 10. 版本演进路线
 
-- **v0.1.0 (当前)**: P0 + P1 + P2 全需求覆盖；业务数据直连 Cloudflare D1（Pages Functions），服务端用户名/密码登录 + HttpOnly 会话 Cookie，按用户名分工作空间；接入 `@shared/core` 共享基座包
+- **v0.1 (当前)**: P0 + P1 + P2 全需求覆盖 + PDCA/职业选择/学习素养；业务数据直连 Cloudflare D1（Pages Functions），服务端用户名密码登录，按用户名分工作空间
 - v0.2 (规划): 语文/英语/化学/生物 能力标签库补齐
 - v0.3 (规划): 教师端多设备协同、批改照片上传、语音批改
 - v1.0 (规划): 移动端 PWA、离线优先架构完善、多语言
@@ -470,11 +513,11 @@ npm run pages:deploy    # 构建并 wrangler pages deploy dist
 
 ## 11. 引用
 
-- PRD 版本: V5.1 (交互体验增强版)
-- 共享基座: [`@shared/core`](https://github.com/ProMatheus-ltsc/shared-core)（GitHub git 依赖，复用 root-cause-analysis / personal_review_system 的表单/账户/工具基础层）
+- PRD 版本: V5.8（P0 + P1 + P2 + §30 PDCA + §31 职业选择 + §18A 学习素养）
+- 共享基座: [`@shared/core`](https://github.com/ProMatheus-ltsc/shared-core)（以 `file:../shared-core` 本地路径引入，勿提交到本仓库）
 - 图表: recharts
 - 图标: lucide-react
-- 存储: idb (Jake Archibald)
+- 存储: Cloudflare D1 + Pages Functions；idb 仅用于设备级元数据
 
 ---
 

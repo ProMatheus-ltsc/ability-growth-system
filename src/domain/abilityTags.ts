@@ -143,6 +143,10 @@ const XINGCE: AbilityTag[] = [
   t('xingce', '数量关系', '排列组合', 5, '1月', '排列组合', 'adult'),
   t('xingce', '常识判断', '时政热点', 3, '1周', '时政题', 'adult'),
   t('xingce', '常识判断', '法律', 4, '1月', '法律题', 'adult'),
+  t('xingce', '政治理论', '新思想', 3, '1周', '政治理论题', 'adult'),
+  t('xingce', '政治理论', '时事政治', 3, '1周', '时政题', 'adult'),
+  t('xingce', '政治理论', '马克思主义', 4, '2周', '政治理论题', 'adult'),
+  t('xingce', '政治理论', '政治经济学', 4, '2周', '政治理论题', 'adult'),
 ];
 
 /** 申论 */
@@ -246,6 +250,33 @@ export interface RadarDimension {
 }
 
 export const RADAR_DIMENSIONS: Partial<Record<`${GradeLevel}-${Subject}`, RadarDimension[]>> = {
+  'primary-math': [
+    { key: 'number', label: '数与运算', weight: 30, modules: ['数与运算'] },
+    { key: 'geometry', label: '图形与几何', weight: 22, modules: ['图形与几何'] },
+    { key: 'measure', label: '量与计量', weight: 15, modules: ['量与计量'] },
+    { key: 'data', label: '数据与可能性', weight: 13, modules: ['数据与可能性'] },
+    { key: 'problem', label: '问题解决', weight: 20, modules: ['问题解决'] },
+  ],
+  'junior-math': [
+    { key: 'algebra', label: '代数运算', weight: 32, modules: ['代数运算'] },
+    { key: 'geometry', label: '几何推理', weight: 32, modules: ['几何推理'] },
+    { key: 'statistics', label: '数据统计与概率', weight: 15, modules: ['数据统计与概率'] },
+    { key: 'comprehensive', label: '综合应用', weight: 21, modules: ['综合应用'] },
+  ],
+  'senior-math': [
+    { key: 'function', label: '函数分析', weight: 28, modules: ['函数分析'] },
+    { key: 'algebra', label: '代数与方程', weight: 20, modules: ['代数与方程'] },
+    { key: 'geometry', label: '几何', weight: 22, modules: ['几何'] },
+    { key: 'probability', label: '概率统计', weight: 14, modules: ['概率统计'] },
+    { key: 'thinking', label: '数学思维', weight: 16, modules: ['数学思维'] },
+  ],
+  'adult-math': [
+    { key: 'function', label: '函数分析', weight: 28, modules: ['函数分析'] },
+    { key: 'algebra', label: '代数与方程', weight: 20, modules: ['代数与方程'] },
+    { key: 'geometry', label: '几何', weight: 22, modules: ['几何'] },
+    { key: 'probability', label: '概率统计', weight: 14, modules: ['概率统计'] },
+    { key: 'thinking', label: '数学思维', weight: 16, modules: ['数学思维'] },
+  ],
   'junior-physics': [
     { key: 'mechanics', label: '力学', weight: 30, modules: ['力学基础', '压强与浮力', '功与机械能'] },
     { key: 'electric', label: '电学', weight: 25, modules: ['电学'] },
@@ -268,7 +299,7 @@ export const RADAR_DIMENSIONS: Partial<Record<`${GradeLevel}-${Subject}`, RadarD
     { key: 'material', label: '资料分析', weight: 25, modules: ['资料分析'] },
     { key: 'language', label: '言语理解', weight: 20, modules: ['言语理解'] },
     { key: 'common', label: '常识判断', weight: 12, modules: ['常识判断'] },
-    { key: 'politics', label: '政治理论', weight: 10, modules: [] },
+    { key: 'politics', label: '政治理论', weight: 10, modules: ['政治理论'] },
     { key: 'quantity', label: '数量关系', weight: 8, modules: ['数量关系'] },
   ],
   'adult-shenlun': [

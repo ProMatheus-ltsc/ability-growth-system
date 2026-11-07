@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "vite --host 0.0.0.0",
     "build": "vite build",
     "typecheck": "tsc -p tsconfig.app.json --noEmit && tsc -p tsconfig.node.json --noEmit && tsc -p functions/tsconfig.json --noEmit",
     "lint": "oxlint",
@@ -15,14 +15,14 @@
     "db:migrate:remote": "wrangler d1 migrations apply ability_growth --remote"
   },
   "dependencies": {
-    "@shared/core": "git+https://github.com/ProMatheus-ltsc/shared-core.git",
-    "clsx": "^2.1.1",
-    "date-fns": "^4.1.0",
+    "@shared/core": "file:../shared-core",
+    "clsx": "^2.1.0",
+    "date-fns": "^3.6.0",
     "idb": "^8.0.0",
+    "react-hook-form": "^7.52.0",
     "lucide-react": "^0.400.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
-    "react-hook-form": "^7.54.2",
     "react-router-dom": "^6.26.0",
     "recharts": "^2.12.7",
     "uuid": "^9.0.1"

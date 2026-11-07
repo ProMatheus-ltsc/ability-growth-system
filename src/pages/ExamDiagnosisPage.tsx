@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useState } from 'react';
 import { v4 as uuid } from 'uuid';
-import { FlaskConical, PlusCircle, Trash2, X, Zap } from 'lucide-react';
-import { useToast } from '@shared/core';
+import { FlaskConical, PlusCircle, Trash2, Wrench, X, Zap } from 'lucide-react';
+import { TableScroll, useToast } from '@shared/core';
 import { useAppSession } from '../hooks/useAppSession';
 import { findExams, putRecord, deleteRecord } from '../services/localDB';
 import { PageHeader } from '../components/PageHeader';
 import { EmptyState } from '../components/EmptyState';
 import { MasteryBar } from '../components/MasteryBar';
-import { getModules } from '../domain/abilityTags';
+import { getAbilityTags, getModules } from '../domain/abilityTags';
 import { scoreToLevel, SUBJECT_LABEL } from '../domain/types';
-import type { ExamRecord, Subject } from '../domain/types';
+import type { AbilityGap, ExamRecord, FixTask, Subject } from '../domain/types';
 
 export function ExamDiagnosisPage() {
   const { prefs } = useAppSession();
@@ -24,6 +24,57 @@ export function ExamDiagnosisPage() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  const convertToFixTasks = async (exam: ExamRecord) => {
+    const now = new Date().toISOString();
+    // 找出掌握度 <60% 的模块, 每个模块建能力缺口 + 修复任务
+    const weakModules = exam.moduleBreakdown.filter((m) => m.score < 60);
+    if (weakModules.length === 0) {
+      showToast('本次模考没有明显薄弱模块 (掌握度 < 60%)', 'info');
+      return;
+    }
+    const generatedIds: string[] = [];
+    for (const m of weakModules) {
+      const tags = getAbilityTags(prefs.gradeLevel, exam.subject).filter((t) => t.module === m.module);
+      const path = tags[0]?.path ?? `${exam.subject}/${m.module}/综合薄弱`;
+      const gapId = uuid();
+      const gap: AbilityGap = {
+        id: gapId,
+        studentId: exam.studentId,
+        subject: exam.subject,
+        abilityPath: path,
+        errorCategory: 'not-know',
+        severity: m.score < 30 ? 'serious' : m.score < 45 ? 'medium' : 'light',
+        status: 'unresolved',
+        sourceRecordIds: [exam.id],
+        occurrenceCount: m.errors,
+        firstSeenAt: exam.date,
+        lastSeenAt: exam.date,
+        suggestion: `模考诊断: ${m.module} 掌握度 ${m.score}% (${m.level}), 建议做 20 题专项训练并订正`,
+        createdAt: now,
+        updatedAt: now,
+      };
+      const task: FixTask = {
+        id: uuid(),
+        studentId: exam.studentId,
+        subject: exam.subject,
+        abilityPath: path,
+        relatedGapId: gapId,
+        type: 'fix',
+        status: 'pending',
+        suggestedAt: now,
+        createdAt: now,
+        updatedAt: now,
+      };
+      await putRecord('gaps', gap);
+      await putRecord('tasks', task);
+      generatedIds.push(task.id);
+    }
+    const updated: ExamRecord = { ...exam, generatedTaskIds: [...(exam.generatedTaskIds ?? []), ...generatedIds], updatedAt: now };
+    await putRecord('exams', updated);
+    void refresh();
+    showToast(`已生成 ${generatedIds.length} 个修复任务`, 'success');
+  };
 
   const remove = async (id: string) => {
     if (!window.confirm('确认删除该测验记录?')) return;
@@ -68,12 +119,23 @@ export function ExamDiagnosisPage() {
                     {e.durationMinutes ? ` · 用时 ${e.durationMinutes} 分钟` : ''}
                   </div>
                 </div>
-                <button className="btn-ghost text-red-500" onClick={() => remove(e.id)}>
-                  <Trash2 size={14} />
-                </button>
+                <div className="flex flex-col gap-1">
+                  <button className="btn-primary text-xs" onClick={() => convertToFixTasks(e)}>
+                    <Wrench size={12} /> 一键生成修复任务
+                  </button>
+                  <button className="btn-ghost text-red-500 text-xs" onClick={() => remove(e.id)}>
+                    <Trash2 size={12} />
+                  </button>
+                </div>
               </div>
 
+              {/* V5.11 Bug #030 修复:测验诊断四层结构清晰分层
+                  第一层:总体诊断  第二层:模块掌握度分布
+                  第三层:主要问题清单  第四层:修复行动(一键任务) */}
               <div className="space-y-2">
+                <div className="text-[11px] text-slate-400 uppercase tracking-wider">
+                  Layer 1 · 模块掌握度分布
+                </div>
                 {e.moduleBreakdown.map((m) => (
                   <div key={m.module} className="flex items-center gap-3 text-sm">
                     <div className="w-32 text-slate-700">{m.module}</div>
@@ -86,14 +148,21 @@ export function ExamDiagnosisPage() {
               </div>
 
               {e.diagnosis && (
-                <div className="mt-3 p-3 rounded bg-blue-50 text-sm text-blue-900">
-                  💡 {e.diagnosis}
+                <div className="mt-3">
+                  <div className="text-[11px] text-slate-400 uppercase tracking-wider mb-1">
+                    Layer 2 · 总体诊断
+                  </div>
+                  <div className="p-3 rounded bg-blue-50 text-sm text-blue-900">
+                    💡 {e.diagnosis}
+                  </div>
                 </div>
               )}
 
               {e.mainProblems.length > 0 && (
                 <div className="mt-3">
-                  <div className="text-xs text-slate-500">主要问题:</div>
+                  <div className="text-[11px] text-slate-400 uppercase tracking-wider mb-1">
+                    Layer 3 · 主要能力短板
+                  </div>
                   <ul className="text-sm text-slate-700 list-disc list-inside">
                     {e.mainProblems.map((p) => (
                       <li key={p}>{p}</li>
@@ -101,6 +170,15 @@ export function ExamDiagnosisPage() {
                   </ul>
                 </div>
               )}
+
+              <div className="mt-3">
+                <div className="text-[11px] text-slate-400 uppercase tracking-wider mb-1">
+                  Layer 4 · 修复行动
+                </div>
+                <div className="text-xs text-slate-500">
+                  点击右上「一键生成修复任务」自动派生 gap 到问题中心,并生成陌生题验证任务
+                </div>
+              </div>
             </div>
           ))}
         </div>
@@ -204,7 +282,7 @@ function ExamForm({
 
   return (
     <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="card w-full max-w-2xl max-h-[90vh] overflow-y-auto p-6">
+      <div className="card w-full max-w-2xl max-h-[90vh] overflow-y-auto p-6 modal-clamp [--modal-max:42rem] [--modal-max-h:90vh]">
         <div className="flex items-center justify-between mb-4">
           <h2 className="font-bold flex items-center gap-2">
             <Zap size={18} className="text-orange-500" /> 录入模考结果
@@ -238,6 +316,7 @@ function ExamForm({
 
         <div>
           <div className="label">各模块录入(自动带出该学段/学科模块列表)</div>
+          <TableScroll label="各模块录入">
           <table className="w-full text-sm">
             <thead>
               <tr className="text-left text-xs text-slate-500 border-b border-slate-100">
@@ -275,6 +354,7 @@ function ExamForm({
               ))}
             </tbody>
           </table>
+          </TableScroll>
         </div>
 
         <div className="flex justify-end gap-2 mt-4">

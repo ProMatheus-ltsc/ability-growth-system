@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
+import { ResponsiveChart, ResponsiveGrid } from '@shared/core';
 import { BarChart3, Radar as RadarIcon, TrendingUp, ChevronRight } from 'lucide-react';
 import { useAppSession } from '../hooks/useAppSession';
 import { findAbilities, findTrainingsByStudent } from '../services/localDB';
@@ -9,8 +10,10 @@ import { MasteryBar } from '../components/MasteryBar';
 import { EmptyState } from '../components/EmptyState';
 import { AbilityRadar } from '../components/RadarChart';
 import { getAbilityTags, getModules } from '../domain/abilityTags';
+import { normalizeAbilityPath, normalizeModule } from '../domain/moduleNormalize';
 import type { AbilitySnapshot, Subject, TrainingRecord } from '../domain/types';
 import { SUBJECT_LABEL } from '../domain/types';
+import { getAbilityCopy } from '../domain/abilityCopy';
 
 export function AbilityCenterPage() {
   const { prefs } = useAppSession();
@@ -33,7 +36,10 @@ export function AbilityCenterPage() {
   const moduleMastery = useMemo(() => {
     const modules = getModules(prefs.gradeLevel, subject);
     return modules.map((m) => {
-      const scoped = trainings.filter((r) => r.subject === subject && r.module === m);
+      // 归一化后再比较: 导入数据的 `判断推理/图形推理` / `言语理解与表达` 也能归到一级模块
+      const scoped = trainings.filter(
+        (r) => r.subject === subject && normalizeModule(r.module, subject, prefs.gradeLevel) === m,
+      );
       const total = scoped.reduce((s, r) => s + r.totalQuestions, 0);
       const err = scoped.reduce((s, r) => s + r.errorCount, 0);
       const score = total === 0 ? null : Math.round(((total - err) / total) * 100);
@@ -43,23 +49,39 @@ export function AbilityCenterPage() {
 
   const abilityCards = useMemo(() => {
     const tags = getAbilityTags(prefs.gradeLevel, subject);
+    // 归一化能力路径后建索引，保证二级/一级粒度的历史快照都能对上标签
     const bySnapshotPath = new Map<string, AbilitySnapshot>();
     for (const a of abilities) {
       if (a.subject !== subject) continue;
-      const prev = bySnapshotPath.get(a.abilityPath);
-      if (!prev || a.evaluationTime > prev.evaluationTime) bySnapshotPath.set(a.abilityPath, a);
+      const key = normalizeAbilityPath(a.abilityPath, subject, prefs.gradeLevel);
+      const prev = bySnapshotPath.get(key);
+      if (!prev || a.evaluationTime > prev.evaluationTime) bySnapshotPath.set(key, a);
     }
-    return tags.map((t) => ({ tag: t, snapshot: bySnapshotPath.get(t.path) }));
+    // 一级模块的最近快照（用于给同模块下的未测能力点提供兜底参考）
+    const byModule = new Map<string, AbilitySnapshot>();
+    for (const [key, snap] of bySnapshotPath) {
+      const parts = key.split('/');
+      const module = parts[1];
+      if (!module) continue;
+      const prev = byModule.get(module);
+      if (!prev || snap.evaluationTime > prev.evaluationTime) byModule.set(module, snap);
+    }
+    return tags.map((t) => {
+      const exact = bySnapshotPath.get(t.path);
+      const moduleSnap = byModule.get(t.module);
+      return { tag: t, snapshot: exact, moduleSnapshot: exact ? undefined : moduleSnap };
+    });
   }, [prefs.gradeLevel, subject, abilities]);
 
   const stats = aggregateBySubject(trainings);
   const subjectStats = stats.find((s) => s.subject === subject);
 
+  const copy = getAbilityCopy(prefs.gradeLevel);
   return (
     <div className="space-y-5">
       <PageHeader
-        title="能力中心"
-        description="以能力掌握度为核心的多维视图。 陌生题正确率是能力增长的核心指标。"
+        title={copy.pageTitle}
+        description={copy.pageDescription}
       />
 
       <div className="flex flex-wrap items-center gap-2">
@@ -79,12 +101,20 @@ export function AbilityCenterPage() {
       </div>
 
       {subjectStats && (
-        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+        <ResponsiveGrid minItemWidth="160px" gap="0.75rem">
           <StatBlock label="综合掌握度" value={`${subjectStats.masteryScore}%`} tone="blue" />
-          <StatBlock label="陌生题正确率" value={`${Math.round(subjectStats.unfamiliarCorrectRate * 100)}%`} tone="emerald" />
+          <StatBlock
+            label={subjectStats.unfamiliarCorrectRate === null ? '陌生题正确率(无样本)' : '陌生题正确率'}
+            value={
+              subjectStats.unfamiliarCorrectRate === null
+                ? '—'
+                : `${Math.round(subjectStats.unfamiliarCorrectRate * 100)}%`
+            }
+            tone="emerald"
+          />
           <StatBlock label="累计题量" value={subjectStats.totalQuestions} tone="slate" />
           <StatBlock label="累计错题" value={subjectStats.totalErrors} tone="orange" />
-        </div>
+        </ResponsiveGrid>
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
@@ -94,7 +124,7 @@ export function AbilityCenterPage() {
             <h2 className="font-semibold text-slate-900">能力雷达图</h2>
           </div>
           {radarSlices.length === 0 ? (
-            <EmptyState icon={RadarIcon} title="暂无雷达数据" description="该学段/学科尚未定义雷达维度权重" />
+            <EmptyState icon={RadarIcon} title={copy.radarEmptyTitle} description={copy.radarEmptyDescription} />
           ) : (
             <AbilityRadar slices={radarSlices} />
           )}
@@ -104,19 +134,62 @@ export function AbilityCenterPage() {
           <div className="flex items-center gap-2 mb-3">
             <TrendingUp size={16} className="text-emerald-600" />
             <h2 className="font-semibold text-slate-900">能力增长曲线</h2>
+            {growth.some((p) => p.emergence) && (
+              <span className="badge bg-purple-50 text-purple-700 text-[10px] ml-auto">
+                ✨ 涌现点 {growth.filter((p) => p.emergence).length} 个
+              </span>
+            )}
           </div>
           {growth.length === 0 ? (
-            <EmptyState icon={TrendingUp} title="需要更多训练" description="至少 2 周的训练数据后可查看趋势" />
+            <EmptyState
+              icon={TrendingUp}
+              title={copy.growthEmptyTitle}
+              description={copy.growthEmptyDescription}
+            />
+          ) : growth.length < 2 ? (
+            <EmptyState
+              icon={TrendingUp}
+              title={copy.growthShortTitle}
+              description={copy.growthShortHint(growth.length)}
+            />
           ) : (
-            <ResponsiveContainer width="100%" height={280}>
-              <LineChart data={growth}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                <XAxis dataKey="week" tick={{ fontSize: 11 }} />
-                <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} />
-                <Tooltip />
-                <Line type="monotone" dataKey="score" stroke="#2563eb" strokeWidth={2} dot={{ r: 3 }} />
-              </LineChart>
-            </ResponsiveContainer>
+            <>
+              <ResponsiveChart minHeight="15rem" maxHeight="17.5rem">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={growth}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                  <XAxis dataKey="week" tick={{ fontSize: 11 }} />
+                  <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} />
+                  <Tooltip />
+                  <Line
+                    type="monotone"
+                    dataKey="score"
+                    stroke="#2563eb"
+                    strokeWidth={2}
+                    dot={(props: { cx?: number; cy?: number; payload?: { emergence?: boolean } }) => {
+                      const { cx = 0, cy = 0, payload } = props;
+                      if (payload?.emergence) {
+                        return (
+                          <g key={`em-${cx}-${cy}`}>
+                            <circle cx={cx} cy={cy} r={7} fill="#a855f7" stroke="#fff" strokeWidth={2} />
+                            <text x={cx} y={cy - 12} textAnchor="middle" fontSize={10} fill="#7e22ce" fontWeight={700}>
+                              ✨
+                            </text>
+                          </g>
+                        );
+                      }
+                      return <circle key={`d-${cx}-${cy}`} cx={cx} cy={cy} r={3} fill="#2563eb" />;
+                    }}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+              </ResponsiveChart>
+              {growth.some((p) => p.emergence) && (
+                <div className="text-[10px] text-slate-500 mt-1 leading-relaxed">
+                  ✨ <b className="text-purple-700">涌现点</b>:比前 5 周均值跃升 ≥ 12 分——九段心法·涌现的产品挂载, 微小叠加转变成系统力量。 单次循环平淡, 长期坚持会在某刻质变。
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -127,7 +200,7 @@ export function AbilityCenterPage() {
           <h2 className="font-semibold text-slate-900">各模块掌握度</h2>
         </div>
         {moduleMastery.every((m) => m.score === null) ? (
-          <EmptyState icon={BarChart3} title="暂无模块数据" description="记录训练后自动汇总各模块掌握度" />
+          <EmptyState icon={BarChart3} title={copy.moduleEmptyTitle} description={copy.moduleEmptyDescription} />
         ) : (
           <div className="space-y-3">
             {moduleMastery.map((m) => (
@@ -152,10 +225,10 @@ export function AbilityCenterPage() {
           <span className="text-xs text-slate-400">共 {abilityCards.length} 项</span>
         </div>
         {abilityCards.length === 0 ? (
-          <EmptyState icon={BarChart3} title="尚未定义能力标签" />
+          <EmptyState icon={BarChart3} title={copy.tagsEmptyTitle} />
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-[500px] overflow-y-auto">
-            {abilityCards.map(({ tag, snapshot }) => (
+          <ResponsiveGrid minItemWidth="280px" gap="0.5rem" className="max-h-[500px] overflow-y-auto">
+            {abilityCards.map(({ tag, snapshot, moduleSnapshot }) => (
               <div key={tag.path} className="border border-slate-100 rounded-lg p-3">
                 <div className="flex items-center justify-between mb-1">
                   <div className="text-sm text-slate-700">
@@ -165,12 +238,19 @@ export function AbilityCenterPage() {
                 </div>
                 {snapshot ? (
                   <MasteryBar score={snapshot.score} />
+                ) : moduleSnapshot ? (
+                  <div>
+                    <MasteryBar score={moduleSnapshot.score} />
+                    <div className="text-[10px] text-slate-400 mt-1">
+                      参考同模块整体掌握度（该考点暂无单独测评）
+                    </div>
+                  </div>
                 ) : (
                   <div className="text-xs text-slate-400">未测评 · 掌握周期 {tag.cycle}</div>
                 )}
               </div>
             ))}
-          </div>
+          </ResponsiveGrid>
         )}
       </div>
     </div>

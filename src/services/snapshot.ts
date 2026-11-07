@@ -7,17 +7,29 @@ import type {
   AbilitySnapshot,
   Assignment,
   AssignmentProgress,
+  CareerAssessment,
+  CareerObservationPoint,
+  CareerReport,
+  CareerVetoOverride,
+  CollaborationEvent,
   Correction,
+  CustomPdcaTool,
   ExamRecord,
   ExamRegistration,
   FixTask,
+  InterviewRecord,
+  PDCAProblem,
+  PdcaArtifact,
+  RetestReflection,
   ReviewRecord,
   SpacedReviewItem,
   StagePlan,
   StudentProfile,
+  SubjectiveAnswer,
   TaskTemplate,
   TeachingStrategy,
   TrainingRecord,
+  WeeklyChecklist,
 } from '../domain/types';
 
 export const STORE_NAMES = [
@@ -36,6 +48,18 @@ export const STORE_NAMES = [
   'registrations',
   'stagePlans',
   'spacedReviews',
+  'pdcaProblems',
+  'careerAssessments',
+  'careerReports',
+  'subjectiveAnswers',
+  'interviewRecords',
+  'pdcaArtifacts',
+  'customTools',
+  'weeklyChecklists',
+  'collaborationEvents',
+  'vetoOverrides',
+  'careerObservationPoints',
+  'careerRetestReflections',
 ] as const;
 
 export type StoreName = (typeof STORE_NAMES)[number];
@@ -58,4 +82,16 @@ export interface ExportedSnapshot {
   registrations: ExamRegistration[];
   stagePlans: StagePlan[];
   spacedReviews: SpacedReviewItem[];
+  pdcaProblems: PDCAProblem[];
+  careerAssessments: CareerAssessment[];
+  careerReports: CareerReport[];
+  subjectiveAnswers: SubjectiveAnswer[];
+  interviewRecords: InterviewRecord[];
+  pdcaArtifacts: PdcaArtifact[];
+  customTools: CustomPdcaTool[];
+  weeklyChecklists: WeeklyChecklist[];
+  collaborationEvents: CollaborationEvent[];
+  vetoOverrides: CareerVetoOverride[];
+  careerObservationPoints: CareerObservationPoint[];
+  careerRetestReflections: RetestReflection[];
 }

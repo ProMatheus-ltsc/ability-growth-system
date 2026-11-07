@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine, Legend } from 'recharts';
+import { ResponsiveChart } from '@shared/core';
 import { Lightbulb, Compass, Cpu, GitBranch, Play, Sparkles } from 'lucide-react';
 import { PageHeader } from '../components/PageHeader';
 import { EmptyState } from '../components/EmptyState';
@@ -20,6 +21,7 @@ import {
 } from '../services/insights';
 import type { AbilityGap, Subject, TrainingRecord } from '../domain/types';
 import { SUBJECT_LABEL } from '../domain/types';
+import { getInsightsCopy, type InsightsCopy } from '../domain/insightsCopy';
 
 type Tab = 'strategy' | 'forecast' | 'simulate' | 'causal' | 'leverage';
 
@@ -34,11 +36,12 @@ export function InsightsPage() {
     void findGaps(prefs.currentStudentId).then(setGaps);
   }, [prefs.currentStudentId]);
 
+  const copy = getInsightsCopy(prefs.gradeLevel);
   return (
     <div className="space-y-5">
       <PageHeader
-        title="深度洞察 · P2"
-        description="智能训练策略推荐 · 收益预测 · 因果建模 · What-if 模拟 · 迁移杠杆点。 基于历史数据的系统动力学分析。"
+        title={copy.pageTitle}
+        description={copy.pageDescription}
       />
 
       <div className="flex flex-wrap items-center gap-2">
@@ -64,21 +67,21 @@ export function InsightsPage() {
         ))}
       </div>
 
-      {tab === 'strategy' && <StrategyTab records={trainings} gaps={gaps} />}
-      {tab === 'forecast' && <ForecastTab records={trainings} subjects={prefs.subjects} />}
+      {tab === 'strategy' && <StrategyTab records={trainings} gaps={gaps} copy={copy} />}
+      {tab === 'forecast' && <ForecastTab records={trainings} subjects={prefs.subjects} copy={copy} />}
       {tab === 'simulate' && <SimulationTab records={trainings} subjects={prefs.subjects} />}
-      {tab === 'causal' && <CausalTab records={trainings} gaps={gaps} />}
-      {tab === 'leverage' && <LeverageTab gaps={gaps} />}
+      {tab === 'causal' && <CausalTab records={trainings} gaps={gaps} copy={copy} />}
+      {tab === 'leverage' && <LeverageTab gaps={gaps} copy={copy} />}
     </div>
   );
 }
 
 // ============ 策略推荐 ============
 
-function StrategyTab({ records, gaps }: { records: TrainingRecord[]; gaps: AbilityGap[] }) {
+function StrategyTab({ records, gaps, copy }: { records: TrainingRecord[]; gaps: AbilityGap[]; copy: InsightsCopy }) {
   const recs: StrategyRecommendation[] = useMemo(() => recommendStrategies(records, gaps), [records, gaps]);
   if (recs.length === 0) {
-    return <EmptyState icon={Lightbulb} title="数据不足以生成策略推荐" description="记录几次训练后系统将自动生成个性化训练策略" />;
+    return <EmptyState icon={Lightbulb} title={copy.strategyEmptyTitle} description={copy.strategyEmptyDescription} />;
   }
   return (
     <div className="card p-5">
@@ -107,7 +110,7 @@ function StrategyTab({ records, gaps }: { records: TrainingRecord[]; gaps: Abili
 
 // ============ 收益预测 ============
 
-function ForecastTab({ records, subjects }: { records: TrainingRecord[]; subjects: Subject[] }) {
+function ForecastTab({ records, subjects, copy }: { records: TrainingRecord[]; subjects: Subject[]; copy: InsightsCopy }) {
   const summaries = useMemo(() => aggregateSubjectForecasts(records, subjects), [records, subjects]);
   const [subject, setSubject] = useState<Subject>(subjects[0] ?? 'math');
   const detail = useMemo(() => forecastGrowth(records, subject), [records, subject]);
@@ -125,7 +128,7 @@ function ForecastTab({ records, subjects }: { records: TrainingRecord[]; subject
       <div className="card p-5">
         <h2 className="font-semibold mb-3">全学科增长预测</h2>
         {summaries.every((s) => s.weeklyRate === 0) ? (
-          <EmptyState icon={Compass} title="数据不足" description="每个学科至少 2 周数据后可生成预测" />
+          <EmptyState icon={Compass} title={copy.forecastEmptyTitle} description={copy.forecastEmptyDescription} />
         ) : (
           <div className="space-y-3">
             {summaries.map((s) => (
@@ -158,7 +161,8 @@ function ForecastTab({ records, subjects }: { records: TrainingRecord[]; subject
         <div className="text-sm text-slate-600 mb-3">
           当前掌握度 <b>{detail.currentMastery}%</b> · 周增长率 <b>{detail.weeklyGrowthRate}%</b> · 达到熟练需 {detail.weeksToTarget.proficient ?? '—'} 周 · 达到精通需 {detail.weeksToTarget.expert ?? '—'} 周
         </div>
-        <ResponsiveContainer width="100%" height={280}>
+        <ResponsiveChart minHeight="15rem" maxHeight="17.5rem">
+        <ResponsiveContainer width="100%" height="100%">
           <LineChart data={chart}>
             <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
             <XAxis dataKey="label" tick={{ fontSize: 11 }} />
@@ -169,6 +173,7 @@ function ForecastTab({ records, subjects }: { records: TrainingRecord[]; subject
             <Line type="monotone" dataKey="mastery" stroke="#2563eb" strokeWidth={2} dot={{ r: 3 }} name="预测掌握度" />
           </LineChart>
         </ResponsiveContainer>
+        </ResponsiveChart>
       </div>
     </div>
   );
@@ -194,7 +199,7 @@ function SimulationTab({ records, subjects }: { records: TrainingRecord[]; subje
 
   return (
     <div className="space-y-4">
-      <div className="card p-5 space-y-3">
+      <div className="card p-5 space-y-3 cq">
         <h2 className="font-semibold flex items-center gap-2">
           <Play size={16} className="text-blue-600" /> 个性化训练策略模拟 (What-if)
         </h2>
@@ -202,7 +207,7 @@ function SimulationTab({ records, subjects }: { records: TrainingRecord[]; subje
           假设每周投入 X 小时,按特定训练结构分配,N 周后能力将达到什么水平?
         </p>
 
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="cq-grid cq-cols-4 gap-3">
           <div>
             <label className="label">学科</label>
             <select className="input" value={subject} onChange={(e) => setSubject(e.target.value as Subject)}>
@@ -225,7 +230,7 @@ function SimulationTab({ records, subjects }: { records: TrainingRecord[]; subje
 
         <div>
           <div className="label">训练结构分配(比例, 自动归一化)</div>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div className="cq-grid cq-cols-4 gap-3">
             {(['topic', 'review', 'unfamiliar', 'timed'] as const).map((k) => (
               <div key={k}>
                 <label className="label text-xs">
@@ -260,7 +265,8 @@ function SimulationTab({ records, subjects }: { records: TrainingRecord[]; subje
               初始 {result.currentMastery}% → {weeks} 周后 <b>{result.finalMastery}%</b>
             </span>
           </div>
-          <ResponsiveContainer width="100%" height={260}>
+          <ResponsiveChart minHeight="14rem" maxHeight="16.25rem">
+          <ResponsiveContainer width="100%" height="100%">
             <LineChart data={[{ week: 0, mastery: result.currentMastery }, ...result.trajectory]}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
               <XAxis dataKey="week" tick={{ fontSize: 11 }} label={{ value: '周', position: 'bottom', offset: -5, fontSize: 11 }} />
@@ -271,6 +277,7 @@ function SimulationTab({ records, subjects }: { records: TrainingRecord[]; subje
               <Line type="monotone" dataKey="mastery" stroke="#2563eb" strokeWidth={2} dot={{ r: 2 }} />
             </LineChart>
           </ResponsiveContainer>
+          </ResponsiveChart>
           {result.notes.length > 0 && (
             <div className="mt-3 text-sm text-slate-600 space-y-1">
               {result.notes.map((n) => (
@@ -286,10 +293,10 @@ function SimulationTab({ records, subjects }: { records: TrainingRecord[]; subje
 
 // ============ 因果建模 ============
 
-function CausalTab({ records, gaps }: { records: TrainingRecord[]; gaps: AbilityGap[] }) {
+function CausalTab({ records, gaps, copy }: { records: TrainingRecord[]; gaps: AbilityGap[]; copy: InsightsCopy }) {
   const graph: CausalGraph = useMemo(() => buildCausalGraph(records, gaps), [records, gaps]);
   if (graph.nodes.length === 0) {
-    return <EmptyState icon={GitBranch} title="尚无足够能力短板生成因果图" />;
+    return <EmptyState icon={GitBranch} title={copy.causalEmptyTitle} />;
   }
 
   const errors = graph.nodes.filter((n) => n.kind === 'error');
@@ -297,14 +304,14 @@ function CausalTab({ records, gaps }: { records: TrainingRecord[]; gaps: Ability
   const trainings = graph.nodes.filter((n) => n.kind === 'training');
 
   return (
-    <div className="card p-5">
+    <div className="card p-5 cq">
       <h2 className="font-semibold flex items-center gap-2 mb-3">
         <GitBranch size={16} className="text-purple-600" /> 错误 → 能力缺口 → 训练方式 因果链
       </h2>
       <p className="text-sm text-slate-500 mb-4">
         将过去的错误类型映射到能力短板, 再匹配到最适合的训练方式。 这是系统动力学的浓缩视图。
       </p>
-      <div className="grid grid-cols-3 gap-3">
+      <div className="cq-grid cq-cols-3 gap-3">
         <ColumnBlock title="错误类型" tone="red" items={errors.map((n) => n.label)} />
         <ColumnBlock title="能力短板" tone="orange" items={abilities.map((n) => n.label)} />
         <ColumnBlock title="建议训练" tone="emerald" items={Array.from(new Set(trainings.map((n) => n.label)))} />
@@ -334,10 +341,10 @@ function ColumnBlock({ title, tone, items }: { title: string; tone: 'red' | 'ora
 
 // ============ 迁移杠杆 ============
 
-function LeverageTab({ gaps }: { gaps: AbilityGap[] }) {
+function LeverageTab({ gaps, copy }: { gaps: AbilityGap[]; copy: InsightsCopy }) {
   const leverages = useMemo(() => findLeveragePoints(gaps), [gaps]);
   if (leverages.length === 0) {
-    return <EmptyState icon={Cpu} title="尚未识别出可用杠杆点" description="随着能力缺口积累,系统将标记高迁移强度的能力点" />;
+    return <EmptyState icon={Cpu} title={copy.leverageEmptyTitle} description={copy.leverageEmptyDescription} />;
   }
   return (
     <div className="card p-5">

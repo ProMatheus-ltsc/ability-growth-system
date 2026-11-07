@@ -7,21 +7,33 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
 import { configureDB } from '@shared/core/services/db';
 import type {
-  TrainingRecord,
   AbilityGap,
   AbilitySnapshot,
-  StudentProfile,
-  ReviewRecord,
-  FixTask,
-  TaskTemplate,
   Assignment,
   AssignmentProgress,
-  ExamRecord,
+  CareerAssessment,
+  CareerObservationPoint,
+  CareerReport,
+  CareerVetoOverride,
+  CollaborationEvent,
   Correction,
-  TeachingStrategy,
+  CustomPdcaTool,
+  ExamRecord,
   ExamRegistration,
-  StagePlan,
+  FixTask,
+  InterviewRecord,
+  PDCAProblem,
+  PdcaArtifact,
+  RetestReflection,
+  ReviewRecord,
   SpacedReviewItem,
+  StagePlan,
+  StudentProfile,
+  SubjectiveAnswer,
+  TaskTemplate,
+  TeachingStrategy,
+  TrainingRecord,
+  WeeklyChecklist,
 } from '../domain/types';
 import type { StoreName } from './snapshot';
 import * as d1 from './d1Client';
@@ -107,6 +119,66 @@ interface AGSchema extends DBSchema {
     key: string;
     value: SpacedReviewItem;
     indexes: { studentId: string; subject: string; nextDueDate: string; status: string };
+  };
+  pdcaProblems: {
+    key: string;
+    value: PDCAProblem;
+    indexes: { studentId: string; currentStage: string; status: string; updatedAt: string };
+  };
+  careerAssessments: {
+    key: string;
+    value: CareerAssessment;
+    indexes: { studentId: string; gradeLevel: string; updatedAt: string };
+  };
+  careerReports: {
+    key: string;
+    value: CareerReport;
+    indexes: { studentId: string; assessmentId: string; generatedAt: string };
+  };
+  subjectiveAnswers: {
+    key: string;
+    value: SubjectiveAnswer;
+    indexes: { studentId: string; subject: string; date: string; parentId: string };
+  };
+  interviewRecords: {
+    key: string;
+    value: InterviewRecord;
+    indexes: { studentId: string; date: string };
+  };
+  pdcaArtifacts: {
+    key: string;
+    value: PdcaArtifact;
+    indexes: { problemId: string; stage: string; createdAt: string };
+  };
+  customTools: {
+    key: string;
+    value: CustomPdcaTool;
+    indexes: { name: string; updatedAt: string };
+  };
+  weeklyChecklists: {
+    key: string;
+    value: WeeklyChecklist;
+    indexes: { weekStart: string };
+  };
+  collaborationEvents: {
+    key: string;
+    value: CollaborationEvent;
+    indexes: { studentId: string; date: string; kind: string };
+  };
+  vetoOverrides: {
+    key: string;
+    value: CareerVetoOverride;
+    indexes: { reportId: string; candidateId: string };
+  };
+  careerObservationPoints: {
+    key: string;
+    value: CareerObservationPoint;
+    indexes: { studentId: string; assessmentId: string; triggeredAt: string };
+  };
+  careerRetestReflections: {
+    key: string;
+    value: RetestReflection;
+    indexes: { studentId: string; assessmentId: string; createdAt: string };
   };
   meta: {
     key: string;

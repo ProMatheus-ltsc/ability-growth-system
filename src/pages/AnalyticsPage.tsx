@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, LineChart, Line, CartesianGrid, Legend } from 'recharts';
+import { ResponsiveChart, ResponsiveGrid } from '@shared/core';
 import { BarChart3, TrendingUp, Wallet, AlertTriangle, Zap, Route } from 'lucide-react';
 import { PageHeader } from '../components/PageHeader';
 import { EmptyState } from '../components/EmptyState';
@@ -17,6 +18,7 @@ import {
 import { ALL_TRANSFERS, TRANSFER_STRENGTH_LABEL } from '../domain/abilityTransfer';
 import { ERROR_CATEGORY_LABEL, SUBJECT_LABEL } from '../domain/types';
 import type { AbilityGap, Subject, TrainingRecord } from '../domain/types';
+import { getAnalyticsCopy } from '../domain/analyticsCopy';
 
 type Tab = 'roi' | 'stage' | 'marginal' | 'loops' | 'transfer';
 
@@ -44,11 +46,12 @@ export function AnalyticsPage() {
   const growthSeries = useMemo(() => buildGrowthSeries(trainings, subject), [trainings, subject]);
   const priorityGaps = useMemo(() => prioritizeGaps(gaps.filter((g) => g.status === 'unresolved')), [gaps]);
 
+  const copy = getAnalyticsCopy(prefs.gradeLevel);
   return (
     <div className="space-y-5">
       <PageHeader
-        title="训练收益 & 阶段报告"
-        description="识别你的最有效训练方式、边际收益递减点、恶性反馈回路、以及能力迁移杠杆。"
+        title={copy.pageTitle}
+        description={copy.pageDescription}
       />
 
       <div className="flex flex-wrap items-center gap-2">
@@ -82,10 +85,11 @@ export function AnalyticsPage() {
             对比不同训练方式在你身上的收益率(能力掌握度增量 / 小时)。 "错误修复的单位时间收益最高" 是常见规律。
           </p>
           {roi.length === 0 ? (
-            <EmptyState icon={Wallet} title="数据不足" description="每种训练方式至少 2 次记录后可分析" />
+            <EmptyState icon={Wallet} title={copy.effEmptyTitle} description={copy.effEmptyDescription} />
           ) : (
             <>
-              <ResponsiveContainer width="100%" height={280}>
+              <ResponsiveChart minHeight="15rem" maxHeight="17.5rem">
+              <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={roi} margin={{ top: 10, right: 30, left: 0, bottom: 5 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                   <XAxis dataKey="label" tick={{ fontSize: 11 }} />
@@ -94,6 +98,7 @@ export function AnalyticsPage() {
                   <Bar dataKey="perHour" fill="#2563eb" name="每小时能力增量" />
                 </BarChart>
               </ResponsiveContainer>
+              </ResponsiveChart>
               <div className="mt-2 text-sm text-slate-600 space-y-1">
                 {roi.slice(0, 3).map((r) => (
                   <div key={r.trainingType}>
@@ -114,12 +119,12 @@ export function AnalyticsPage() {
             <BarChart3 size={16} className="text-blue-600" />
             <h2 className="font-semibold">近 30 天阶段报告</h2>
           </div>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <ResponsiveGrid minItemWidth="160px" gap="0.75rem">
             <StatCard label="训练次数" value={String(stageReport.trainingsCount)} />
             <StatCard label="累计题量" value={String(stageReport.totalQuestions)} />
             <StatCard label="累计错题" value={String(stageReport.totalErrors)} />
             <StatCard label="总投入(小时)" value={String(stageReport.totalHours)} />
-          </div>
+          </ResponsiveGrid>
 
           <div>
             <div className="font-medium text-slate-800 mb-2">各学科能力增量</div>
@@ -199,10 +204,11 @@ export function AnalyticsPage() {
             )}
           </p>
           {marginal.points.length === 0 ? (
-            <EmptyState icon={TrendingUp} title="数据不足" description="该学科尚无足够训练累计数据" />
+            <EmptyState icon={TrendingUp} title={copy.transferEmptyTitle} description={copy.transferEmptyDescription} />
           ) : (
             <>
-              <ResponsiveContainer width="100%" height={280}>
+              <ResponsiveChart minHeight="15rem" maxHeight="17.5rem">
+              <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={marginal.points}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                   <XAxis dataKey="cumulativeHours" tick={{ fontSize: 11 }} label={{ value: '累计小时', position: 'bottom', offset: -5, fontSize: 11 }} />
@@ -211,20 +217,54 @@ export function AnalyticsPage() {
                   <Line type="monotone" dataKey="mastery" stroke="#2563eb" strokeWidth={2} dot={{ r: 3 }} name="掌握度" />
                 </LineChart>
               </ResponsiveContainer>
+              </ResponsiveChart>
 
               <div className="mt-4">
-                <div className="font-medium text-slate-800 mb-2">周维度增长趋势</div>
-                <ResponsiveContainer width="100%" height={200}>
+                <div className="font-medium text-slate-800 mb-2 flex items-center gap-2">
+                  周维度增长趋势
+                  {growthSeries.some((p) => p.emergence) && (
+                    <span className="badge bg-purple-50 text-purple-700 text-[10px]">
+                      ✨ 检出涌现点 {growthSeries.filter((p) => p.emergence).length} 个
+                    </span>
+                  )}
+                </div>
+                <ResponsiveChart minHeight="11rem" maxHeight="12.5rem">
+                <ResponsiveContainer width="100%" height="100%">
                   <LineChart data={growthSeries}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                     <XAxis dataKey="week" tick={{ fontSize: 10 }} />
                     <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} />
                     <Tooltip />
                     <Legend />
-                    <Line type="monotone" dataKey="score" stroke="#2563eb" name="整体正确率" />
+                    <Line
+                      type="monotone"
+                      dataKey="score"
+                      stroke="#2563eb"
+                      name="整体正确率"
+                      dot={(props: { cx?: number; cy?: number; payload?: { emergence?: boolean } }) => {
+                        const { cx = 0, cy = 0, payload } = props;
+                        if (payload?.emergence) {
+                          return (
+                            <g key={`em-${cx}-${cy}`}>
+                              <circle cx={cx} cy={cy} r={6} fill="#a855f7" stroke="#fff" strokeWidth={2} />
+                              <text x={cx} y={cy - 10} textAnchor="middle" fontSize={10} fill="#7e22ce">
+                                涌现
+                              </text>
+                            </g>
+                          );
+                        }
+                        return <circle key={`d-${cx}-${cy}`} cx={cx} cy={cy} r={3} fill="#2563eb" />;
+                      }}
+                    />
                     <Line type="monotone" dataKey="unfamiliar" stroke="#f59e0b" name="陌生题正确率" strokeDasharray="4 4" />
                   </LineChart>
                 </ResponsiveContainer>
+                </ResponsiveChart>
+                {growthSeries.some((p) => p.emergence) && (
+                  <div className="text-[10px] text-slate-500 mt-1">
+                    ✨ 涌现点:比前 5 周均值跃升 ≥ 12 分——九段心法·涌现的产品挂载(长期积累后的非线性跃迁)
+                  </div>
+                )}
               </div>
             </>
           )}
@@ -240,7 +280,7 @@ export function AnalyticsPage() {
             同一类错误持续 4 周以上仍在复现且缺乏对应修复动作, 视为恶性反馈回路。 需要打破循环。
           </p>
           {feedbackLoops.length === 0 ? (
-            <EmptyState icon={Zap} title="未检测到恶性反馈回路" description="继续保持" />
+            <EmptyState icon={Zap} title={copy.loopEmptyTitle} description={copy.loopEmptyDescription} />
           ) : (
             <div className="space-y-2">
               {feedbackLoops.map((l) => (

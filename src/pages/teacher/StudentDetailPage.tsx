@@ -122,6 +122,72 @@ export function StudentDetailPage() {
         )}
       </div>
 
+      {/* V5.11 Bug #027 修复:学生档案 7 组件 · 第 6 · 能力基线 */}
+      <div className="card p-5">
+        <h2 className="font-semibold mb-3">能力基线(首次训练建立)</h2>
+        {trainings.length === 0 ? (
+          <EmptyState icon={User} title="尚未建立基线" description="首次训练录入后自动生成能力基线" />
+        ) : (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+            {(() => {
+              const first = trainings[trainings.length - 1];
+              const rate = first.totalQuestions === 0 ? 0 : Math.round(((first.totalQuestions - first.errorCount) / first.totalQuestions) * 100);
+              return (
+                <>
+                  <div className="p-3 rounded bg-blue-50">
+                    <div className="text-xs text-slate-500">基线日期</div>
+                    <div className="font-semibold text-slate-800 mt-1">{first.date}</div>
+                  </div>
+                  <div className="p-3 rounded bg-blue-50">
+                    <div className="text-xs text-slate-500">学科·模块</div>
+                    <div className="font-semibold text-slate-800 mt-1">
+                      {SUBJECT_LABEL[first.subject]} · {first.module}
+                    </div>
+                  </div>
+                  <div className="p-3 rounded bg-blue-50">
+                    <div className="text-xs text-slate-500">基线正确率</div>
+                    <div className="font-semibold text-slate-800 mt-1">{rate}%</div>
+                  </div>
+                  <div className="p-3 rounded bg-blue-50">
+                    <div className="text-xs text-slate-500">题量</div>
+                    <div className="font-semibold text-slate-800 mt-1">
+                      {first.totalQuestions} 题 · 错 {first.errorCount}
+                    </div>
+                  </div>
+                </>
+              );
+            })()}
+          </div>
+        )}
+      </div>
+
+      {/* V5.11 Bug #027 修复:学生档案 7 组件 · 第 7 · 训练历史时间线 */}
+      <div className="card p-5">
+        <h2 className="font-semibold mb-3">训练历史时间线(最近 10 次)</h2>
+        {trainings.length === 0 ? (
+          <EmptyState icon={User} title="尚无训练记录" />
+        ) : (
+          <div className="space-y-2">
+            {trainings.slice(0, 10).map((t) => {
+              const rate = t.totalQuestions === 0 ? 0 : Math.round(((t.totalQuestions - t.errorCount) / t.totalQuestions) * 100);
+              return (
+                <div key={t.id} className="flex items-center gap-3 text-sm border-l-2 border-blue-300 pl-3">
+                  <span className="text-xs text-slate-400 w-20">{t.date}</span>
+                  <span className="text-slate-700 flex-1">
+                    {SUBJECT_LABEL[t.subject]} · {t.module}
+                    {t.isUnfamiliar && <span className="badge bg-amber-100 text-amber-700 ml-2 text-[10px]">陌生题</span>}
+                  </span>
+                  <span className="text-xs font-semibold text-slate-600 w-16 text-right">{rate}%</span>
+                  <span className="text-xs text-slate-400 w-20 text-right">
+                    {t.totalQuestions}/{t.errorCount}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div className="card p-5">
           <h2 className="font-semibold mb-3">历次测验诊断</h2>

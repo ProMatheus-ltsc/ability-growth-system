@@ -40,3 +40,10 @@ coverage
 
 # Cloudflare local state
 .wrangler/
+
+.workbuddy/
+
+# QA artifacts (测试截图/报告，不提交)
+.specs/
+/*.png
+/*.jpg

@@ -1,0 +1,5 @@
+# 本地敏感配置（含 D1 database_id、本地 dev token），不提交
+.dev.vars
+
+# wrangler 本地运行时缓存（wrangler dev / d1 execute --local 生成），不提交
+.wrangler/

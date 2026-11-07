@@ -46,3 +46,112 @@
     @apply inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium;
   }
 }
+
+/* ===== 容器查询网格（局部适配：按父容器宽度而非视口切换列数） ===== */
+/* 配套 shared-core responsive.css 中的 .cq 容器：父容器加 .cq，网格加 .cq-grid + .cq-cols-N。
+ * 窄容器单列（.cq-cols-4 窄容器保持两列），容器 ≥42rem 时展开为 N 列；
+ * 42rem 对应桌面主内容区（≥1024px 视口）下卡片/弹窗的实际可用宽度，保证桌面列数与原 md:/sm: 断点一致。 */
+.cq-grid {
+  display: grid;
+}
+.cq-grid > * {
+  min-width: 0;
+}
+.cq-cols-2,
+.cq-cols-3 {
+  grid-template-columns: 1fr;
+}
+.cq-cols-4 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.cq-span-2 {
+  grid-column: 1 / -1;
+}
+@container (min-width: 42rem) {
+  .cq-cols-2 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .cq-cols-3 {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .cq-cols-4 {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+/* V5.11 · 报告 PDF 导出:打印样式(触发 window.print(),用户选"另存为 PDF") */
+@media print {
+  /* 隐藏所有非报告内容:侧边栏、导航、Toast 等 */
+  aside,
+  nav,
+  .print-hide,
+  [data-print-hide='true'],
+  .fixed {
+    display: none !important;
+  }
+
+  /* 主容器铺满,取消侧边栏留白 */
+  main {
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+  }
+
+  /* 只保留报告根节点:body.printing-report 时其他元素透明化 */
+  body.printing-report {
+    background: #ffffff !important;
+  }
+
+  body.printing-report .report-print-root {
+    max-width: 100% !important;
+    box-shadow: none !important;
+  }
+
+  /* 报告卡片扁平化,避免阴影/边框在纸上过重 */
+  .report-print-root .card {
+    box-shadow: none !important;
+    border-color: #d1d5db !important;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  /* 每张卡片尽量不跨页 */
+  .report-print-root h1,
+  .report-print-root h2,
+  .report-print-root h3 {
+    break-after: avoid;
+    page-break-after: avoid;
+  }
+
+  /* 打印时把折叠面板全部展开 */
+  .report-print-root details {
+    display: block !important;
+  }
+  .report-print-root details > summary {
+    display: block !important;
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+  .report-print-root details[open] > *,
+  .report-print-root details > *:not(summary) {
+    display: block !important;
+  }
+
+  /* 强制 A4 页面 + 合理边距 */
+  @page {
+    size: A4;
+    margin: 12mm 10mm;
+  }
+
+  /* 隐藏所有 button 与 input(打印时不需要交互) */
+  .report-print-root button,
+  .report-print-root input,
+  .report-print-root textarea,
+  .report-print-root select {
+    display: none !important;
+  }
+
+  /* 但允许"复选框"这种展示型的仍保留(用 print-keep 强制显示) */
+  .report-print-root .print-keep {
+    display: initial !important;
+  }
+}
