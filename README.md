@@ -495,10 +495,10 @@ npm run pages:deploy
 > 备份与恢复都在云端完成（`sync_backups` 表，每个工作空间保留最近 20 个版本）。
 > 账号密码与会话完全由 Pages Functions 管理，无需额外环境变量或访问令牌。
 
-### 9.3 旧版 Worker（可选，兼容保留）
+### 9.3 数据播种脚本（旧 Worker 已移除）
 
-`worker/` 目录是早期独立同步 Worker 与种子数据管线，当前前端已不再使用。
-如需继续维护种子数据，可参考 `worker/README` / `worker/wrangler.toml` 单独部署；它与 Pages Functions 共用同一个 D1 数据库时请勿写入业务表。
+早期独立同步 Worker `ability-growth-sync` 及其自动部署工作流已删除，前端与 API 全部由 Pages Functions 提供。
+`worker/` 目录仅保留粉笔练习数据的播种脚本 `seed-fenbi.sql`，手动执行方式见 `worker/seed-fenbi.README.md`。
 
 ---
 

@@ -32,17 +32,22 @@ python3 scripts/export_fenbi_for_ability.py
 数据源是 `mcp/fenbi`（本人真实账号），**必须走实时接口重建**——
 本地的 `data/fenbi/*.csv` 是手工导出，会停留在导出当天的状态。
 
-## 为什么走 CI 而不直接推
+## 如何执行播种
 
-本机对 `*.workers.dev` 存在 DNS 污染（解析到非 Cloudflare 段，2026-11-06 实测
-`ability-growth-sync.how2usepython.workers.dev` → `103.226.246.99`＝Meta 段），
-浏览器与命令行都连不通，但 GitHub runner 能正常访问 Cloudflare API。所以 `deploy-worker.yml` 里加了：
+旧版 `ability-growth-sync` Worker 与自动部署工作流已删除，播种改为在仓库根目录手动执行：
 
-1. **Seed fenbi practice data** —— `wrangler d1 execute ability_growth --remote --file=./seed-fenbi.sql`
-2. **Verify seed** —— 查询各表行数并输出
-3. **Commit verification report** —— 把校验结果写入 `reports/seed-verify.md` 并提交回仓库
-   （`api.github.com` 在部分网络不可达，但 git over https 可用，用 git 取回报告是唯一稳定的验证通道；
-   报告写在 `reports/` 而非 `worker/`，避免再次触发本 workflow）
+```bash
+# 播种（LWW upsert，可重复执行）
+npx wrangler d1 execute ability_growth --remote --file=worker/seed-fenbi.sql
+
+# 校验行数
+npx wrangler d1 execute ability_growth --remote --command \
+  "SELECT 'trainings' AS tbl, COUNT(*) AS n FROM trainings
+   UNION ALL SELECT 'gaps', COUNT(*) FROM gaps
+   UNION ALL SELECT 'abilities', COUNT(*) FROM abilities"
+```
+
+执行前需本机已有 `wrangler login` 或配置 `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID`。
 
 ## 幂等性
 
@@ -60,8 +65,8 @@ WHERE excluded.updated_at > <table>.updated_at
 1. 重新跑 `export_fenbi_for_ability.py` 生成新 JSON（**前置：先用 MCP 实时接口重建
    `%TEMP%/fenbi_out` 下的四个 JSON**，否则数据会停在旧导出那天）
 2. `python3 scripts/build_ability_seed_sql.py` 生成 SQL 覆盖本文件
-3. push（会触发 workflow 自动播种）
-4. 看 `reports/seed-verify.md` 的行数确认
+3. 在仓库根目录执行 `npx wrangler d1 execute ability_growth --remote --file=worker/seed-fenbi.sql`
+4. 用上面的校验命令确认各表行数
 
 ## 踩过的坑（2026-11-06）
 
