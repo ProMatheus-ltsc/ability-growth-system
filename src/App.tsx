@@ -13,6 +13,7 @@ import {
   Sparkles,
   Timer,
   FlaskConical,
+  FileText,
   BarChart3,
   LayoutDashboard,
   ClipboardList,
@@ -44,6 +45,7 @@ import { StoragePage } from './pages/StoragePage';
 
 import { TimelinePage } from './pages/TimelinePage';
 import { ExamDiagnosisPage } from './pages/ExamDiagnosisPage';
+import { SubjectiveAnswersPage } from './pages/SubjectiveAnswersPage';
 import { AnalyticsPage } from './pages/AnalyticsPage';
 import { InsightsPage } from './pages/InsightsPage';
 
@@ -89,6 +91,7 @@ function buildStudentGroups(v: Visibility): NavGroup[] {
         { to: '/abilities', icon: Activity, label: '能力中心' },
         { to: '/problems', icon: AlertOctagon, label: '问题中心' },
         { to: '/exams', icon: FlaskConical, label: '测验诊断' },
+        { to: '/subjective', icon: FileText, label: '申论作答' },
       ],
     },
     {
@@ -171,6 +174,7 @@ function buildTeacherGroups(v: Visibility): NavGroup[] {
         { to: '/abilities', icon: Activity, label: '能力中心' },
         { to: '/problems', icon: AlertOctagon, label: '问题中心' },
         { to: '/exams', icon: FlaskConical, label: '测验诊断' },
+        { to: '/subjective', icon: FileText, label: '申论作答' },
       ],
     },
     {
@@ -310,6 +314,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         <Route path="/abilities" element={<AbilityCenterPage />} />
         <Route path="/problems" element={<ProblemCenterPage />} />
         <Route path="/exams" element={<ExamDiagnosisPage />} />
+        <Route path="/subjective" element={<SubjectiveAnswersPage />} />
         <Route path="/timeline" element={<TimelinePage />} />
         <Route path="/analytics" element={<AnalyticsPage />} />
         <Route path="/insights" element={<InsightsPage />} />
