@@ -10,10 +10,12 @@ import type {
   AbilitySnapshot,
   AbilityRadarSlice,
   ErrorCategory,
+  GapStatusHistoryItem,
   GradeLevel,
   MasteryLevel,
   StudentProfile,
   Subject,
+  SubjectiveAnswer,
   TrainingRecord,
   TrainingType,
   WarningItem,
@@ -38,7 +40,9 @@ export interface SubjectStats {
   errorHotspots: Array<{ category: ErrorCategory; count: number }>;
 }
 
-export function aggregateBySubject(records: TrainingRecord[]): SubjectStats[] {
+export function aggregateBySubject(rawRecords: TrainingRecord[]): SubjectStats[] {
+  // A1 口径：同一 examId 有整卷行时以整卷为准，模块行不重复计入学科统计
+  const records = selectAggregationRecords(rawRecords);
   const bySubject = new Map<Subject, TrainingRecord[]>();
   for (const r of records) {
     const list = bySubject.get(r.subject) ?? [];
@@ -91,6 +95,300 @@ export function aggregateBySubject(records: TrainingRecord[]): SubjectStats[] {
     });
   }
   return stats;
+}
+
+/** ============ F-03 / A1 整卷与模块不重复聚合 ============ */
+
+/**
+ * 学科级聚合去重：
+ * - 无 examId 的记录原样保留（老数据）；
+ * - 同一 examId 存在 scope='full' 时排除该 examId 下全部模块行，只保留整卷行；
+ * - 同一 examId 无整卷行时保留模块行累加；
+ * - scope 缺失但有 examId 视为 module；scope='full' 但无 examId 的按无 examId 处理。
+ */
+export function selectAggregationRecords(records: TrainingRecord[]): TrainingRecord[] {
+  const fullByExam = new Set<string>();
+  for (const r of records) {
+    if (r.examId && r.scope === 'full') fullByExam.add(r.examId);
+  }
+  return records.filter((r) => {
+    if (!r.examId) return true;
+    if (r.scope === 'full') return true;
+    return !fullByExam.has(r.examId);
+  });
+}
+
+/** ============ F-04 / A2 模块统计与周环比 ============ */
+
+export interface ModuleStatsItem {
+  subject: Subject;
+  module: string;
+  totalQuestions: number;
+  totalErrors: number;
+  correctRate: number | null;
+  masteryScore: number | null;
+  totalDurationMinutes: number;
+  avgMinutesPerQuestion: number | null;
+  sampleCount: number;
+  lastSeenAt: string | null;
+}
+
+/**
+ * 模块级聚合：排除整卷行、保留模块行，按一级模块归并。
+ * 无题量样本时 correctRate / masteryScore / avgMinutesPerQuestion 为 null（不补 0）。
+ */
+export function buildModuleStats(records: TrainingRecord[]): ModuleStatsItem[] {
+  // 模块级口径（PRD F-03）：排除整卷行、保留模块行与无 examId 记录，
+  // 不套用学科级 A1 去重，否则有整卷行时模块明细会整体消失。
+  const moduleRecords = records.filter((r) => r.scope !== 'full');
+
+  const groups = new Map<string, { subject: Subject; module: string; list: TrainingRecord[] }>();
+  for (const r of moduleRecords) {
+    const module = normalizeModule(r.module, r.subject, r.gradeLevel);
+    if (!module) continue;
+    const key = `${r.subject}::${module}`;
+    const group = groups.get(key) ?? { subject: r.subject, module, list: [] };
+    group.list.push(r);
+    groups.set(key, group);
+  }
+
+  const stats: ModuleStatsItem[] = [];
+  for (const { subject, module, list } of groups.values()) {
+    const totalQuestions = list.reduce((s, r) => s + r.totalQuestions, 0);
+    const totalErrors = list.reduce((s, r) => s + r.errorCount, 0);
+    const totalDurationMinutes = list.reduce((s, r) => s + (r.durationMinutes ?? 0), 0);
+    const correctRate =
+      totalQuestions === 0 ? null : (totalQuestions - totalErrors) / totalQuestions;
+    const masteryScore = correctRate === null ? null : Math.round(correctRate * 100);
+    const avgMinutesPerQuestion =
+      totalQuestions === 0 ? null : +(totalDurationMinutes / totalQuestions).toFixed(2);
+    const lastSeenAt = list.reduce<string | null>(
+      (latest, r) => (latest === null || r.date > latest ? r.date : latest),
+      null,
+    );
+    stats.push({
+      subject,
+      module,
+      totalQuestions,
+      totalErrors,
+      correctRate,
+      masteryScore,
+      totalDurationMinutes,
+      avgMinutesPerQuestion,
+      sampleCount: list.length,
+      lastSeenAt,
+    });
+  }
+  return stats;
+}
+
+export interface WeeklyDelta {
+  currentWeek: string;
+  previousWeek: string | null;
+  currentAcc: number;
+  previousAcc: number | null;
+  /** 百分数：15 表示 +15 个百分点 */
+  deltaCorrectRate: number | null;
+  deltaQuestions: number | null;
+  deltaDurationMinutes: number | null;
+}
+
+/** 周一 00:00 起算的本地周键（结果形如 2026-11-09） */
+function mondayWeekKey(dateISO: string): string {
+  const d = new Date(dateISO);
+  if (Number.isNaN(d.getTime())) return dateISO.slice(0, 10);
+  const day = d.getDay(); // 0=周日
+  const diff = day === 0 ? -6 : 1 - day;
+  const monday = new Date(d.getFullYear(), d.getMonth(), d.getDate() + diff);
+  const y = monday.getFullYear();
+  const m = String(monday.getMonth() + 1).padStart(2, '0');
+  const dd = String(monday.getDate()).padStart(2, '0');
+  return `${y}-${m}-${dd}`;
+}
+
+/**
+ * 学科周环比：当前周 = 有数据的最近一周，上一周 = 次近一周。
+ * 只有一周数据时 previousWeek / delta 相关字段为 null。
+ */
+export function buildWeeklyDelta(records: TrainingRecord[], subject: Subject): WeeklyDelta | null {
+  const scoped = selectAggregationRecords(records).filter((r) => r.subject === subject);
+  if (scoped.length === 0) return null;
+
+  const buckets = new Map<string, TrainingRecord[]>();
+  for (const r of scoped) {
+    const key = mondayWeekKey(r.date);
+    const list = buckets.get(key) ?? [];
+    list.push(r);
+    buckets.set(key, list);
+  }
+  const weeks = Array.from(buckets.keys()).sort().reverse();
+  const currentWeek = weeks[0];
+  const previousWeek = weeks[1] ?? null;
+
+  const summarize = (list: TrainingRecord[]) => {
+    const questions = list.reduce((s, r) => s + r.totalQuestions, 0);
+    const errors = list.reduce((s, r) => s + r.errorCount, 0);
+    const duration = list.reduce((s, r) => s + (r.durationMinutes ?? 0), 0);
+    const acc = questions === 0 ? 0 : +(((questions - errors) / questions) * 100).toFixed(1);
+    return { questions, duration, acc };
+  };
+
+  const current = summarize(buckets.get(currentWeek) ?? []);
+  if (previousWeek === null) {
+    return {
+      currentWeek,
+      previousWeek: null,
+      currentAcc: current.acc,
+      previousAcc: null,
+      deltaCorrectRate: null,
+      deltaQuestions: null,
+      deltaDurationMinutes: null,
+    };
+  }
+  const previous = summarize(buckets.get(previousWeek) ?? []);
+  return {
+    currentWeek,
+    previousWeek,
+    currentAcc: current.acc,
+    previousAcc: previous.acc,
+    deltaCorrectRate: +(current.acc - previous.acc).toFixed(1),
+    deltaQuestions: current.questions - previous.questions,
+    deltaDurationMinutes: current.duration - previous.duration,
+  };
+}
+
+/** ============ F-05 / A3 限时达标 ============ */
+
+/**
+ * 单题实际用时 ≤ 单题标准用时为达标；任一侧缺失或总题量为 0 返回 null。
+ */
+export function isTimedMet(record: TrainingRecord): boolean | null {
+  if (record.standardMinutes === undefined || record.durationMinutes === undefined) return null;
+  if (record.standardMinutes <= 0 || record.durationMinutes <= 0 || record.totalQuestions <= 0) return null;
+  return record.durationMinutes <= record.standardMinutes;
+}
+
+export interface TimedCompliance {
+  rate: number | null;
+  sampleSize: number;
+}
+
+/** 仅统计可判定记录；无样本时 rate=null */
+export function timedComplianceRate(records: TrainingRecord[]): TimedCompliance {
+  let met = 0;
+  let sampleSize = 0;
+  for (const r of records) {
+    const result = isTimedMet(r);
+    if (result === null) continue;
+    sampleSize += 1;
+    if (result) met += 1;
+  }
+  return {
+    rate: sampleSize === 0 ? null : +((met / sampleSize) * 100).toFixed(1),
+    sampleSize,
+  };
+}
+
+/** ============ F-08 / T1 目标分差 ============ */
+
+export interface TargetGap {
+  target: number;
+  current: number;
+  gap: number;
+  reached: boolean;
+}
+
+/**
+ * 目标分为掌握度口径；targetScore 缺失或越界（<0 或 >100）返回 null。
+ * current 为按题量加权的整体正确率（无样本为 0）。
+ */
+export function computeTargetGap(stats: SubjectStats[], targetScore?: number): TargetGap | null {
+  if (targetScore === undefined || targetScore === null) return null;
+  if (!Number.isFinite(targetScore) || targetScore < 0 || targetScore > 100) return null;
+
+  const totalQuestions = stats.reduce((s, item) => s + item.totalQuestions, 0);
+  const totalCorrect = stats.reduce((s, item) => s + (item.totalQuestions - item.totalErrors), 0);
+  const current = totalQuestions === 0 ? 0 : Math.round((totalCorrect / totalQuestions) * 100);
+  const gap = +(targetScore - current).toFixed(1);
+  return { target: targetScore, current, gap, reached: gap <= 0 };
+}
+
+/** ============ F-09 / V1 时间分配 ============ */
+
+export interface TimeAllocationItem {
+  module: string;
+  totalMinutes: number;
+  share: number;
+  avgMinutesPerQuestion: number | null;
+  sessionCount: number;
+}
+
+/**
+ * 仅统计有效用时（durationMinutes > 0），按 A1 口径去重、按一级模块归并；
+ * share 以有效总时长为分母，空集合返回 []。
+ */
+export function buildTimeAllocation(records: TrainingRecord[]): TimeAllocationItem[] {
+  const timed = selectAggregationRecords(records).filter((r) => (r.durationMinutes ?? 0) > 0);
+
+  const groups = new Map<string, { module: string; minutes: number; questions: number; sessions: number }>();
+  for (const r of timed) {
+    const module = normalizeModule(r.module, r.subject, r.gradeLevel);
+    if (!module) continue;
+    const group = groups.get(module) ?? { module, minutes: 0, questions: 0, sessions: 0 };
+    group.minutes += r.durationMinutes ?? 0;
+    group.questions += r.totalQuestions;
+    group.sessions += 1;
+    groups.set(module, group);
+  }
+
+  const totalMinutes = Array.from(groups.values()).reduce((s, g) => s + g.minutes, 0);
+  if (totalMinutes === 0) return [];
+
+  return Array.from(groups.values())
+    .map((g) => ({
+      module: g.module,
+      totalMinutes: +g.minutes.toFixed(1),
+      share: +((g.minutes / totalMinutes) * 100).toFixed(1),
+      avgMinutesPerQuestion: g.questions === 0 ? null : +(g.minutes / g.questions).toFixed(2),
+      sessionCount: g.sessions,
+    }))
+    .sort((a, b) => b.totalMinutes - a.totalMinutes);
+}
+
+/** ============ F-07 / S1 申论四维 ============ */
+
+export interface SubjectiveDimensionSummary {
+  samples: number;
+  avg: {
+    points: number | null;
+    structure: number | null;
+    language: number | null;
+    logic: number | null;
+  };
+  weakest: string | null;
+}
+
+const DIMENSION_KEYS = ['points', 'structure', 'language', 'logic'] as const;
+
+/**
+ * 只统计存在 dimensionScores 的作答；每维只对已填值求平均；
+ * weakest 为均值最低的维度（键名），无样本时为 null。
+ */
+export function buildSubjectiveDimensions(records: SubjectiveAnswer[]): SubjectiveDimensionSummary {
+  const scoped = records.filter((r) => r.dimensionScores !== undefined);
+  const avg = { points: null as number | null, structure: null as number | null, language: null as number | null, logic: null as number | null };
+
+  if (scoped.length === 0) return { samples: 0, avg, weakest: null };
+
+  for (const key of DIMENSION_KEYS) {
+    const values = scoped
+      .map((r) => r.dimensionScores?.[key])
+      .filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
+    avg[key] = values.length === 0 ? null : +(values.reduce((s, v) => s + v, 0) / values.length).toFixed(1);
+  }
+
+  const ranked = DIMENSION_KEYS.filter((k) => avg[k] !== null).sort((a, b) => (avg[a] as number) - (avg[b] as number));
+  return { samples: scoped.length, avg, weakest: ranked[0] ?? null };
 }
 
 export function calcErrorRecurrence(
@@ -483,7 +781,8 @@ export function computeGrowthRate(series: Array<{ week: string; score: number }>
  * 归集规则:
  * - 错题数 ≥ 3 或 错题率 ≥ 40% → 归为缺口
  * - 严重度分档:错题率 ≥ 70% serious / ≥ 40% medium / 其它 light
- * - 若同学员+同学科+同模块+同错误类型已存在未验证缺口,则合并计数(occurrenceCount+1 · lastSeenAt 刷新)
+ * - 已验证缺口同 key 再次出现 → 复用 id、置 in-progress、occurrenceCount+1、reopenedCount+1、追加 reappeared 历史
+ * - 未验证缺口同 key → 合并计数并追加 merged 历史；新建缺口带 created 历史
  * - 每个 errorCategory 派生一条缺口;若训练未打错误标签,则用默认 concept 兜底
  */
 export function deriveGapsFromTraining(
@@ -504,27 +803,16 @@ export function deriveGapsFromTraining(
 
   const updated: AbilityGap[] = [];
   for (const category of categories) {
-    // 合并同类未验证缺口
+    // 同学生 + 同能力路径 + 同错误类型的缺口（不再限定未验证，已验证也参与重开）
     const existing = existingGaps.find(
       (g) =>
         g.studentId === record.studentId &&
         g.subject === record.subject &&
         g.abilityPath === abilityPath &&
-        g.errorCategory === category &&
-        g.status !== 'verified',
+        g.errorCategory === category,
     );
-    if (existing) {
-      updated.push({
-        ...existing,
-        occurrenceCount: existing.occurrenceCount + 1,
-        lastSeenAt: now,
-        updatedAt: now,
-        severity: severityMax(existing.severity, severity),
-        sourceRecordIds: existing.sourceRecordIds.includes(record.id)
-          ? existing.sourceRecordIds
-          : [...existing.sourceRecordIds, record.id].slice(-20),
-      });
-    } else {
+
+    if (!existing) {
       updated.push({
         id: uuid(),
         studentId: record.studentId,
@@ -535,14 +823,73 @@ export function deriveGapsFromTraining(
         status: 'unresolved',
         sourceRecordIds: [record.id],
         occurrenceCount: 1,
+        reopenedCount: 0,
         firstSeenAt: now,
         lastSeenAt: now,
         createdAt: now,
         updatedAt: now,
+        statusHistory: [{ status: 'unresolved', at: now, source: 'auto', reason: 'created', recordId: record.id }],
+      });
+      continue;
+    }
+
+    // 同一训练重复处理：不再追加计数与历史，避免重复写入
+    if (existing.sourceRecordIds.includes(record.id)) continue;
+
+    const seenRecordIds = [...existing.sourceRecordIds, record.id].slice(-20);
+
+    if (existing.status === 'verified') {
+      // 已验证缺口再次出现 → 复用 id 并重开为 in-progress
+      updated.push({
+        ...existing,
+        status: 'in-progress',
+        occurrenceCount: existing.occurrenceCount + 1,
+        reopenedCount: (existing.reopenedCount ?? 0) + 1,
+        lastSeenAt: now,
+        updatedAt: now,
+        severity: severityMax(existing.severity, severity),
+        sourceRecordIds: seenRecordIds,
+        statusHistory: appendStatusHistory(existing.statusHistory, {
+          status: 'in-progress',
+          at: now,
+          source: 'auto',
+          reason: 'reappeared',
+          recordId: record.id,
+          from: 'verified',
+        }),
+      });
+    } else {
+      // 未验证缺口合并计数
+      updated.push({
+        ...existing,
+        occurrenceCount: existing.occurrenceCount + 1,
+        lastSeenAt: now,
+        updatedAt: now,
+        severity: severityMax(existing.severity, severity),
+        sourceRecordIds: seenRecordIds,
+        statusHistory: appendStatusHistory(existing.statusHistory, {
+          status: existing.status,
+          at: now,
+          source: 'auto',
+          reason: 'merged',
+          recordId: record.id,
+        }),
       });
     }
   }
   return updated;
+}
+
+/** 追加历史项；同一时刻（at）同等状态的重复触发不重复追加 */
+function appendStatusHistory(
+  history: GapStatusHistoryItem[] | undefined,
+  item: GapStatusHistoryItem,
+): GapStatusHistoryItem[] {
+  const list = history ?? [];
+  const duplicated = list.some(
+    (h) => h.at === item.at && h.status === item.status && h.reason === item.reason,
+  );
+  return duplicated ? list : [...list, item];
 }
 
 function severityMax(a: AbilityGap['severity'], b: AbilityGap['severity']): AbilityGap['severity'] {

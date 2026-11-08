@@ -1,17 +1,33 @@
 import { useEffect, useMemo, useState } from 'react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
-import { ResponsiveChart, ResponsiveGrid } from '@shared/core';
+import {
+  EmptyState as CoreEmptyState,
+  ResponsiveChart,
+  ResponsiveGrid,
+  StatCard,
+  TableScroll,
+} from '@shared/core';
 import { BarChart3, Radar as RadarIcon, TrendingUp, ChevronRight } from 'lucide-react';
 import { useAppSession } from '../hooks/useAppSession';
-import { findAbilities, findTrainingsByStudent } from '../services/localDB';
-import { aggregateBySubject, buildGrowthSeries, buildRadarSlices } from '../services/analytics';
+import { findAbilities, findTrainingsByStudent, getAllRecords } from '../services/localDB';
+import {
+  aggregateBySubject,
+  buildGrowthSeries,
+  buildModuleStats,
+  buildRadarSlices,
+  buildTimeAllocation,
+  buildWeeklyDelta,
+  computeTargetGap,
+  selectAggregationRecords,
+  timedComplianceRate,
+} from '../services/analytics';
 import { PageHeader } from '../components/PageHeader';
 import { MasteryBar } from '../components/MasteryBar';
 import { EmptyState } from '../components/EmptyState';
 import { AbilityRadar } from '../components/RadarChart';
 import { getAbilityTags, getModules } from '../domain/abilityTags';
-import { normalizeAbilityPath, normalizeModule } from '../domain/moduleNormalize';
-import type { AbilitySnapshot, Subject, TrainingRecord } from '../domain/types';
+import { normalizeAbilityPath } from '../domain/moduleNormalize';
+import type { AbilitySnapshot, ExamRegistration, Subject, TrainingRecord } from '../domain/types';
 import { SUBJECT_LABEL } from '../domain/types';
 import { getAbilityCopy } from '../domain/abilityCopy';
 
@@ -19,11 +35,13 @@ export function AbilityCenterPage() {
   const { prefs } = useAppSession();
   const [trainings, setTrainings] = useState<TrainingRecord[]>([]);
   const [abilities, setAbilities] = useState<AbilitySnapshot[]>([]);
+  const [registrations, setRegistrations] = useState<ExamRegistration[]>([]);
   const [subject, setSubject] = useState<Subject>(prefs.subjects[0] ?? 'math');
 
   useEffect(() => {
     void findTrainingsByStudent(prefs.currentStudentId).then(setTrainings);
     void findAbilities(prefs.currentStudentId).then(setAbilities);
+    void getAllRecords('registrations').then(setRegistrations);
   }, [prefs.currentStudentId]);
 
   const radarSlices = useMemo(
@@ -33,19 +51,44 @@ export function AbilityCenterPage() {
 
   const growth = useMemo(() => buildGrowthSeries(trainings, subject), [trainings, subject]);
 
+  const aggregationTrainings = useMemo(() => selectAggregationRecords(trainings), [trainings]);
+  const moduleStats = useMemo(() => buildModuleStats(trainings), [trainings]);
+
+  // 无样本模块保留「暂无」，按一级模块合并统计结果
   const moduleMastery = useMemo(() => {
     const modules = getModules(prefs.gradeLevel, subject);
+    const byModule = new Map(
+      moduleStats.filter((s) => s.subject === subject).map((s) => [s.module, s] as const),
+    );
     return modules.map((m) => {
-      // 归一化后再比较: 导入数据的 `判断推理/图形推理` / `言语理解与表达` 也能归到一级模块
-      const scoped = trainings.filter(
-        (r) => r.subject === subject && normalizeModule(r.module, subject, prefs.gradeLevel) === m,
-      );
-      const total = scoped.reduce((s, r) => s + r.totalQuestions, 0);
-      const err = scoped.reduce((s, r) => s + r.errorCount, 0);
-      const score = total === 0 ? null : Math.round(((total - err) / total) * 100);
-      return { module: m, score, samples: total };
+      const stat = byModule.get(m);
+      return { module: m, score: stat?.masteryScore ?? null, samples: stat?.totalQuestions ?? 0 };
     });
-  }, [prefs.gradeLevel, subject, trainings]);
+  }, [moduleStats, prefs.gradeLevel, subject]);
+
+  const weeklyDelta = useMemo(() => buildWeeklyDelta(trainings, subject), [trainings, subject]);
+  const timed = useMemo(
+    () => timedComplianceRate(aggregationTrainings.filter((r) => r.subject === subject)),
+    [aggregationTrainings, subject],
+  );
+  const timeAllocation = useMemo(
+    () => buildTimeAllocation(trainings.filter((r) => r.subject === subject)),
+    [trainings, subject],
+  );
+
+  // 目标分：优先取最近一场未来考试，其次取最近一次已设置目标的报名
+  const targetScore = useMemo(() => {
+    const scoped = registrations.filter(
+      (r) => typeof r.targetScore === 'number' && Number.isFinite(r.targetScore),
+    );
+    if (scoped.length === 0) return undefined;
+    const today = new Date().toISOString().slice(0, 10);
+    const upcoming = scoped
+      .filter((r) => r.examDate >= today)
+      .sort((a, b) => a.examDate.localeCompare(b.examDate));
+    const fallback = [...scoped].sort((a, b) => b.examDate.localeCompare(a.examDate));
+    return (upcoming[0] ?? fallback[0]).targetScore;
+  }, [registrations]);
 
   const abilityCards = useMemo(() => {
     const tags = getAbilityTags(prefs.gradeLevel, subject);
@@ -75,6 +118,7 @@ export function AbilityCenterPage() {
 
   const stats = aggregateBySubject(trainings);
   const subjectStats = stats.find((s) => s.subject === subject);
+  const targetGap = computeTargetGap(stats, targetScore);
 
   const copy = getAbilityCopy(prefs.gradeLevel);
   return (
@@ -116,6 +160,51 @@ export function AbilityCenterPage() {
           <StatBlock label="累计错题" value={subjectStats.totalErrors} tone="orange" />
         </ResponsiveGrid>
       )}
+
+      <ResponsiveGrid minItemWidth="220px" gap="0.75rem">
+        <StatCard
+          label="本周 vs 上周"
+          value={
+            weeklyDelta?.deltaCorrectRate == null
+              ? '—'
+              : `${weeklyDelta.deltaCorrectRate > 0 ? '+' : ''}${weeklyDelta.deltaCorrectRate}pt`
+          }
+          hint={
+            weeklyDelta === null
+              ? '本周暂无训练数据'
+              : weeklyDelta.previousWeek === null
+                ? '暂无上周对比'
+                : `本周正确率 ${weeklyDelta.currentAcc}% · 上周 ${weeklyDelta.previousAcc}% · 题量 ${(weeklyDelta.deltaQuestions ?? 0) >= 0 ? '+' : ''}${weeklyDelta.deltaQuestions ?? 0}`
+          }
+          accentClassName={
+            weeklyDelta?.deltaCorrectRate == null
+              ? 'text-slate-600'
+              : weeklyDelta.deltaCorrectRate > 0
+                ? 'text-emerald-600'
+                : weeklyDelta.deltaCorrectRate < 0
+                  ? 'text-red-500'
+                  : 'text-slate-600'
+          }
+        />
+        <StatCard
+          label="限时达标率"
+          value={timed.rate === null ? '—' : `${timed.rate}%`}
+          hint={timed.rate === null ? '暂无时间基准' : `${timed.sampleSize} 条可判定记录（单题用时 ≤ 标准用时）`}
+          accentClassName={timed.rate === null ? 'text-slate-600' : 'text-blue-600'}
+        />
+        <StatCard
+          label="目标分差"
+          value={targetGap === null ? '—' : targetGap.reached ? '已达标' : `差 ${targetGap.gap} 分`}
+          hint={
+            targetGap === null
+              ? '未设置目标'
+              : `当前 ${targetGap.current}% · 目标 ${targetGap.target}%（掌握度口径，非卷面分）`
+          }
+          accentClassName={
+            targetGap === null ? 'text-slate-600' : targetGap.reached ? 'text-emerald-600' : 'text-orange-600'
+          }
+        />
+      </ResponsiveGrid>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         <div className="card p-5">
@@ -207,7 +296,7 @@ export function AbilityCenterPage() {
               <div key={m.module} className="flex items-center gap-3">
                 <div className="w-32 text-sm text-slate-700 shrink-0">{m.module}</div>
                 {m.score === null ? (
-                  <div className="flex-1 text-xs text-slate-400">无数据</div>
+                  <div className="flex-1 text-xs text-slate-400">暂无</div>
                 ) : (
                   <MasteryBar score={m.score} className="flex-1" />
                 )}
@@ -215,6 +304,44 @@ export function AbilityCenterPage() {
               </div>
             ))}
           </div>
+        )}
+      </div>
+
+      <div className="card p-5">
+        <div className="flex items-center gap-2 mb-3">
+          <BarChart3 size={16} className="text-blue-600" />
+          <h2 className="font-semibold text-slate-900">模块时间分配</h2>
+          <span className="text-xs text-slate-400">仅统计有有效用时的记录</span>
+        </div>
+        {timeAllocation.length === 0 ? (
+          <CoreEmptyState title="暂无用时数据" description="录入训练时填写用时后，这里会按模块展示时间分配" />
+        ) : (
+          <TableScroll label="模块时间分配">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs text-slate-500 border-b border-slate-100">
+                  <th className="py-2">模块</th>
+                  <th className="py-2 text-right">累计用时</th>
+                  <th className="py-2 text-right">占比</th>
+                  <th className="py-2 text-right">每题均时</th>
+                  <th className="py-2 text-right">训练次数</th>
+                </tr>
+              </thead>
+              <tbody>
+                {timeAllocation.map((t) => (
+                  <tr key={t.module} className="border-b border-slate-50">
+                    <td className="py-2 text-slate-700">{t.module}</td>
+                    <td className="py-2 text-right text-slate-600">{t.totalMinutes} 分</td>
+                    <td className="py-2 text-right text-slate-600">{t.share}%</td>
+                    <td className="py-2 text-right text-slate-600">
+                      {t.avgMinutesPerQuestion === null ? '—' : `${t.avgMinutesPerQuestion} 分`}
+                    </td>
+                    <td className="py-2 text-right text-slate-600">{t.sessionCount}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </TableScroll>
         )}
       </div>
 

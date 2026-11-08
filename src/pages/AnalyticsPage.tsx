@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, LineChart, Line, CartesianGrid, Legend } from 'recharts';
-import { ResponsiveChart, ResponsiveGrid } from '@shared/core';
+import { EmptyState as CoreEmptyState, ResponsiveChart, ResponsiveGrid, TableScroll } from '@shared/core';
 import { BarChart3, TrendingUp, Wallet, AlertTriangle, Zap, Route } from 'lucide-react';
 import { PageHeader } from '../components/PageHeader';
 import { EmptyState } from '../components/EmptyState';
@@ -12,8 +12,10 @@ import {
   analyzeMarginalYield,
   buildGrowthSeries,
   buildStageReport,
+  buildTimeAllocation,
   detectFeedbackLoops,
   prioritizeGaps,
+  selectAggregationRecords,
 } from '../services/analytics';
 import { ALL_TRANSFERS, TRANSFER_STRENGTH_LABEL } from '../domain/abilityTransfer';
 import { ERROR_CATEGORY_LABEL, SUBJECT_LABEL } from '../domain/types';
@@ -34,16 +36,23 @@ export function AnalyticsPage() {
     void findGaps(prefs.currentStudentId).then(setGaps);
   }, [prefs.currentStudentId]);
 
-  const roi = useMemo(() => analyzeTrainingROI(trainings), [trainings]);
+  // A1 口径：整卷+模块不重复计入
+  const aggregationTrainings = useMemo(() => selectAggregationRecords(trainings), [trainings]);
+
+  const roi = useMemo(() => analyzeTrainingROI(aggregationTrainings), [aggregationTrainings]);
   const stageReport = useMemo(() => {
     const now = new Date();
     const monthAgo = new Date();
     monthAgo.setDate(monthAgo.getDate() - 30);
-    return buildStageReport(trainings, gaps, monthAgo.toISOString().slice(0, 10), now.toISOString().slice(0, 10));
-  }, [trainings, gaps]);
-  const marginal = useMemo(() => analyzeMarginalYield(trainings, subject), [trainings, subject]);
-  const feedbackLoops = useMemo(() => detectFeedbackLoops(trainings, gaps), [trainings, gaps]);
-  const growthSeries = useMemo(() => buildGrowthSeries(trainings, subject), [trainings, subject]);
+    return buildStageReport(aggregationTrainings, gaps, monthAgo.toISOString().slice(0, 10), now.toISOString().slice(0, 10));
+  }, [aggregationTrainings, gaps]);
+  const marginal = useMemo(() => analyzeMarginalYield(aggregationTrainings, subject), [aggregationTrainings, subject]);
+  const feedbackLoops = useMemo(() => detectFeedbackLoops(aggregationTrainings, gaps), [aggregationTrainings, gaps]);
+  const growthSeries = useMemo(() => buildGrowthSeries(aggregationTrainings, subject), [aggregationTrainings, subject]);
+  const timeAllocation = useMemo(
+    () => buildTimeAllocation(aggregationTrainings.filter((r) => r.subject === subject)),
+    [aggregationTrainings, subject],
+  );
   const priorityGaps = useMemo(() => prioritizeGaps(gaps.filter((g) => g.status === 'unresolved')), [gaps]);
 
   const copy = getAnalyticsCopy(prefs.gradeLevel);
@@ -125,6 +134,38 @@ export function AnalyticsPage() {
             <StatCard label="累计错题" value={String(stageReport.totalErrors)} />
             <StatCard label="总投入(小时)" value={String(stageReport.totalHours)} />
           </ResponsiveGrid>
+
+          <div>
+            <div className="font-medium text-slate-800 mb-2">模块时间分配（{SUBJECT_LABEL[subject]}）</div>
+            {timeAllocation.length === 0 ? (
+              <CoreEmptyState title="暂无用时数据" description="录入训练时填写用时后展示模块时间分配" />
+            ) : (
+              <TableScroll label="模块时间分配">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-xs text-slate-500 border-b border-slate-100">
+                      <th className="py-2">模块</th>
+                      <th className="py-2 text-right">累计用时</th>
+                      <th className="py-2 text-right">占比</th>
+                      <th className="py-2 text-right">每题均时</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {timeAllocation.map((t) => (
+                      <tr key={t.module} className="border-b border-slate-50">
+                        <td className="py-2 text-slate-700">{t.module}</td>
+                        <td className="py-2 text-right text-slate-600">{t.totalMinutes} 分</td>
+                        <td className="py-2 text-right text-slate-600">{t.share}%</td>
+                        <td className="py-2 text-right text-slate-600">
+                          {t.avgMinutesPerQuestion === null ? '—' : `${t.avgMinutesPerQuestion} 分`}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </TableScroll>
+            )}
+          </div>
 
           <div>
             <div className="font-medium text-slate-800 mb-2">各学科能力增量</div>

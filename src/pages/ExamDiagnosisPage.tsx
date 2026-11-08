@@ -3,22 +3,36 @@ import { v4 as uuid } from 'uuid';
 import { FlaskConical, PlusCircle, Trash2, Wrench, X, Zap } from 'lucide-react';
 import { TableScroll, useToast } from '@shared/core';
 import { useAppSession } from '../hooks/useAppSession';
-import { findExams, putRecord, deleteRecord } from '../services/localDB';
+import { findExams, findTrainingsByStudent, putRecord, deleteRecord } from '../services/localDB';
 import { PageHeader } from '../components/PageHeader';
 import { EmptyState } from '../components/EmptyState';
 import { MasteryBar } from '../components/MasteryBar';
 import { getAbilityTags, getModules } from '../domain/abilityTags';
-import { scoreToLevel, SUBJECT_LABEL } from '../domain/types';
-import type { AbilityGap, ExamRecord, FixTask, Subject } from '../domain/types';
+import { PAPER_TYPE_LABEL, scoreToLevel, SUBJECT_LABEL } from '../domain/types';
+import type {
+  AbilityGap,
+  ExamRecord,
+  FixTask,
+  GradeLevel,
+  PaperType,
+  Subject,
+  TrainingRecord,
+} from '../domain/types';
 
 export function ExamDiagnosisPage() {
   const { prefs } = useAppSession();
   const { showToast } = useToast();
   const [exams, setExams] = useState<ExamRecord[]>([]);
+  const [trainings, setTrainings] = useState<TrainingRecord[]>([]);
   const [showForm, setShowForm] = useState(false);
 
   const refresh = useCallback(async () => {
-    setExams(await findExams(prefs.currentStudentId));
+    const [examList, trainingList] = await Promise.all([
+      findExams(prefs.currentStudentId),
+      findTrainingsByStudent(prefs.currentStudentId),
+    ]);
+    setExams(examList);
+    setTrainings(trainingList);
   }, [prefs.currentStudentId]);
 
   useEffect(() => {
@@ -107,7 +121,11 @@ export function ExamDiagnosisPage() {
         />
       ) : (
         <div className="space-y-4">
-          {exams.map((e) => (
+          {exams.map((e) => {
+            const linkedTrainings = trainings.filter((t) => t.examId === e.id);
+            const fullTrainings = linkedTrainings.filter((t) => t.scope === 'full');
+            const moduleTrainings = linkedTrainings.filter((t) => t.scope === 'module');
+            return (
             <div key={e.id} className="card p-5">
               <div className="flex items-center justify-between mb-3">
                 <div>
@@ -117,6 +135,13 @@ export function ExamDiagnosisPage() {
                   <div className="text-xs text-slate-500 mt-0.5">
                     {e.date} · 共 {e.totalQuestions} 题 · 错 {e.totalErrors}
                     {e.durationMinutes ? ` · 用时 ${e.durationMinutes} 分钟` : ''}
+                  </div>
+                  <div className="text-xs text-slate-500 mt-0.5">
+                    卷型 {e.paperType ? PAPER_TYPE_LABEL[e.paperType] : '未标注'}
+                    · 年份 {e.paperYear ?? '未标注'}
+                    · 满分 {e.fullMark ?? '未标注'}
+                    · 总分 {e.totalScore ?? '未标注'}
+                    · 标准用时 {e.standardMinutes ?? '未标注'} 分
                   </div>
                 </div>
                 <div className="flex flex-col gap-1">
@@ -146,6 +171,45 @@ export function ExamDiagnosisPage() {
                   </div>
                 ))}
               </div>
+
+              {linkedTrainings.length > 0 && (
+                <div className="mt-3 rounded-lg border border-slate-100 bg-slate-50/60 p-3">
+                  <div className="text-[11px] text-slate-400 uppercase tracking-wider mb-2">
+                    关联训练 · 按 examId 分组
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <div className="badge bg-blue-50 text-blue-700 mb-2">整卷权威</div>
+                      {fullTrainings.length === 0 ? (
+                        <div className="text-xs text-slate-400">无整卷行</div>
+                      ) : (
+                        <ul className="space-y-1 text-xs text-slate-600">
+                          {fullTrainings.map((t) => (
+                            <li key={t.id}>
+                              {t.date} · {t.totalQuestions} 题 · 错 {t.errorCount}
+                              {t.score !== undefined ? ` · 得分 ${t.score}` : ''}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                    <div>
+                      <div className="badge bg-emerald-50 text-emerald-700 mb-2">模块明细</div>
+                      {moduleTrainings.length === 0 ? (
+                        <div className="text-xs text-slate-400">无模块行</div>
+                      ) : (
+                        <ul className="space-y-1 text-xs text-slate-600">
+                          {moduleTrainings.map((t) => (
+                            <li key={t.id}>
+                              {t.module} · {t.totalQuestions} 题 · 错 {t.errorCount}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {e.diagnosis && (
                 <div className="mt-3">
@@ -180,7 +244,8 @@ export function ExamDiagnosisPage() {
                 </div>
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -217,7 +282,7 @@ function ExamForm({
   onClose: () => void;
   onSaved: () => void;
   studentId?: string;
-  gradeLevel: ExamRecord['moduleBreakdown'] extends unknown ? string : never;
+  gradeLevel: GradeLevel;
   subjects: Subject[];
 }) {
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
@@ -225,6 +290,14 @@ function ExamForm({
   const [scenario, setScenario] = useState('全套模拟');
   const [duration, setDuration] = useState(120);
   const [rows, setRows] = useState<ModuleRow[]>([]);
+  // 卷面结构（选填）
+  const [paperType, setPaperType] = useState<PaperType | ''>('');
+  const [paperYear, setPaperYear] = useState('');
+  const [fullMark, setFullMark] = useState('');
+  const [totalScore, setTotalScore] = useState('');
+  const [standardMinutes, setStandardMinutes] = useState('');
+  const [syncModule, setSyncModule] = useState(false);
+  const [formErrors, setFormErrors] = useState<string[]>([]);
   const { prefs } = useAppSession();
 
   useEffect(() => {
@@ -237,6 +310,30 @@ function ExamForm({
   };
 
   const submit = async () => {
+    const validation: string[] = [];
+    const yearValue = paperYear.trim() === '' ? undefined : Number(paperYear);
+    if (yearValue !== undefined && (!Number.isInteger(yearValue) || yearValue < 1900 || yearValue > 2100)) {
+      validation.push('年份须为 1900-2100 的整数');
+    }
+    const fullMarkValue = fullMark.trim() === '' ? undefined : Number(fullMark);
+    if (fullMarkValue !== undefined && (!Number.isFinite(fullMarkValue) || fullMarkValue <= 0)) {
+      validation.push('满分须大于 0');
+    }
+    const totalScoreValue = totalScore.trim() === '' ? undefined : Number(totalScore);
+    if (totalScoreValue !== undefined) {
+      if (!Number.isFinite(totalScoreValue) || totalScoreValue < 0) validation.push('总分不得小于 0');
+      else if (fullMarkValue !== undefined && totalScoreValue > fullMarkValue) validation.push('总分不得大于满分');
+    }
+    const standardValue = standardMinutes.trim() === '' ? undefined : Number(standardMinutes);
+    if (standardValue !== undefined && (!Number.isFinite(standardValue) || standardValue <= 0)) {
+      validation.push('标准用时须大于 0');
+    }
+    if (validation.length > 0) {
+      setFormErrors(validation);
+      return;
+    }
+    setFormErrors([]);
+
     const now = new Date().toISOString();
     const breakdown = rows
       .filter((r) => r.total > 0)
@@ -273,8 +370,65 @@ function ExamForm({
       generatedTaskIds: [],
       createdAt: now,
       updatedAt: now,
+      ...(paperType ? { paperType } : {}),
+      ...(yearValue !== undefined ? { paperYear: yearValue } : {}),
+      ...(fullMarkValue !== undefined ? { fullMark: fullMarkValue } : {}),
+      ...(totalScoreValue !== undefined ? { totalScore: totalScoreValue } : {}),
+      ...(standardValue !== undefined ? { standardMinutes: standardValue } : {}),
     };
     await putRecord('exams', record);
+
+    if (syncModule) {
+      // 模块明细行（scope=module）
+      for (const m of breakdown) {
+        const row: TrainingRecord = {
+          id: uuid(),
+          studentId,
+          date,
+          gradeLevel,
+          subject,
+          module: m.module,
+          trainingType: 'exam',
+          totalQuestions: m.total,
+          correctCount: m.total - m.errors,
+          errorCount: m.errors,
+          errorCategories: [],
+          createdAt: now,
+          updatedAt: now,
+          examId: record.id,
+          scope: 'module',
+          ...(paperType ? { paperType } : {}),
+          ...(yearValue !== undefined ? { paperYear: yearValue } : {}),
+        };
+        await putRecord('trainings', row);
+      }
+      // 整卷权威行（scope=full）
+      const fullRow: TrainingRecord = {
+        id: uuid(),
+        studentId,
+        date,
+        gradeLevel,
+        subject,
+        module: '整卷',
+        trainingType: 'exam',
+        totalQuestions,
+        correctCount: totalQuestions - totalErrors,
+        errorCount: totalErrors,
+        durationMinutes: duration,
+        errorCategories: [],
+        createdAt: now,
+        updatedAt: now,
+        examId: record.id,
+        scope: 'full',
+        ...(paperType ? { paperType } : {}),
+        ...(yearValue !== undefined ? { paperYear: yearValue } : {}),
+        ...(fullMarkValue !== undefined ? { fullMark: fullMarkValue } : {}),
+        ...(totalScoreValue !== undefined ? { score: totalScoreValue } : {}),
+        ...(standardValue !== undefined ? { standardMinutes: standardValue } : {}),
+      };
+      await putRecord('trainings', fullRow);
+    }
+
     onSaved();
   };
 
@@ -312,7 +466,53 @@ function ExamForm({
             <label className="label">总用时(分钟)</label>
             <input className="input" type="number" min={0} value={duration} onChange={(e) => setDuration(+e.target.value || 0)} />
           </div>
+          <div>
+            <label className="label">卷型</label>
+            <select className="input" value={paperType} onChange={(e) => setPaperType(e.target.value as PaperType | '')}>
+              <option value="">未标注</option>
+              {(Object.keys(PAPER_TYPE_LABEL) as PaperType[]).map((p) => (
+                <option key={p} value={p}>
+                  {PAPER_TYPE_LABEL[p]}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="label">年份</label>
+            <input className="input" type="number" value={paperYear} onChange={(e) => setPaperYear(e.target.value)} placeholder="如 2025" />
+          </div>
+          <div>
+            <label className="label">满分</label>
+            <input className="input" type="number" value={fullMark} onChange={(e) => setFullMark(e.target.value)} placeholder="如 100" />
+          </div>
+          <div>
+            <label className="label">总分</label>
+            <input className="input" type="number" value={totalScore} onChange={(e) => setTotalScore(e.target.value)} placeholder="0 到满分之间" />
+          </div>
+          <div>
+            <label className="label">标准用时(分钟)</label>
+            <input className="input" type="number" value={standardMinutes} onChange={(e) => setStandardMinutes(e.target.value)} />
+          </div>
+          <div className="col-span-2 flex items-center gap-2">
+            <input
+              id="sync-module"
+              type="checkbox"
+              checked={syncModule}
+              onChange={(e) => setSyncModule(e.target.checked)}
+            />
+            <label htmlFor="sync-module" className="text-sm text-slate-600">
+              同步生成模块训练记录（整卷权威 + 模块明细，默认不勾选）
+            </label>
+          </div>
         </div>
+
+        {formErrors.length > 0 && (
+          <div className="mb-3 rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-600">
+            {formErrors.map((msg) => (
+              <div key={msg}>{msg}</div>
+            ))}
+          </div>
+        )}
 
         <div>
           <div className="label">各模块录入(自动带出该学段/学科模块列表)</div>

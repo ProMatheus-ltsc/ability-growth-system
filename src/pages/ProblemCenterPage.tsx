@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { v4 as uuid } from 'uuid';
 import { AlertOctagon, CheckCircle2, PlusCircle, Trash2, X, ListTodo } from 'lucide-react';
-import { useToast } from '@shared/core';
+import { Timeline, useToast, type TimelineItem } from '@shared/core';
 import { useAppSession } from '../hooks/useAppSession';
 import { findGaps, findTasks, findTrainingsByStudent, putRecord, deleteRecord } from '../services/localDB';
 import { calcErrorRecurrence, prioritizeGaps } from '../services/analytics';
@@ -14,9 +14,24 @@ import {
   type AbilityGap,
   type ErrorCategory,
   type FixTask,
+  type GapStatusHistoryItem,
   type Subject,
   type TrainingRecord,
 } from '../domain/types';
+
+const GAP_STATUS_LABEL: Record<AbilityGap['status'], string> = {
+  unresolved: '未修复',
+  'in-progress': '修复中',
+  verified: '已验证',
+};
+
+const HISTORY_REASON_LABEL: Record<GapStatusHistoryItem['reason'], string> = {
+  created: '新建',
+  merged: '合并',
+  reappeared: '再次出现',
+  'task-created': '生成任务',
+  manual: '手动流转',
+};
 
 export function ProblemCenterPage() {
   const { prefs } = useAppSession();
@@ -47,6 +62,20 @@ export function ProblemCenterPage() {
   const updateGap = async (gap: AbilityGap, patch: Partial<AbilityGap>) => {
     const now = new Date().toISOString();
     const next: AbilityGap = { ...gap, ...patch, updatedAt: now };
+    // 手工状态流转追加 source='manual' 历史
+    if (patch.status && patch.status !== gap.status) {
+      next.statusHistory = [
+        ...(gap.statusHistory ?? []),
+        {
+          status: patch.status,
+          at: now,
+          source: 'manual',
+          reason: 'manual',
+          from: gap.status,
+        },
+      ];
+      if (patch.status === 'verified') next.verifiedAt = now;
+    }
     await putRecord('gaps', next);
     void refresh();
   };
@@ -89,7 +118,15 @@ export function ProblemCenterPage() {
     };
     await putRecord('tasks', task);
     if (gap.status === 'unresolved') {
-      await putRecord('gaps', { ...gap, status: 'in-progress', updatedAt: now });
+      await putRecord('gaps', {
+        ...gap,
+        status: 'in-progress',
+        updatedAt: now,
+        statusHistory: [
+          ...(gap.statusHistory ?? []),
+          { status: 'in-progress', at: now, source: 'auto', reason: 'task-created', from: gap.status },
+        ],
+      });
     }
     void refresh();
     showToast('已生成修复任务，可在今日工作台看到', 'success');
@@ -217,6 +254,14 @@ function GapCard({
               💡 {gap.suggestion}
             </div>
           )}
+          <div className="mt-3 rounded-lg border border-slate-100 bg-white p-3">
+            <div className="text-xs font-medium text-slate-500 mb-2">状态历史</div>
+            {gap.statusHistory && gap.statusHistory.length > 0 ? (
+              <Timeline items={buildHistoryItems(gap.statusHistory)} />
+            ) : (
+              <p className="text-sm text-slate-400">当前状态（历史缺失）：{GAP_STATUS_LABEL[gap.status]}</p>
+            )}
+          </div>
           {/* V5.11 Bug #029 修复:四角度证据链 · 来源 · 复现率 · 趋势 · 掌握度 */}
           <div className="mt-2 grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
             <div className="rounded bg-slate-50 p-2">
@@ -273,6 +318,26 @@ function GapCard({
   );
 }
 
+/** 状态历史 → 受控时间线 items（倒序：最新在上） */
+function buildHistoryItems(history: GapStatusHistoryItem[]): TimelineItem[] {
+  return [...history]
+    .reverse()
+    .map((h, index) => ({
+      id: `${h.at}-${h.reason}-${index}`,
+      time: h.at.slice(0, 16).replace('T', ' '),
+      title: GAP_STATUS_LABEL[h.status],
+      description: `${h.source === 'manual' ? '手动' : '自动'} · ${HISTORY_REASON_LABEL[h.reason]}${
+        h.from ? ` · 由「${GAP_STATUS_LABEL[h.from]}」` : ''
+      }`,
+      tone:
+        h.status === 'verified'
+          ? ('success' as const)
+          : h.status === 'in-progress'
+            ? ('warning' as const)
+            : ('danger' as const),
+    }));
+}
+
 interface FormProps {
   studentId?: string;
   gradeLevel: AbilityGap['severity'] extends string ? string : never; // 占位
@@ -325,6 +390,7 @@ function QuickGapForm({
       suggestion: suggestion.trim() || undefined,
       createdAt: now,
       updatedAt: now,
+      statusHistory: [{ status: 'unresolved', at: now, source: 'manual', reason: 'created' }],
     };
     try {
       await putRecord('gaps', gap);

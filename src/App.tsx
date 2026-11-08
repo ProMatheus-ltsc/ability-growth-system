@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Route, Routes, Navigate, useNavigate } from 'react-router-dom';
-import { Layout, useToast, type NavGroup } from '@shared/core';
+import { Layout, ToastContainer, useToast, type NavGroup } from '@shared/core';
 import { LoadingSpinner } from '@shared/core/components/LoadingSpinner';
 import {
   Home,
@@ -29,7 +29,6 @@ import { useAuth } from './hooks/useAuth';
 import { AppSessionProvider, useAppSession } from './hooks/useAppSession';
 import { setBusinessAccount } from './services/localDB';
 import { consumePendingError, DATA_ERROR_EVENT } from './services/d1Client';
-import { Toaster } from './components/Toaster';
 import { TeacherOnly } from './components/RoleGuard';
 import { MODULE_VISIBILITY } from './domain/types';
 
@@ -303,7 +302,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
       user={account}
       onLogout={onLogout}
     >
-      <Toaster />
+      <ToastContainer />
       <Routes>
         {/* 公共路由 */}
         <Route path="/" element={<DashboardPage />} />

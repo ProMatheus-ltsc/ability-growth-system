@@ -163,6 +163,29 @@ export const ERROR_CATEGORY_LABEL: Record<ErrorCategory, string> = {
   wordcount: '字数控制问题',
 };
 
+/** 卷型（公考卷面结构） */
+export type PaperType = 'national' | 'provincial' | 'public-institution' | 'military-transfer';
+
+export const PAPER_TYPE_LABEL: Record<PaperType, string> = {
+  national: '国考',
+  provincial: '省考',
+  'public-institution': '事业单位',
+  'military-transfer': '军转',
+};
+
+/** 训练记录粒度：整卷 / 模块 / 单条 */
+export type TrainingScope = 'full' | 'module' | 'single';
+
+/** 能力缺口状态流转历史 */
+export interface GapStatusHistoryItem {
+  status: 'unresolved' | 'in-progress' | 'verified';
+  at: string;
+  source: 'auto' | 'manual';
+  reason: 'created' | 'merged' | 'reappeared' | 'task-created' | 'manual';
+  recordId?: string;
+  from?: 'unresolved' | 'in-progress' | 'verified';
+}
+
 /** 训练记录 */
 export interface TrainingRecord {
   id: string;
@@ -182,6 +205,15 @@ export interface TrainingRecord {
   taskId?: string;
   createdAt: string;
   updatedAt: string;
+  /** 以下为可选卷面结构字段，老记录保持 undefined */
+  paperType?: PaperType;
+  paperYear?: number;
+  fullMark?: number;
+  score?: number;
+  standardMinutes?: number;
+  questionType?: string;
+  examId?: string;
+  scope?: TrainingScope;
 }
 
 /** 能力缺口/问题 */
@@ -200,6 +232,9 @@ export interface AbilityGap {
   suggestion?: string;
   createdAt: string;
   updatedAt: string;
+  statusHistory?: GapStatusHistoryItem[];
+  reopenedCount?: number;
+  verifiedAt?: string;
 }
 
 /** 能力掌握度记录 - 按能力点单次快照 */
@@ -364,6 +399,12 @@ export interface ExamRecord {
   generatedTaskIds: string[];
   createdAt: string;
   updatedAt: string;
+  /** 可选卷面结构字段 */
+  paperType?: PaperType;
+  paperYear?: number;
+  fullMark?: number;
+  totalScore?: number;
+  standardMinutes?: number;
 }
 
 /** 批改记录(教师端 - 主观题/理科解答/面试) */
@@ -424,6 +465,8 @@ export interface ExamRegistration {
   note?: string;
   createdAt: string;
   updatedAt: string;
+  /** 目标分（0-100，掌握度口径，非真实卷面分） */
+  targetScore?: number;
 }
 
 /** 备考/学期阶段规划 */
@@ -1051,6 +1094,13 @@ export interface SubjectiveAnswer {
   scoreDims?: Array<{ label: string; stars: number }>;
   createdAt: string;
   updatedAt: string;
+  /** 申论/面试四维评分（0-100，可空） */
+  dimensionScores?: {
+    points?: number;
+    structure?: number;
+    language?: number;
+    logic?: number;
+  };
 }
 
 /** §15.1 面试专项训练记录 - 音视频与思考/答题时间 */

@@ -5,14 +5,16 @@ import { useToast } from '@shared/core';
 import { useAppSession } from '../hooks/useAppSession';
 import { getTrainingsCopy } from '../domain/trainingsCopy';
 import { findTrainingsByStudent, findGaps, putRecord, deleteRecord, getMeta, setMeta } from '../services/localDB';
-import { deriveGapsFromTraining, deriveSnapshotFromTraining } from '../services/analytics';
+import { deriveGapsFromTraining, deriveSnapshotFromTraining, isTimedMet } from '../services/analytics';
 import { getAbilityTags, getModules } from '../domain/abilityTags';
 import {
   SUBJECT_LABEL,
   SUBJECT_MATRIX,
   TRAINING_TYPE_LABEL,
   ERROR_CATEGORY_LABEL,
+  PAPER_TYPE_LABEL,
   type ErrorCategory,
+  type PaperType,
   type Subject,
   type TrainingRecord,
   type TrainingType,
@@ -180,6 +182,14 @@ export function TrainingsPage() {
 function RecordItem({ record, onDelete }: { record: TrainingRecord; onDelete: () => void }) {
   const correct = record.totalQuestions - record.errorCount;
   const rate = record.totalQuestions === 0 ? 0 : Math.round((correct / record.totalQuestions) * 100);
+  const timed = isTimedMet(record);
+  const timedBadge =
+    timed === null
+      ? { label: '无基准', className: 'bg-slate-100 text-slate-500' }
+      : timed
+        ? { label: '达标', className: 'bg-emerald-50 text-emerald-700' }
+        : { label: '超时', className: 'bg-red-50 text-red-600' };
+  const questionType = record.questionType || record.module.split('/')[1] || '未标注';
   return (
     <div className="p-4 flex flex-wrap items-center gap-3">
       <div className="flex-1 min-w-[200px]">
@@ -189,9 +199,18 @@ function RecordItem({ record, onDelete }: { record: TrainingRecord; onDelete: ()
           </span>
           <span className="badge bg-slate-100 text-slate-600">{TRAINING_TYPE_LABEL[record.trainingType]}</span>
           {record.isUnfamiliar && <span className="badge bg-amber-100 text-amber-700">陌生题</span>}
+          <span className={`badge ${timedBadge.className}`}>{timedBadge.label}</span>
         </div>
         <div className="text-xs text-slate-500 mt-1">
           {record.date} · {record.totalQuestions} 题 · 正确 {correct} / 错 {record.errorCount} · 用时 {record.durationMinutes ?? '-'} 分
+        </div>
+        <div className="text-xs text-slate-500 mt-1">
+          卷型 {record.paperType ? PAPER_TYPE_LABEL[record.paperType] : '未标注'}
+          · 年份 {record.paperYear ?? '未标注'}
+          · 得分 {record.score ?? '未标注'}
+          {record.fullMark !== undefined ? ` / ${record.fullMark}` : ''}
+          · 标准用时 {record.standardMinutes ?? '未标注'} 分
+          · 题型 {questionType}
         </div>
         {record.errorCategories.length > 0 && (
           <div className="flex flex-wrap gap-1 mt-2">
@@ -240,6 +259,14 @@ function TrainingForm({ quick, defaults, studentId, gradeLevel, availableSubject
   const [isUnfamiliar, setIsUnfamiliar] = useState(false);
   const [note, setNote] = useState('');
   const [saving, setSaving] = useState(false);
+  // 卷面结构（选填）：空字符串表示不写入该键
+  const [paperType, setPaperType] = useState<PaperType | ''>('');
+  const [paperYear, setPaperYear] = useState('');
+  const [fullMark, setFullMark] = useState('');
+  const [score, setScore] = useState('');
+  const [standardMinutes, setStandardMinutes] = useState('');
+  const [questionType, setQuestionType] = useState('');
+  const [formErrors, setFormErrors] = useState<string[]>([]);
 
   const errorLibrary = getErrorLibrary(subject);
   const pointOptions = getPoints(gradeLevel, subject, moduleName);
@@ -263,6 +290,31 @@ function TrainingForm({ quick, defaults, studentId, gradeLevel, availableSubject
 
   const submit = async () => {
     if (!effectiveModule) return;
+    const validation: string[] = [];
+    const yearValue = paperYear.trim() === '' ? undefined : Number(paperYear);
+    if (yearValue !== undefined && (!Number.isInteger(yearValue) || yearValue < 1900 || yearValue > 2100)) {
+      validation.push('年份须为 1900-2100 的整数');
+    }
+    const fullMarkValue = fullMark.trim() === '' ? undefined : Number(fullMark);
+    if (fullMarkValue !== undefined && (!Number.isFinite(fullMarkValue) || fullMarkValue <= 0)) {
+      validation.push('满分须大于 0');
+    }
+    const scoreValue = score.trim() === '' ? undefined : Number(score);
+    if (scoreValue !== undefined) {
+      if (!Number.isFinite(scoreValue) || scoreValue < 0) validation.push('得分不得小于 0');
+      else if (fullMarkValue !== undefined && scoreValue > fullMarkValue) validation.push('得分不得大于满分');
+    }
+    const standardValue = standardMinutes.trim() === '' ? undefined : Number(standardMinutes);
+    if (standardValue !== undefined && (!Number.isFinite(standardValue) || standardValue <= 0)) {
+      validation.push('标准用时须大于 0');
+    }
+    const questionTypeValue = questionType.trim();
+    if (questionTypeValue.length > 20) validation.push('题型须为 1-20 字');
+    if (validation.length > 0) {
+      setFormErrors(validation);
+      return;
+    }
+    setFormErrors([]);
     setSaving(true);
     const now = new Date().toISOString();
     const record: TrainingRecord = {
@@ -282,6 +334,12 @@ function TrainingForm({ quick, defaults, studentId, gradeLevel, availableSubject
       note: note.trim() || undefined,
       createdAt: now,
       updatedAt: now,
+      ...(paperType ? { paperType } : {}),
+      ...(yearValue !== undefined ? { paperYear: yearValue } : {}),
+      ...(fullMarkValue !== undefined ? { fullMark: fullMarkValue } : {}),
+      ...(scoreValue !== undefined ? { score: scoreValue } : {}),
+      ...(standardValue !== undefined ? { standardMinutes: standardValue } : {}),
+      ...(questionTypeValue ? { questionType: questionTypeValue } : {}),
     };
     try {
       await onSave(record);
@@ -418,7 +476,52 @@ function TrainingForm({ quick, defaults, studentId, gradeLevel, availableSubject
               标记为陌生题(用于计算陌生题正确率)
             </label>
           </div>
+
+          <div className="col-span-1 sm:col-span-2">
+            <div className="text-sm font-medium text-slate-700 mb-2">卷面结构（选填，留空不记录）</div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <label className="label">卷型</label>
+                <select className="input" value={paperType} onChange={(e) => setPaperType(e.target.value as PaperType | '')}>
+                  <option value="">未标注</option>
+                  {(Object.keys(PAPER_TYPE_LABEL) as PaperType[]).map((p) => (
+                    <option key={p} value={p}>
+                      {PAPER_TYPE_LABEL[p]}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="label">年份</label>
+                <input className="input" type="number" value={paperYear} onChange={(e) => setPaperYear(e.target.value)} placeholder="如 2025" />
+              </div>
+              <div>
+                <label className="label">满分</label>
+                <input className="input" type="number" value={fullMark} onChange={(e) => setFullMark(e.target.value)} placeholder="如 100" />
+              </div>
+              <div>
+                <label className="label">得分</label>
+                <input className="input" type="number" value={score} onChange={(e) => setScore(e.target.value)} placeholder="0 到满分之间" />
+              </div>
+              <div>
+                <label className="label">标准用时(分钟)</label>
+                <input className="input" type="number" value={standardMinutes} onChange={(e) => setStandardMinutes(e.target.value)} />
+              </div>
+              <div>
+                <label className="label">题型</label>
+                <input className="input" value={questionType} onChange={(e) => setQuestionType(e.target.value)} placeholder="如 计算/概括" maxLength={20} />
+              </div>
+            </div>
+          </div>
         </div>
+
+        {formErrors.length > 0 && (
+          <div className="mt-4 rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-600">
+            {formErrors.map((msg) => (
+              <div key={msg}>{msg}</div>
+            ))}
+          </div>
+        )}
 
         <div className="mt-4">
           <label className="label">错误类型 (多选)</label>

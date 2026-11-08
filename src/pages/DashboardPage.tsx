@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Sparkles, Target, CheckCircle2, TrendingUp, CalendarClock, RefreshCw, PlusCircle, CalendarRange, Timer, Star, Flag } from 'lucide-react';
-import { ResponsiveGrid } from '@shared/core';
+import { ResponsiveGrid, StatCard } from '@shared/core';
 import { useAppSession } from '../hooks/useAppSession';
 import { useSyncStatus } from '../hooks/useSyncStatus';
 import { findTrainingsInRange, findGaps, findAbilities, findTasks, findReviews, getAllRecords } from '../services/localDB';
-import { aggregateBySubject, prioritizeGaps } from '../services/analytics';
+import { aggregateBySubject, buildWeeklyDelta, computeTargetGap, prioritizeGaps } from '../services/analytics';
 import { PageHeader } from '../components/PageHeader';
 import { MasteryBar } from '../components/MasteryBar';
 import { EmptyState } from '../components/EmptyState';
@@ -127,6 +127,23 @@ export function DashboardPage() {
       .sort((a, b) => a.examDate.localeCompare(b.examDate))[0];
   }, [registrations, today]);
 
+  // 周环比默认取训练量最大的学科（无数据时取首个学科）
+  const deltaSubject = useMemo(() => {
+    if (trainings.length === 0) return null;
+    const counts = new Map<string, number>();
+    for (const r of trainings) counts.set(r.subject, (counts.get(r.subject) ?? 0) + 1);
+    return [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0] as TrainingRecord['subject'];
+  }, [trainings]);
+  const weeklyDelta = useMemo(
+    () => (deltaSubject === null ? null : buildWeeklyDelta(trainings, deltaSubject)),
+    [trainings, deltaSubject],
+  );
+
+  const targetScore = upcomingExam?.targetScore ?? registrations
+    .filter((r) => typeof r.targetScore === 'number' && Number.isFinite(r.targetScore))
+    .sort((a, b) => b.examDate.localeCompare(a.examDate))[0]?.targetScore;
+  const targetGap = computeTargetGap(stats, targetScore);
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -219,6 +236,45 @@ export function DashboardPage() {
           value={abilities.length}
           tone="emerald"
           to="/abilities"
+        />
+      </ResponsiveGrid>
+
+      <ResponsiveGrid minItemWidth="220px" gap="1rem">
+        <StatCard
+          label={`本周 vs 上周${deltaSubject ? ` · ${SUBJECT_LABEL[deltaSubject]}` : ''}`}
+          value={
+            weeklyDelta?.deltaCorrectRate == null
+              ? '—'
+              : `${weeklyDelta.deltaCorrectRate > 0 ? '+' : ''}${weeklyDelta.deltaCorrectRate}pt`
+          }
+          hint={
+            weeklyDelta === null
+              ? '暂无可对比的训练数据'
+              : weeklyDelta.previousWeek === null
+                ? '暂无上周对比'
+                : `本周正确率 ${weeklyDelta.currentAcc}% · 上周 ${weeklyDelta.previousAcc}%`
+          }
+          accentClassName={
+            weeklyDelta?.deltaCorrectRate == null
+              ? 'text-slate-600'
+              : weeklyDelta.deltaCorrectRate > 0
+                ? 'text-emerald-600'
+                : weeklyDelta.deltaCorrectRate < 0
+                  ? 'text-red-500'
+                  : 'text-slate-600'
+          }
+        />
+        <StatCard
+          label="目标分差"
+          value={targetGap === null ? '—' : targetGap.reached ? '已达标' : `差 ${targetGap.gap} 分`}
+          hint={
+            targetGap === null
+              ? '未设置目标'
+              : `当前 ${targetGap.current}% · 目标 ${targetGap.target}%（掌握度口径，非卷面分）`
+          }
+          accentClassName={
+            targetGap === null ? 'text-slate-600' : targetGap.reached ? 'text-emerald-600' : 'text-orange-600'
+          }
         />
       </ResponsiveGrid>
 

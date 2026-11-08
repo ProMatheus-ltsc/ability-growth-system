@@ -5,14 +5,22 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { v4 as uuid } from 'uuid';
 import { FileText, PlusCircle, Trash2, X, ArrowRight } from 'lucide-react';
-import { useToast } from '@shared/core';
+import { EmptyState as CoreEmptyState, ResponsiveGrid, StatCard, useToast } from '@shared/core';
 import { PageHeader } from '../components/PageHeader';
 import { EmptyState } from '../components/EmptyState';
 import { useAppSession } from '../hooks/useAppSession';
 import { getAllRecords, putRecord, deleteRecord } from '../services/localDB';
+import { buildSubjectiveDimensions } from '../services/analytics';
 import type { SubjectiveAnswer } from '../domain/types';
 
 type ShenlunOrMianshi = 'shenlun' | 'mianshi';
+
+const DIMENSION_LABEL = {
+  points: '要点',
+  structure: '结构',
+  language: '语言',
+  logic: '逻辑',
+} as const;
 
 export function SubjectiveAnswersPage() {
   const { prefs } = useAppSession();
@@ -70,6 +78,8 @@ export function SubjectiveAnswersPage() {
     setShowForm(true);
   };
 
+  const dimensionSummary = useMemo(() => buildSubjectiveDimensions(list), [list]);
+
   return (
     <div className="space-y-5">
       <PageHeader
@@ -81,6 +91,38 @@ export function SubjectiveAnswersPage() {
           </button>
         }
       />
+
+      <div className="card p-4">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="font-semibold text-slate-900">四维评分汇总</h2>
+          <span className="text-xs text-slate-400">样本 {dimensionSummary.samples} 条（0-100）</span>
+        </div>
+        {dimensionSummary.samples === 0 ? (
+          <CoreEmptyState title="暂无四维评分" description="在录入作答时填写要点 / 结构 / 语言 / 逻辑后展示汇总" />
+        ) : (
+          <>
+            <ResponsiveGrid minItemWidth="140px" gap="0.5rem">
+              {(Object.keys(DIMENSION_LABEL) as Array<keyof typeof DIMENSION_LABEL>).map((key) => (
+                <StatCard
+                  key={key}
+                  label={DIMENSION_LABEL[key]}
+                  value={dimensionSummary.avg[key] ?? '—'}
+                  hint={key === dimensionSummary.weakest ? '最弱维度' : '平均分'}
+                  accentClassName="text-slate-800"
+                />
+              ))}
+            </ResponsiveGrid>
+            {dimensionSummary.weakest && (
+              <div className="text-xs text-slate-500 mt-2">
+                最弱维度：
+                <b className="text-orange-600">
+                  {DIMENSION_LABEL[dimensionSummary.weakest as keyof typeof DIMENSION_LABEL]}
+                </b>
+              </div>
+            )}
+          </>
+        )}
+      </div>
 
       {grouped.length === 0 ? (
         <EmptyState
@@ -124,6 +166,18 @@ export function SubjectiveAnswersPage() {
                       {v.wordCount ?? v.content.length} 字
                       {v.durationMinutes ? ` · ${v.durationMinutes} 分钟` : ''}
                     </div>
+                    <div className="flex flex-wrap gap-1 mt-2">
+                      {(Object.keys(DIMENSION_LABEL) as Array<keyof typeof DIMENSION_LABEL>).map((key) => (
+                        <span key={key} className="badge bg-slate-100 text-slate-600">
+                          {DIMENSION_LABEL[key]} {v.dimensionScores?.[key] ?? '未评分'}
+                        </span>
+                      ))}
+                    </div>
+                    {v.scoreDims && v.scoreDims.length > 0 && (
+                      <div className="text-xs text-orange-600 mt-1">
+                        {v.scoreDims.map((d) => `${d.label} ${'★'.repeat(d.stars)}`).join(' · ')}
+                      </div>
+                    )}
                     {v.teacherFeedback && (
                       <div className="text-xs text-emerald-700 mt-1">
                         <b>教师评语:</b> {v.teacherFeedback}
@@ -169,9 +223,32 @@ function AnswerForm({
   const [content, setContent] = useState('');
   const [duration, setDuration] = useState<number>(25);
   const [teacherFeedback, setTeacherFeedback] = useState('');
+  // 四维评分（0-100，可空）
+  const [dimPoints, setDimPoints] = useState('');
+  const [dimStructure, setDimStructure] = useState('');
+  const [dimLanguage, setDimLanguage] = useState('');
+  const [dimLogic, setDimLogic] = useState('');
+  const [formError, setFormError] = useState<string | null>(null);
 
   const submit = async () => {
     if (!content.trim()) return;
+    const rawDims: Array<[keyof typeof DIMENSION_LABEL, string]> = [
+      ['points', dimPoints],
+      ['structure', dimStructure],
+      ['language', dimLanguage],
+      ['logic', dimLogic],
+    ];
+    const dims: NonNullable<SubjectiveAnswer['dimensionScores']> = {};
+    for (const [key, raw] of rawDims) {
+      if (raw.trim() === '') continue;
+      const value = Number(raw);
+      if (!Number.isFinite(value) || value < 0 || value > 100) {
+        setFormError(`${DIMENSION_LABEL[key]}评分须在 0-100 之间`);
+        return;
+      }
+      dims[key] = value;
+    }
+    setFormError(null);
     const now = new Date().toISOString();
     const record: SubjectiveAnswer = {
       id: uuid(),
@@ -187,6 +264,7 @@ function AnswerForm({
       teacherFeedback: teacherFeedback.trim() || undefined,
       createdAt: now,
       updatedAt: now,
+      ...(Object.keys(dims).length > 0 ? { dimensionScores: dims } : {}),
     };
     await putRecord('subjectiveAnswers', record);
     onSaved();
@@ -221,6 +299,28 @@ function AnswerForm({
           <div>
             <label className="label">作答时长(分钟)</label>
             <input className="input" type="number" min={0} value={duration} onChange={(e) => setDuration(+e.target.value || 0)} />
+          </div>
+          <div>
+            <label className="label">四维评分（0-100，可空）</label>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              <div>
+                <div className="text-xs text-slate-500 mb-1">要点</div>
+                <input className="input" type="number" min={0} max={100} value={dimPoints} onChange={(e) => setDimPoints(e.target.value)} placeholder="未评分" />
+              </div>
+              <div>
+                <div className="text-xs text-slate-500 mb-1">结构</div>
+                <input className="input" type="number" min={0} max={100} value={dimStructure} onChange={(e) => setDimStructure(e.target.value)} placeholder="未评分" />
+              </div>
+              <div>
+                <div className="text-xs text-slate-500 mb-1">语言</div>
+                <input className="input" type="number" min={0} max={100} value={dimLanguage} onChange={(e) => setDimLanguage(e.target.value)} placeholder="未评分" />
+              </div>
+              <div>
+                <div className="text-xs text-slate-500 mb-1">逻辑</div>
+                <input className="input" type="number" min={0} max={100} value={dimLogic} onChange={(e) => setDimLogic(e.target.value)} placeholder="未评分" />
+              </div>
+            </div>
+            {formError && <div className="text-xs text-red-600 mt-1">{formError}</div>}
           </div>
           <div>
             <label className="label">教师批注 / 评语 (可选)</label>
