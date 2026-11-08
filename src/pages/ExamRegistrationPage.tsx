@@ -85,6 +85,9 @@ export function ExamRegistrationPage() {
                   {r.interviewLineHistory && (
                     <div className="text-xs text-slate-500 mt-0.5">历年进面: {r.interviewLineHistory}</div>
                   )}
+                  {r.targetScore !== undefined && (
+                    <div className="text-xs text-slate-500 mt-0.5">目标分: {r.targetScore}</div>
+                  )}
                   {r.note && <div className="text-xs text-slate-500 mt-1">备注: {r.note}</div>}
                 </div>
                 <div className="flex flex-col gap-1">
@@ -137,9 +140,17 @@ function RegForm({
   const [applicants, setApplicants] = useState(initial?.applicantsHistory ?? '');
   const [interview, setInterview] = useState(initial?.interviewLineHistory ?? '');
   const [note, setNote] = useState(initial?.note ?? '');
+  const [targetScore, setTargetScore] = useState(
+    initial?.targetScore !== undefined ? String(initial.targetScore) : '',
+  );
 
   const save = async () => {
     if (!postName.trim() || !examDate) return;
+    const targetValue = targetScore.trim() === '' ? undefined : Number(targetScore);
+    if (targetValue !== undefined && (!Number.isFinite(targetValue) || targetValue < 0 || targetValue > 100)) {
+      window.alert('目标分需为 0-100 的数字（掌握度口径），或留空表示未设置');
+      return;
+    }
     const now = new Date().toISOString();
     const record: ExamRegistration = {
       id: initial?.id ?? uuid(),
@@ -155,6 +166,7 @@ function RegForm({
       applicantsHistory: applicants.trim() || undefined,
       interviewLineHistory: interview.trim() || undefined,
       note: note.trim() || undefined,
+      ...(targetValue !== undefined ? { targetScore: targetValue } : {}),
       createdAt: initial?.createdAt ?? now,
       updatedAt: now,
     };
@@ -221,6 +233,18 @@ function RegForm({
           <div>
             <label className="label">历年进面情况</label>
             <input className="input" value={interview} onChange={(e) => setInterview(e.target.value)} placeholder="例:面试线 130 分" />
+          </div>
+          <div className="col-span-2">
+            <label className="label">目标分（0-100，掌握度口径，可留空）</label>
+            <input
+              className="input"
+              type="number"
+              min={0}
+              max={100}
+              value={targetScore}
+              onChange={(e) => setTargetScore(e.target.value)}
+              placeholder="例: 80，留空表示未设置"
+            />
           </div>
           <div className="col-span-2">
             <label className="label">备注</label>

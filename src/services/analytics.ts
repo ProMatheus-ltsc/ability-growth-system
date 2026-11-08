@@ -10,6 +10,7 @@ import type {
   AbilitySnapshot,
   AbilityRadarSlice,
   ErrorCategory,
+  ExamRegistration,
   GapStatusHistoryItem,
   GradeLevel,
   MasteryLevel,
@@ -195,7 +196,9 @@ export interface WeeklyDelta {
 
 /** 周一 00:00 起算的本地周键（结果形如 2026-11-09） */
 function mondayWeekKey(dateISO: string): string {
-  const d = new Date(dateISO);
+  // 按本地年月日构造，避免 new Date('YYYY-MM-DD') 被当作 UTC 解析导致跨时区整周偏移
+  const [y0, m0, d0] = dateISO.slice(0, 10).split('-').map(Number);
+  const d = new Date(y0, (m0 ?? 1) - 1, d0 ?? 1);
   if (Number.isNaN(d.getTime())) return dateISO.slice(0, 10);
   const day = d.getDay(); // 0=周日
   const diff = day === 0 ? -6 : 1 - day;
@@ -313,8 +316,32 @@ export function computeTargetGap(stats: SubjectStats[], targetScore?: number): T
   return { target: targetScore, current, gap, reached: gap <= 0 };
 }
 
-/** ============ F-09 / V1 时间分配 ============ */
+/**
+ * 从考试报名中解析目标分（0-100，掌握度口径）：
+ * 优先取最近一场未来考试的目标分，其次取最近一次已设置目标的报名；
+ * 只取当前学员的记录，避免多学员串号；无有效目标返回 undefined。
+ */
+export function resolveTargetScore(
+  registrations: ExamRegistration[],
+  studentId?: string,
+  today = new Date().toISOString().slice(0, 10),
+): number | undefined {
+  const scoped = registrations.filter(
+    (r) =>
+      (studentId === undefined || r.studentId === studentId) &&
+      typeof r.targetScore === 'number' &&
+      Number.isFinite(r.targetScore) &&
+      r.targetScore >= 0 &&
+      r.targetScore <= 100,
+  );
+  if (scoped.length === 0) return undefined;
+  const upcoming = scoped.filter((r) => r.examDate >= today).sort((a, b) => a.examDate.localeCompare(b.examDate));
+  if (upcoming.length > 0) return upcoming[0].targetScore;
+  const fallback = [...scoped].sort((a, b) => b.examDate.localeCompare(a.examDate));
+  return fallback[0].targetScore;
+}
 
+/** ============ F-09 / V1 时间分配 ============ */
 export interface TimeAllocationItem {
   module: string;
   totalMinutes: number;
@@ -839,9 +866,10 @@ export function deriveGapsFromTraining(
     const seenRecordIds = [...existing.sourceRecordIds, record.id].slice(-20);
 
     if (existing.status === 'verified') {
-      // 已验证缺口再次出现 → 复用 id 并重开为 in-progress
+      // 已验证缺口再次出现 → 复用 id 并重开为 in-progress（清空 verifiedAt，避免脏态）
+      const { verifiedAt: _staleVerifiedAt, ...reopened } = existing;
       updated.push({
-        ...existing,
+        ...reopened,
         status: 'in-progress',
         occurrenceCount: existing.occurrenceCount + 1,
         reopenedCount: (existing.reopenedCount ?? 0) + 1,
@@ -886,8 +914,11 @@ function appendStatusHistory(
   item: GapStatusHistoryItem,
 ): GapStatusHistoryItem[] {
   const list = history ?? [];
+  // 同一记录重复触发（同 recordId）或同一时刻同状态同原因不重复追加
   const duplicated = list.some(
-    (h) => h.at === item.at && h.status === item.status && h.reason === item.reason,
+    (h) =>
+      (item.recordId !== undefined && h.recordId === item.recordId) ||
+      (h.at === item.at && h.status === item.status && h.reason === item.reason),
   );
   return duplicated ? list : [...list, item];
 }

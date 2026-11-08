@@ -18,6 +18,7 @@ import {
   buildTimeAllocation,
   buildWeeklyDelta,
   computeTargetGap,
+  resolveTargetScore,
   selectAggregationRecords,
   timedComplianceRate,
 } from '../services/analytics';
@@ -76,19 +77,11 @@ export function AbilityCenterPage() {
     [trainings, subject],
   );
 
-  // 目标分：优先取最近一场未来考试，其次取最近一次已设置目标的报名
-  const targetScore = useMemo(() => {
-    const scoped = registrations.filter(
-      (r) => typeof r.targetScore === 'number' && Number.isFinite(r.targetScore),
-    );
-    if (scoped.length === 0) return undefined;
-    const today = new Date().toISOString().slice(0, 10);
-    const upcoming = scoped
-      .filter((r) => r.examDate >= today)
-      .sort((a, b) => a.examDate.localeCompare(b.examDate));
-    const fallback = [...scoped].sort((a, b) => b.examDate.localeCompare(a.examDate));
-    return (upcoming[0] ?? fallback[0]).targetScore;
-  }, [registrations]);
+  // 目标分：优先取最近一场未来考试，其次取最近一次已设置目标的报名（仅当前学员）
+  const targetScore = useMemo(
+    () => resolveTargetScore(registrations, prefs.currentStudentId),
+    [registrations, prefs.currentStudentId],
+  );
 
   const abilityCards = useMemo(() => {
     const tags = getAbilityTags(prefs.gradeLevel, subject);

@@ -5,7 +5,7 @@ import { ResponsiveGrid, StatCard } from '@shared/core';
 import { useAppSession } from '../hooks/useAppSession';
 import { useSyncStatus } from '../hooks/useSyncStatus';
 import { findTrainingsInRange, findGaps, findAbilities, findTasks, findReviews, getAllRecords } from '../services/localDB';
-import { aggregateBySubject, buildWeeklyDelta, computeTargetGap, prioritizeGaps } from '../services/analytics';
+import { aggregateBySubject, buildWeeklyDelta, computeTargetGap, prioritizeGaps, resolveTargetScore } from '../services/analytics';
 import { PageHeader } from '../components/PageHeader';
 import { MasteryBar } from '../components/MasteryBar';
 import { EmptyState } from '../components/EmptyState';
@@ -139,9 +139,7 @@ export function DashboardPage() {
     [trainings, deltaSubject],
   );
 
-  const targetScore = upcomingExam?.targetScore ?? registrations
-    .filter((r) => typeof r.targetScore === 'number' && Number.isFinite(r.targetScore))
-    .sort((a, b) => b.examDate.localeCompare(a.examDate))[0]?.targetScore;
+  const targetScore = upcomingExam?.targetScore ?? resolveTargetScore(registrations, prefs.currentStudentId);
   const targetGap = computeTargetGap(stats, targetScore);
 
   return (
