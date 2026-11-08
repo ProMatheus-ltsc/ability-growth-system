@@ -32,4 +32,12 @@ describe('F-07 申论四维汇总（演示数据）', () => {
     expect(summary.samples).toBe(0);
     expect(summary.weakest).toBeNull();
   });
+
+  it('维度对象为空时不抬高样本数', () => {
+    const emptyDimensions = subjectiveAnswers.map((r, i) =>
+      i === 0 ? { ...r, dimensionScores: {} } : r,
+    );
+    const summary = buildSubjectiveDimensions(emptyDimensions);
+    expect(summary.samples).toBe(1);
+  });
 });

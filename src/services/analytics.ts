@@ -402,7 +402,15 @@ const DIMENSION_KEYS = ['points', 'structure', 'language', 'logic'] as const;
  * weakest 为均值最低的维度（键名），无样本时为 null。
  */
 export function buildSubjectiveDimensions(records: SubjectiveAnswer[]): SubjectiveDimensionSummary {
-  const scoped = records.filter((r) => r.dimensionScores !== undefined);
+  // 只有至少填了一个维度分的作答才计入样本，避免空对象抬高 samples
+  const scoped = records.filter(
+    (r) =>
+      r.dimensionScores !== undefined &&
+      DIMENSION_KEYS.some((key) => {
+        const v = r.dimensionScores?.[key];
+        return typeof v === 'number' && Number.isFinite(v);
+      }),
+  );
   const avg = { points: null as number | null, structure: null as number | null, language: null as number | null, logic: null as number | null };
 
   if (scoped.length === 0) return { samples: 0, avg, weakest: null };
