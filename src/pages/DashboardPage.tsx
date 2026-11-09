@@ -113,6 +113,8 @@ export function DashboardPage() {
   const prioritizedGaps = prioritizeGaps(gaps).slice(0, 3);
   const stats = aggregateBySubject(trainings);
   const visibility = MODULE_VISIBILITY[prefs.gradeLevel];
+  // 非公考学段的分析中心不渲染「目标分差」卡，这里不要承诺不存在的结论
+  const canUsePublicExam = prefs.role === 'teacher' || visibility.publicExam;
   const tone = GRADE_TONE[prefs.gradeLevel];
 
   // V5.11 §7 · 公考倒计时(仅公考学段) - 最近一次未过考的考试
@@ -226,7 +228,10 @@ export function DashboardPage() {
       <div className="card p-4 flex flex-wrap items-center justify-between gap-2 text-sm">
         <span className="text-slate-600 flex items-center gap-2">
           <BarChart3 size={16} className="text-blue-600" />
-          本周进步 / 限时达标 / 目标分差 / 最弱模块 · 统一口径见分析中心
+          {canUsePublicExam
+            ? '本周进步 / 限时达标 / 目标分差 / 最弱模块'
+            : '本周进步 / 限时达标 / 最弱模块'}{' '}
+          · 统一口径见分析中心
         </span>
         <Link to="/analytics" className="text-blue-600 hover:underline">
           打开分析中心 →
@@ -237,18 +242,26 @@ export function DashboardPage() {
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-base font-semibold text-slate-900">{withWindowLabel('近期能力变化', DEFAULT_TIME_WINDOW)}</h2>
           <Link to="/abilities" className="text-sm text-blue-600 hover:underline">
-            查看全部
+            打开能力中心 →
           </Link>
         </div>
         {stats.length === 0 ? (
           <EmptyState
             icon={Sparkles}
-            title="还没有训练记录"
-            description="完成 3 次以上训练后，能力图谱与增长曲线将在这里展示"
+            title="当前统计窗口内还没有训练记录"
+            description="记录训练后，这里会按学科显示掌握度概览；完整能力图谱在「能力中心」，历史分数曲线在「数据分析」。"
             action={
-              <Link to="/trainings" className="btn-primary">
-                <PlusCircle size={16} /> 去记录第一次训练
-              </Link>
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                <Link to="/trainings" className="btn-primary">
+                  <PlusCircle size={16} /> 去记录第一次训练
+                </Link>
+                <Link to="/abilities" className="btn-ghost">
+                  能力中心：看能力图谱与薄弱点 →
+                </Link>
+                <Link to="/analytics" className="btn-ghost">
+                  数据分析：看历史分数曲线与趋势 →
+                </Link>
+              </div>
             }
           />
         ) : (
@@ -302,7 +315,16 @@ function TimelineSummary({ registrations, stagePlans }: { registrations: ExamReg
         </Link>
       </div>
       {!hasContent ? (
-        <EmptyState icon={CalendarClock} title="尚未设置里程碑" description="到「学习时间线」设定目标日期即可" />
+        <EmptyState
+          icon={CalendarClock}
+          title="尚未设定考试日期"
+          description="到「学习时间线」设定考试日期后，可一键生成阶段规划与间隔复习计划"
+          action={
+            <Link to="/timeline" className="btn-ghost">
+              去学习时间线设定 →
+            </Link>
+          }
+        />
       ) : (
         <div className="space-y-2 text-sm">
           {upcomingExam && (
