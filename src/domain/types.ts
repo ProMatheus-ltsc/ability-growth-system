@@ -286,6 +286,10 @@ export interface LabelStat {
   sampleExercises?: string[];
   /** 数据来源，如 fenbi */
   source?: string;
+  /** 与训练记录同一口径：重复导入行不参与题型排名（缺省视为正常） */
+  validity?: 'valid' | 'duplicate';
+  /** 与训练记录同一口径：跨日期聚合行不参与题型排名 */
+  aggregationRole?: TrainingAggregationRole;
   updatedAt: string;
 }
 

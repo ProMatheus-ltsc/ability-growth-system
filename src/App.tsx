@@ -24,6 +24,7 @@ import {
   GraduationCap,
   Navigation2,
   CalendarRange,
+  Tags,
 } from 'lucide-react';
 
 import { useAuth } from './hooks/useAuth';
@@ -47,6 +48,7 @@ import { TimelinePage } from './pages/TimelinePage';
 import { ExamDiagnosisPage } from './pages/ExamDiagnosisPage';
 import { SubjectiveAnswersPage } from './pages/SubjectiveAnswersPage';
 import { AnalyticsPage } from './pages/AnalyticsPage';
+import { LabelRankingPage } from './pages/LabelRankingPage';
 
 // V5.8 新增模块
 import { PdcaPage } from './pages/PdcaPage';
@@ -96,6 +98,7 @@ function buildStudentGroups(v: Visibility): NavGroup[] {
         { to: '/subjective', icon: FileText, label: '申论作答' },
         { to: '/timeline', icon: Timer, label: '学习时间线' },
         { to: '/analytics', icon: BarChart3, label: '数据分析' },
+        { to: '/label-ranking', icon: Tags, label: '题型排名' },
       ],
     },
     {
@@ -171,6 +174,7 @@ function buildTeacherGroups(v: Visibility): NavGroup[] {
         { to: '/subjective', icon: FileText, label: '申论作答' },
         { to: '/timeline', icon: Timer, label: '学习时间线' },
         { to: '/analytics', icon: BarChart3, label: '数据分析' },
+        { to: '/label-ranking', icon: Tags, label: '题型排名' },
       ],
     },
     {
@@ -303,6 +307,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         <Route path="/subjective" element={<SubjectiveAnswersPage />} />
         <Route path="/timeline" element={<TimelinePage />} />
         <Route path="/analytics" element={<AnalyticsPage />} />
+        <Route path="/label-ranking" element={<LabelRankingPage />} />
         {/* /insights 已并入分析中心；保留重定向避免旧书签 404（验收缺陷 #1 的同类死页面问题） */}
         <Route path="/insights" element={<Navigate to="/analytics" replace />} />
         {/* 原「今日复盘」路由已下线（用户另有独立复盘站点）；旧书签由末尾 * 兜底重定向到首页，不留 404 */}

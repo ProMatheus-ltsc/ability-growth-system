@@ -277,17 +277,32 @@ export interface LabelStatNode {
   depth: number;
   /** 该前缀下全部叶子作答次数之和 */
   questionCount: number;
+  /** 该前缀下去重题量之和 */
+  uniqueQuestionCount: number;
   correctCount: number;
   /** 正确率 0–100，保留一位小数 */
   rate: number;
   /** 该前缀下并列最深标签的作答次数之和 */
   multiLabelCount: number;
+  /** 叶子来源汇总：全部官方 / 全部推断 / 混合 */
+  labelSource: 'official' | 'inferred' | 'mixed';
+  officialLeaves: number;
+  inferredLeaves: number;
   children: LabelStatNode[];
+}
+
+/**
+ * 题型标签行的有效口径：剔除重复导入行与跨日期聚合行（与 trainings 同一规则）。
+ * 缺省字段视为正常行，避免把历史聚合行整批丢掉。
+ */
+export function selectValidLabelStats(leaves: LabelStat[]): LabelStat[] {
+  return leaves.filter((l) => l.validity !== 'duplicate' && l.aggregationRole !== 'derived');
 }
 
 /**
  * 把 `labelStats` 的叶子行按 `path` 前缀向上卷成树。
  * 叶子之间互斥（每题只记最深一级主标签），因此父节点题量等于子节点之和，不会重复计数。
+ * 排序：正确率从低到高（与排名页一致），同分时样本大的在前。
  */
 export function buildLabelStats(leaves: LabelStat[]): LabelStatNode[] {
   const keyOf = (path: string[]) => path.join(' > ');
@@ -303,16 +318,27 @@ export function buildLabelStats(leaves: LabelStat[]): LabelStatNode[] {
           path,
           depth: i,
           questionCount: 0,
+          uniqueQuestionCount: 0,
           correctCount: 0,
           rate: 0,
           multiLabelCount: 0,
+          labelSource: leaf.labelSource,
+          officialLeaves: 0,
+          inferredLeaves: 0,
           children: [],
         };
         nodes.set(key, node);
       }
       node.questionCount += leaf.questionCount;
+      node.uniqueQuestionCount += leaf.uniqueQuestionCount;
       node.correctCount += leaf.correctCount;
       node.multiLabelCount += leaf.multiLabelCount;
+    }
+    // 来源只在「叶子」层计数，父节点的来源由子叶子汇总得出
+    const leafNode = nodes.get(keyOf(leaf.path));
+    if (leafNode) {
+      if (leaf.labelSource === 'official') leafNode.officialLeaves += 1;
+      else leafNode.inferredLeaves += 1;
     }
   }
 
@@ -324,11 +350,24 @@ export function buildLabelStats(leaves: LabelStat[]): LabelStatNode[] {
     if (parent) parent.children.push(node);
   }
 
+  // 自底向上汇总来源计数，再判定 official / inferred / mixed
+  const resolveSource = (node: LabelStatNode): void => {
+    for (const child of node.children) resolveSource(child);
+    if (node.children.length > 0) {
+      node.officialLeaves = node.children.reduce((s, c) => s + c.officialLeaves, 0);
+      node.inferredLeaves = node.children.reduce((s, c) => s + c.inferredLeaves, 0);
+    }
+    if (node.inferredLeaves === 0) node.labelSource = 'official';
+    else if (node.officialLeaves === 0) node.labelSource = 'inferred';
+    else node.labelSource = 'mixed';
+  };
+
   const sortTree = (list: LabelStatNode[]) => {
-    list.sort((a, b) => b.questionCount - a.questionCount);
+    list.sort((a, b) => a.rate - b.rate || b.questionCount - a.questionCount);
     for (const node of list) sortTree(node.children);
   };
   const roots = Array.from(nodes.values()).filter((n) => n.depth === 1);
+  for (const root of roots) resolveSource(root);
   sortTree(roots);
   return roots;
 }
