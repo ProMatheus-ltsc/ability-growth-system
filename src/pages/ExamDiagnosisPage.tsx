@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { v4 as uuid } from 'uuid';
-import { FlaskConical, PlusCircle, Trash2, Wrench, X, Zap } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { ArrowRight, FlaskConical, PlusCircle, Trash2, Wrench, X, Zap } from 'lucide-react';
 import { TableScroll, useToast } from '@shared/core';
 import { useAppSession } from '../hooks/useAppSession';
 import { findExams, findGaps, findTrainingsByStudent, putRecord, deleteRecord } from '../services/localDB';
@@ -307,8 +308,10 @@ function ExamForm({
   gradeLevel: GradeLevel;
   subjects: Subject[];
 }) {
+  // 申论不在训练记录/测验诊断里录入，统一到「学科专项 → 申论作答」
+  const examSubjects = subjects.filter((s) => s !== 'shenlun');
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
-  const [subject, setSubject] = useState<Subject>(subjects[0] ?? 'math');
+  const [subject, setSubject] = useState<Subject>(examSubjects[0] ?? 'xingce');
   const [scenario, setScenario] = useState('全套模拟');
   const [duration, setDuration] = useState(120);
   const [rows, setRows] = useState<ModuleRow[]>([]);
@@ -456,6 +459,26 @@ function ExamForm({
 
   const suggested = rows.map((r) => (r.total === 0 ? '-' : Math.round(((r.total - r.errors) / r.total) * 100) + '%'));
 
+  // 只有申论学科：测验诊断不接收，引导到申论作答
+  if (examSubjects.length === 0) {
+    return (
+      <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
+        <div className="card w-full max-w-md p-6 space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-bold text-slate-900">申论不在测验诊断录入</h2>
+            <button className="btn-ghost" onClick={onClose}><X size={18} /></button>
+          </div>
+          <p className="text-sm text-slate-600 leading-relaxed">
+            申论单题与套卷统一在「学科专项 → 申论作答」录入，套卷会逐题记录题型与得分，不再从训练记录/测验诊断生成申论数据。
+          </p>
+          <Link to="/subjective" className="btn-primary inline-flex" onClick={onClose}>
+            去申论作答 <ArrowRight size={14} />
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
       <div className="card w-full max-w-2xl max-h-[90vh] overflow-y-auto p-6 modal-clamp [--modal-max:42rem] [--modal-max-h:90vh]">
@@ -473,7 +496,7 @@ function ExamForm({
           <div>
             <label className="label">学科</label>
             <select className="input" value={subject} onChange={(e) => setSubject(e.target.value as Subject)}>
-              {subjects.map((s) => (
+              {examSubjects.map((s) => (
                 <option key={s} value={s}>
                   {SUBJECT_LABEL[s]}
                 </option>

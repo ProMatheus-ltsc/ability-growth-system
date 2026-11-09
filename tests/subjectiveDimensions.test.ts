@@ -1,14 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildSubjectiveByType,
   buildSubjectiveComposition,
   buildSubjectiveDimensions,
   buildSubjectiveMastery,
+  buildSubjectiveQuestionHistory,
 } from '../src/services/analytics';
 import {
   subjectiveAnswers,
   subjectiveWithoutDimensions,
 } from './fixtures/demoData';
 import type { SubjectiveAnswer } from '../src/domain/types';
+import { makeQuestionKey } from '../src/domain/subjectiveQuestion';
 
 const baseAnswer = (patch: Partial<SubjectiveAnswer>): SubjectiveAnswer => ({
   id: patch.id ?? 'a1',
@@ -106,5 +109,48 @@ describe('申论单题 / 套卷构成与掌握度口径', () => {
     expect(mastery.source).toBe('none');
     expect(mastery.score).toBeNull();
     expect(mastery.paperCount).toBe(1);
+  });
+});
+
+describe('申论题型 key、自动版本链与按题型聚合', () => {
+  it('questionKey 由学科 + 来源 + 年份 + 题号构成，缺来源或题号返回 null', () => {
+    expect(makeQuestionKey({ subject: 'shenlun', paperSource: '2023 国考副省级', paperYear: '2023', questionNo: '1' })).toBe(
+      'shenlun|2023 国考副省级|2023|1',
+    );
+    expect(makeQuestionKey({ subject: 'shenlun', paperSource: ' ', questionNo: '1' })).toBeNull();
+    expect(makeQuestionKey({ subject: 'shenlun', paperSource: '某卷' })).toBeNull();
+  });
+
+  it('同一 key 的两次作答按 answeredAt 自动排成版本，老记录不进入链路', () => {
+    const key = makeQuestionKey({ subject: 'shenlun', paperSource: '2023 国考副省级', questionNo: '1' })!;
+    const first = baseAnswer({ id: 'a1', questionKey: key, questionType: '归纳概括', answeredAt: '2026-11-01T10:00:00.000Z', dimensionScores: { points: 60 } });
+    const second = baseAnswer({ id: 'a2', questionKey: key, questionType: '归纳概括', answeredAt: '2026-11-08T10:00:00.000Z', dimensionScores: { points: 80 } });
+    const legacy = baseAnswer({ id: 'old', answeredAt: '2026-10-01T10:00:00.000Z' });
+    const history = buildSubjectiveQuestionHistory([second, legacy, first]);
+    expect(history).toHaveLength(1);
+    expect(history[0].attempts).toBe(2);
+    expect(history[0].entries.map((e) => e.recordId)).toEqual(['a1', 'a2']);
+  });
+
+  it('套卷按题拆题型聚合，未分类不计入', () => {
+    const paper = baseAnswer({
+      id: 'p1',
+      mode: 'paper',
+      paperSource: '2023 国考副省级',
+      paperYear: '2023',
+      dimensionScores: { points: 70, structure: 70, language: 70, logic: 70 },
+      paperQuestions: [
+        { no: '1', questionType: '归纳概括', score: 12, fullMark: 20 },
+        { no: '2', questionType: '综合分析', score: 8, fullMark: 20 },
+        { no: '3' }, // 老套卷缺题型 → 未分类
+      ],
+    });
+    const stats = buildSubjectiveByType([paper]);
+    expect(stats.map((s) => s.questionType)).toEqual(['归纳概括', '综合分析']);
+    expect(stats[0].attempts).toBe(1);
+    expect(stats[0].avgScoreRate).toBe(60);
+    expect(stats[0].paperQuestionCount).toBe(1);
+    // 四维继承整卷
+    expect(stats[0].avgDims.points).toBe(70);
   });
 });

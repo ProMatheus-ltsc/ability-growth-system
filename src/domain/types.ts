@@ -1158,7 +1158,39 @@ export interface SubjectivePaperQuestion {
   score?: number;
   /** 该题满分 */
   fullMark?: number;
+  /**
+   * 该题题型（申论题型枚举）。
+   * 2026-11-09 之前的老套卷没有该字段，读侧标为「未分类」，不参与题型聚合。
+   */
+  questionType?: string;
+  /** 该题身份 key（学科 + 试卷来源 + 年份 + 题号），用于自动版本链 */
+  questionKey?: string;
+  /** 该题四维评分；缺省时继承整卷四维评分 */
+  dimensionScores?: SubjectiveDimensionScores;
 }
+
+/** 申论四维评分（0-100，可空） */
+export interface SubjectiveDimensionScores {
+  points?: number;
+  structure?: number;
+  language?: number;
+  logic?: number;
+}
+
+/** 申论题型枚举（复用能力标签库中的申论模块名，兜底「其他」） */
+export const SHENLUN_QUESTION_TYPES = [
+  '归纳概括',
+  '综合分析',
+  '提出对策',
+  '贯彻执行',
+  '申发论述',
+  '其他',
+] as const;
+
+export type ShenlunQuestionType = (typeof SHENLUN_QUESTION_TYPES)[number];
+
+/** 老记录/老套卷缺题型时的展示名，且不参与题型聚合 */
+export const UNCLASSIFIED_QUESTION_TYPE = '未分类';
 
 /** §14.4 申论答案版本管理 - 保存原始答案 → 修订 → 二次修订 */
 export interface SubjectiveAnswer {
@@ -1194,13 +1226,22 @@ export interface SubjectiveAnswer {
   paperScore?: number;
   /** 套卷：可选的分题记录 */
   paperQuestions?: SubjectivePaperQuestion[];
+  /** 申论单题题型（老记录无该字段 → 未分类） */
+  questionType?: string;
+  /** 申论单题试卷来源，如「2023 国考副省级」 */
+  paperSource?: string;
+  /** 申论单题题号，如「1」「第三题」 */
+  questionNo?: string;
+  /**
+   * 题目身份 key：学科 + 试卷来源 + 年份 + 题号。
+   * 同一 key 的多次作答按 answeredAt 排序即构成版本序列（不依赖 parentId）。
+   * 老记录没有该字段，读侧按单题展示、不进入自动版本链。
+   */
+  questionKey?: string;
+  /** 作答时间（录入时采集，ISO 字符串），区别于系统创建的 createdAt */
+  answeredAt?: string;
   /** 申论/面试四维评分（0-100，可空） */
-  dimensionScores?: {
-    points?: number;
-    structure?: number;
-    language?: number;
-    logic?: number;
-  };
+  dimensionScores?: SubjectiveDimensionScores;
 }
 
 /** §15.1 面试专项训练记录 - 音视频与思考/答题时间 */

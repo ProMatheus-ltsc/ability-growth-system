@@ -18,12 +18,14 @@ import type {
   StudentProfile,
   Subject,
   SubjectiveAnswer,
+  SubjectiveDimensionScores,
   TrainingRecord,
   TrainingType,
   WarningItem,
   WarningLevel,
 } from '../domain/types';
 import { scoreToLevel, TRAINING_TYPE_LABEL } from '../domain/types';
+import { displayQuestionType, isClassifiedType } from '../domain/subjectiveQuestion';
 import { getRadarDimensions } from '../domain/abilityTags';
 import { normalizeModule, pathBelongsToModule } from '../domain/moduleNormalize';
 import { isStandardMinutesInferred } from '../domain/paperStructure';
@@ -782,6 +784,180 @@ export function buildSubjectiveMastery(
     paperCount: composition.paperCount,
     dims,
   };
+}
+
+/** 题目级作答条目（单题一条；套卷按每道分题拆一条） */
+export interface SubjectiveQuestionEntry {
+  questionKey: string | null;
+  questionType: string;
+  questionNo?: string;
+  paperSource?: string;
+  paperYear?: string;
+  answeredAt: string;
+  recordId: string;
+  studentId?: string;
+  content: string;
+  score?: number;
+  fullMark?: number;
+  /** 卷面得分率（0-100），无得分/满分时为 null */
+  scoreRate: number | null;
+  /** 题目级四维，缺省继承整卷四维 */
+  dims: SubjectiveDimensionScores;
+  rated: boolean;
+  /** true=来自套卷的分题，false=单题记录 */
+  isPaperQuestion: boolean;
+}
+
+export interface SubjectiveTypeStat {
+  questionType: string;
+  /** 该题型的作答次数（单题 + 套卷分题，各计 1 次） */
+  attempts: number;
+  singleCount: number;
+  paperQuestionCount: number;
+  /** 有得分/满分的次数 */
+  scoreSamples: number;
+  avgScoreRate: number | null;
+  /** 有四维评分的次数 */
+  dimSamples: number;
+  avgDims: Record<'points' | 'structure' | 'language' | 'logic', number | null>;
+}
+
+export interface SubjectiveQuestionHistory {
+  questionKey: string;
+  questionType: string;
+  paperSource?: string;
+  questionNo?: string;
+  attempts: number;
+  firstAnsweredAt: string;
+  latestAnsweredAt: string;
+  entries: SubjectiveQuestionEntry[];
+}
+
+const round1 = (v: number) => Math.round(v * 10) / 10;
+
+/**
+ * 把 subjectiveAnswers 摊平成题目级条目：
+ * - 单题：一条记录 = 一次作答；
+ * - 套卷：paperQuestions 的每一题 = 一次作答，四维缺省继承整卷四维；
+ * - 老记录没有 questionKey / questionType → questionKey=null、题型「未分类」。
+ */
+export function flattenSubjectiveQuestions(records: SubjectiveAnswer[]): SubjectiveQuestionEntry[] {
+  const entries: SubjectiveQuestionEntry[] = [];
+  for (const r of records) {
+    const answeredAt = r.answeredAt ?? r.createdAt ?? `${r.date}T00:00:00.000Z`;
+    if (r.mode === 'paper') {
+      const source = r.paperSource ?? r.paperTitle;
+      for (const q of r.paperQuestions ?? []) {
+        const scoreValid =
+          typeof q.score === 'number' && Number.isFinite(q.score) &&
+          typeof q.fullMark === 'number' && Number.isFinite(q.fullMark) && q.fullMark > 0;
+        entries.push({
+          questionKey: q.questionKey ?? null,
+          questionType: displayQuestionType(q.questionType),
+          questionNo: q.no,
+          paperSource: source,
+          paperYear: r.paperYear,
+          answeredAt,
+          recordId: r.id,
+          studentId: r.studentId,
+          content: q.content ?? '',
+          score: q.score,
+          fullMark: q.fullMark,
+          scoreRate: scoreValid ? round1(Math.max(0, Math.min(1, (q.score as number) / (q.fullMark as number))) * 100) : null,
+          dims: q.dimensionScores ?? r.dimensionScores ?? {},
+          rated: hasAnyDimension(q.dimensionScores ?? r.dimensionScores),
+          isPaperQuestion: true,
+        });
+      }
+      continue;
+    }
+    entries.push({
+      questionKey: r.questionKey ?? null,
+      questionType: displayQuestionType(r.questionType),
+      questionNo: r.questionNo,
+      paperSource: r.paperSource,
+      paperYear: r.paperYear,
+      answeredAt,
+      recordId: r.id,
+      studentId: r.studentId,
+      content: r.content,
+      scoreRate: null,
+      dims: r.dimensionScores ?? {},
+      rated: hasAnyDimension(r.dimensionScores),
+      isPaperQuestion: false,
+    });
+  }
+  return entries;
+}
+
+function hasAnyDimension(dims?: SubjectiveDimensionScores): boolean {
+  if (!dims) return false;
+  return DIMENSION_KEYS.some((k) => typeof dims[k] === 'number' && Number.isFinite(dims[k]));
+}
+
+/** 按题型聚合：得分率与四维评分，「未分类」不参与（页面单独标注数量） */
+export function buildSubjectiveByType(records: SubjectiveAnswer[]): SubjectiveTypeStat[] {
+  const groups = new Map<string, SubjectiveQuestionEntry[]>();
+  for (const e of flattenSubjectiveQuestions(records)) {
+    if (!isClassifiedType(e.questionType)) continue;
+    const arr = groups.get(e.questionType) ?? [];
+    arr.push(e);
+    groups.set(e.questionType, arr);
+  }
+  return Array.from(groups.entries())
+    .map(([questionType, list]) => {
+      const scored = list.filter((e) => e.scoreRate !== null);
+      const rated = list.filter((e) => e.rated);
+      const avgDims = {} as SubjectiveTypeStat['avgDims'];
+      for (const key of DIMENSION_KEYS) {
+        const values = rated
+          .map((e) => e.dims[key])
+          .filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
+        avgDims[key] = values.length === 0 ? null : round1(values.reduce((s, v) => s + v, 0) / values.length);
+      }
+      return {
+        questionType,
+        attempts: list.length,
+        singleCount: list.filter((e) => !e.isPaperQuestion).length,
+        paperQuestionCount: list.filter((e) => e.isPaperQuestion).length,
+        scoreSamples: scored.length,
+        avgScoreRate:
+          scored.length === 0 ? null : round1(scored.reduce((s, e) => s + (e.scoreRate as number), 0) / scored.length),
+        dimSamples: rated.length,
+        avgDims,
+      };
+    })
+    .sort((a, b) => b.attempts - a.attempts);
+}
+
+/**
+ * 按 questionKey 自动形成版本链：同一 key 的作答按 answeredAt 升序排成版本序列。
+ * 没有 questionKey 的老记录不进入这里（页面仍按记录链展示）。
+ */
+export function buildSubjectiveQuestionHistory(records: SubjectiveAnswer[]): SubjectiveQuestionHistory[] {
+  const groups = new Map<string, SubjectiveQuestionEntry[]>();
+  for (const e of flattenSubjectiveQuestions(records)) {
+    if (!e.questionKey) continue;
+    const arr = groups.get(e.questionKey) ?? [];
+    arr.push(e);
+    groups.set(e.questionKey, arr);
+  }
+  return Array.from(groups.entries())
+    .map(([questionKey, list]) => {
+      const sorted = [...list].sort((a, b) => a.answeredAt.localeCompare(b.answeredAt));
+      const latest = sorted[sorted.length - 1];
+      return {
+        questionKey,
+        questionType: latest.questionType,
+        paperSource: latest.paperSource,
+        questionNo: latest.questionNo,
+        attempts: sorted.length,
+        firstAnsweredAt: sorted[0].answeredAt,
+        latestAnsweredAt: latest.answeredAt,
+        entries: sorted,
+      };
+    })
+    .sort((a, b) => b.latestAnsweredAt.localeCompare(a.latestAnsweredAt));
 }
 
 export function calcErrorRecurrence(

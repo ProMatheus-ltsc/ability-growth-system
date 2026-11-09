@@ -184,6 +184,14 @@ export function AbilityCenterPage() {
         本周进步 / 限时达标 / 目标分差等结论卡统一在「分析中心 · 概览」。
       </p>
 
+      {subject === 'shenlun' && (
+        <p className="text-xs text-amber-600 leading-relaxed">
+          申论口径：本页的雷达、模块与趋势按训练记录（历史数据）计算，属于「按模块」口径；申论作答的四维评分与
+          「归纳概括 / 综合分析 / 提出对策 / 贯彻执行 / 申发论述」题型强弱在「数据分析 → 申论作答汇总」按题型统计
+          （套卷逐题拆分），两者不混算。
+        </p>
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         <div className="card p-5">
           <div className="flex items-center gap-2 mb-3">

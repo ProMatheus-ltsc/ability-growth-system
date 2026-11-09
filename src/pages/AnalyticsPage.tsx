@@ -32,6 +32,7 @@ import {
   buildGrowthSeries,
   buildModuleStats,
   buildStageReport,
+  buildSubjectiveByType,
   buildSubjectiveComposition,
   buildSubjectiveDimensions,
   buildSubjectiveMastery,
@@ -120,6 +121,7 @@ export function AnalyticsPage() {
       windowCount: windowedShenlun.length,
       dims: buildSubjectiveDimensions(windowedShenlun),
       composition: buildSubjectiveComposition(windowedShenlun),
+      byType: buildSubjectiveByType(windowedShenlun),
     }),
     [shenlunAnswers, windowedShenlun],
   );
@@ -401,8 +403,46 @@ export function AnalyticsPage() {
                   );
                 })}
               </div>
+              {subjectiveSummary.byType.length > 0 && (
+                <div className="mt-3 rounded-lg border border-slate-100 p-3">
+                  <div className="text-xs font-medium text-slate-700 mb-2">
+                    按题型（套卷按题拆分；未分类记录不计入）
+                  </div>
+                  <TableScroll label="申论按题型统计">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="text-left text-slate-500 border-b border-slate-100">
+                          <th className="py-1.5">题型</th>
+                          <th className="py-1.5 text-right">作答次数</th>
+                          <th className="py-1.5 text-right">单题 / 套卷题</th>
+                          <th className="py-1.5 text-right">卷面得分率</th>
+                          <th className="py-1.5 text-right">四维均值</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {subjectiveSummary.byType.map((t) => {
+                          const dimVals = [t.avgDims.points, t.avgDims.structure, t.avgDims.language, t.avgDims.logic].filter(
+                            (v): v is number => v !== null,
+                          );
+                          const dimAvg = dimVals.length === 0 ? null : Math.round((dimVals.reduce((s, v) => s + v, 0) / dimVals.length) * 10) / 10;
+                          return (
+                            <tr key={t.questionType} className="border-b border-slate-50">
+                              <td className="py-1.5 text-slate-700">{t.questionType}</td>
+                              <td className="py-1.5 text-right">{t.attempts}</td>
+                              <td className="py-1.5 text-right text-slate-500">{t.singleCount} / {t.paperQuestionCount}</td>
+                              <td className="py-1.5 text-right">{t.avgScoreRate === null ? '—' : `${t.avgScoreRate}%`}</td>
+                              <td className="py-1.5 text-right">{dimAvg ?? '—'}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </TableScroll>
+                </div>
+              )}
               <div className="text-xs text-slate-400 leading-relaxed">
-                只读自 subjectiveAnswers（当前学员 · 申论），不写入训练记录，不参与训练统计口径；单题与套卷分开计数，套卷按「份」计不拆题；缺失维度分不计入均值。
+                只读自 subjectiveAnswers（当前学员 · 申论），不写入训练记录，不参与训练统计口径；单题与套卷分开计数，套卷按「份」计不拆题；
+                按题型表把套卷逐题拆开统计（四维优先取题目级、缺省继承整卷），老记录缺题型计为「未分类」且不参与题型聚合。
               </div>
             </div>
           )}
@@ -412,7 +452,8 @@ export function AnalyticsPage() {
             训练 ROI 与退步检测已统一使用该掌握度（不再使用原始正确率）；模块层不套用该加权，统一称「模块正确率」；
             目标分只读报名记录 targetScore；时间窗口全站共用{TIME_WINDOW_LABEL[windowKey]}。
             申论掌握度优先取 subjectiveAnswers 的四维评分均值（单题与套卷同等参与），完全没有维度分时才用套卷得分率、再退回训练记录正确率，页面上会标明当前是哪种来源；
-            同一份套卷同时有四维评分与卷面得分时，以四维评分为准；申论作答汇总只读，不写入训练记录，也不参与非申论学科的掌握度计算。
+            同一份套卷同时有四维评分与卷面得分时，以四维评分为准；套卷的题型强弱按「每题」聚合（不是整卷均分），单题与套卷分开计数；
+            申论作答汇总只读，不写入训练记录，也不参与非申论学科的掌握度计算。
           </div>
 
           <div className="card p-5 space-y-4">

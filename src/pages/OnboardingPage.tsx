@@ -289,7 +289,9 @@ function BaselineForm({
   onSkipChange: (v: boolean) => void;
   onChange: (v: BaselineDraft | null) => void;
 }) {
-  const primarySubject = subjects[0];
+  // 申论不再从训练记录/基线录入，统一到「学科专项 → 申论作答」
+  const baselineSubjects = subjects.filter((s) => s !== 'shenlun');
+  const primarySubject = baselineSubjects[0];
   const moduleOptions = primarySubject ? getModules(gradeLevel, primarySubject) : [];
   const defaultModule = moduleOptions[0] ?? '基础模块';
 
@@ -310,7 +312,7 @@ function BaselineForm({
   }, [subject]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (skip) {
+    if (skip || baselineSubjects.length === 0) {
       onChange(null);
       return;
     }
@@ -335,12 +337,18 @@ function BaselineForm({
         跳过基线,稍后到训练记录页录入
       </label>
 
-      {!skip && (
+      {baselineSubjects.length === 0 && (
+        <div className="p-3 rounded-lg bg-blue-50 text-sm text-blue-800">
+          申论不需要填写基线：请直接到「学科专项 → 申论作答」录入单题或套卷，四维评分会自动作为申论掌握度的口径。
+        </div>
+      )}
+
+      {!skip && baselineSubjects.length > 0 && (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
             <label className="label">学科</label>
             <select className="input" value={subject} onChange={(e) => setSubject(e.target.value as Subject)}>
-              {subjects.map((s) => (
+              {baselineSubjects.map((s) => (
                 <option key={s} value={s}>
                   {SUBJECT_LABEL[s]}
                 </option>
