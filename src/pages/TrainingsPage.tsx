@@ -375,7 +375,7 @@ function TrainingForm({ quick, defaults, studentId, gradeLevel, availableSubject
 
         {subject === 'shenlun' && (
           <div className="mt-3 rounded-lg bg-blue-50 px-3 py-2 text-xs text-blue-700 leading-relaxed">
-            申论练习只需要在「学科专项 → 申论作答」录入（内容、时长、四维评分），分析中心的申论掌握度会直接读那里的四维评分，不必在这里重复录一遍。
+            申论（单题和套卷都算）请只在「学科专项 → 申论作答」录一次：单题记内容、时长与四维评分，套卷可一次录入卷名、满分得分、分题与四维评分。分析中心的申论掌握度会直接读那里的评分，不必在这里重复录一遍。
             已存在的申论训练记录仍然有效，会作为没有维度评分时的回退口径。
           </div>
         )}

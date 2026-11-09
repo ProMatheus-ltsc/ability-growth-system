@@ -1148,6 +1148,18 @@ export interface LiteracyMeasurement {
 
 /** ============ V5.8 全量补齐:新增实体 ============ */
 
+/** 套卷中的分题记录（除题号外均可留空，避免变成负担） */
+export interface SubjectivePaperQuestion {
+  /** 题号，如「1」「二」「第三题」 */
+  no: string;
+  /** 该题作答 / 要点摘录 */
+  content?: string;
+  /** 该题得分 */
+  score?: number;
+  /** 该题满分 */
+  fullMark?: number;
+}
+
 /** §14.4 申论答案版本管理 - 保存原始答案 → 修订 → 二次修订 */
 export interface SubjectiveAnswer {
   id: string;
@@ -1165,6 +1177,23 @@ export interface SubjectiveAnswer {
   scoreDims?: Array<{ label: string; stars: number }>;
   createdAt: string;
   updatedAt: string;
+  /**
+   * 作答形态：single=单题，paper=套卷。
+   * 老记录没有该字段，读侧一律视为 single，不迁移、不回填。
+   */
+  mode?: 'single' | 'paper';
+  /** 套卷：卷名或来源，如「2023 国考副省级」 */
+  paperTitle?: string;
+  /** 套卷：年份或卷别，如「2023」「副省级」 */
+  paperYear?: string;
+  /** 套卷：总题数 */
+  paperQuestionCount?: number;
+  /** 套卷：满分 */
+  paperFullMark?: number;
+  /** 套卷：整卷得分 */
+  paperScore?: number;
+  /** 套卷：可选的分题记录 */
+  paperQuestions?: SubjectivePaperQuestion[];
   /** 申论/面试四维评分（0-100，可空） */
   dimensionScores?: {
     points?: number;

@@ -672,20 +672,61 @@ export function buildSubjectiveDimensions(records: SubjectiveAnswer[]): Subjecti
 export interface SubjectiveMastery {
   /** 0-100 掌握度 */
   score: number | null;
-  /** rating: 四维评分均值；training: 无任何维度分时退回训练记录；none: 两处都没有样本 */
-  source: 'rating' | 'training' | 'none';
-  /** 有维度分的作答数 */
+  /** rating: 四维评分均值；paperScore: 无四维时套卷得分率；training: 两处都没有时退回训练记录；none: 全部无样本 */
+  source: 'rating' | 'paperScore' | 'training' | 'none';
+  /** 参与计算的样本数（rating 为有维度分的作答数，paperScore 为有得分/满分的套卷数） */
   ratedCount: number;
   /** 该次作答没有维度分、退回训练记录的作答数（仅用于提示） */
   unratedCount: number;
+  /** 单题作答数（mode 缺省视为单题） */
+  singleCount: number;
+  /** 套卷作答数 */
+  paperCount: number;
   dims: SubjectiveDimensionSummary;
+}
+
+/** 单题 / 套卷的作答构成（用于页面标注统计口径，不改变任何既有指标） */
+export interface SubjectiveComposition {
+  singleCount: number;
+  paperCount: number;
+  /** 有维度分的单题 / 套卷数量 */
+  singleRated: number;
+  paperRated: number;
+  /** 有得分与满分的套卷数量（可退回得分率） */
+  paperWithScore: number;
+}
+
+export function buildSubjectiveComposition(records: SubjectiveAnswer[]): SubjectiveComposition {
+  const isPaper = (r: SubjectiveAnswer) => r.mode === 'paper';
+  const hasDims = (r: SubjectiveAnswer) =>
+    r.dimensionScores !== undefined &&
+    DIMENSION_KEYS.some((key) => {
+      const v = r.dimensionScores?.[key];
+      return typeof v === 'number' && Number.isFinite(v);
+    });
+  const hasScore = (r: SubjectiveAnswer) =>
+    typeof r.paperScore === 'number' &&
+    Number.isFinite(r.paperScore) &&
+    typeof r.paperFullMark === 'number' &&
+    Number.isFinite(r.paperFullMark) &&
+    r.paperFullMark > 0;
+  const papers = records.filter(isPaper);
+  return {
+    singleCount: records.length - papers.length,
+    paperCount: papers.length,
+    singleRated: records.filter((r) => !isPaper(r) && hasDims(r)).length,
+    paperRated: papers.filter(hasDims).length,
+    paperWithScore: papers.filter(hasScore).length,
+  };
 }
 
 /**
  * 申论掌握度口径（2026-11-09 统一）：
  * 1. 优先用 `subjectiveAnswers` 的四维评分：取各维均值的平均数（有分的维度才参与）；
- * 2. 完全没有维度分时，退回该学科训练记录的掌握度（`aggregateBySubject` 同口径）；
- * 3. 两处都无样本时返回 null，由页面显示空态，不伪造数字。
+ *    套卷同样走这一口径——单题与套卷谁有维度分谁参与，两者都有时四维永远优先于卷面得分率；
+ * 2. 完全没有维度分时，套卷若有得分/满分，用得分率（得分 / 满分 × 100）的均值；
+ * 3. 以上都没有时，退回该学科训练记录的掌握度（`aggregateBySubject` 同口径）；
+ * 4. 全部无样本时返回 null，由页面显示空态，不伪造数字。
  *
  * 注意：这里只读两个 store，不写入、不生成副本，也不改变训练记录统计。
  */
@@ -694,6 +735,7 @@ export function buildSubjectiveMastery(
   trainings: TrainingRecord[],
 ): SubjectiveMastery {
   const dims = buildSubjectiveDimensions(answers);
+  const composition = buildSubjectiveComposition(answers);
   if (dims.samples > 0) {
     const values = DIMENSION_KEYS.map((k) => dims.avg[k]).filter((v): v is number => v !== null);
     const avg = values.length === 0 ? null : values.reduce((s, v) => s + v, 0) / values.length;
@@ -702,6 +744,31 @@ export function buildSubjectiveMastery(
       source: 'rating',
       ratedCount: dims.samples,
       unratedCount: answers.length - dims.samples,
+      singleCount: composition.singleCount,
+      paperCount: composition.paperCount,
+      dims,
+    };
+  }
+  // 无四维：套卷得分率兜底（仅套卷有卷面分，单题没有得分字段）
+  const rates = answers
+    .filter(
+      (r) =>
+        r.mode === 'paper' &&
+        typeof r.paperScore === 'number' &&
+        Number.isFinite(r.paperScore) &&
+        typeof r.paperFullMark === 'number' &&
+        Number.isFinite(r.paperFullMark) &&
+        r.paperFullMark > 0,
+    )
+    .map((r) => Math.max(0, Math.min(1, (r.paperScore as number) / (r.paperFullMark as number))) * 100);
+  if (rates.length > 0) {
+    return {
+      score: Math.round((rates.reduce((s, v) => s + v, 0) / rates.length) * 10) / 10,
+      source: 'paperScore',
+      ratedCount: rates.length,
+      unratedCount: answers.length - rates.length,
+      singleCount: composition.singleCount,
+      paperCount: composition.paperCount,
       dims,
     };
   }
@@ -711,6 +778,8 @@ export function buildSubjectiveMastery(
     source: stats ? 'training' : 'none',
     ratedCount: 0,
     unratedCount: answers.length,
+    singleCount: composition.singleCount,
+    paperCount: composition.paperCount,
     dims,
   };
 }

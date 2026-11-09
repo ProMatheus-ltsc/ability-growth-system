@@ -32,6 +32,7 @@ import {
   buildGrowthSeries,
   buildModuleStats,
   buildStageReport,
+  buildSubjectiveComposition,
   buildSubjectiveDimensions,
   buildSubjectiveMastery,
   buildTimeAllocation,
@@ -118,6 +119,7 @@ export function AnalyticsPage() {
       answerCount: shenlunAnswers.length,
       windowCount: windowedShenlun.length,
       dims: buildSubjectiveDimensions(windowedShenlun),
+      composition: buildSubjectiveComposition(windowedShenlun),
     }),
     [shenlunAnswers, windowedShenlun],
   );
@@ -342,17 +344,26 @@ export function AnalyticsPage() {
                   value={shenlunMastery.score === null ? '暂无样本' : `${shenlunMastery.score}%`}
                   hint={
                     shenlunMastery.source === 'rating'
-                      ? `四维评分均值 · ${shenlunMastery.ratedCount} 份评分${shenlunMastery.unratedCount > 0 ? ` · 另有 ${shenlunMastery.unratedCount} 份无维度分` : ''}`
-                      : shenlunMastery.source === 'training'
-                        ? '无维度评分，退回训练记录正确率'
-                        : '尚无申论作答或训练记录'
+                      ? `四维评分均值 · ${shenlunMastery.ratedCount} 份评分（单题 ${subjectiveSummary.composition.singleRated} / 套卷 ${subjectiveSummary.composition.paperRated}）${
+                          shenlunMastery.unratedCount > 0 ? ` · 另有 ${shenlunMastery.unratedCount} 份无维度分` : ''
+                        }`
+                      : shenlunMastery.source === 'paperScore'
+                        ? `无四维评分，退回套卷得分率 · ${shenlunMastery.ratedCount} 份套卷`
+                        : shenlunMastery.source === 'training'
+                          ? '无维度评分，退回训练记录正确率'
+                          : '尚无申论作答或训练记录'
                   }
                   accentClassName="text-blue-600"
                 />
                 <StatCard
-                  label="题量（去重题目）"
+                  label="题量（去重作答主题）"
                   value={String(subjectiveSummary.questionCount)}
-                  hint="同一题的多版本合并为 1 题"
+                  hint="同一题 / 同一套卷的多版本合并为 1 项"
+                />
+                <StatCard
+                  label="单题 / 套卷（窗口内）"
+                  value={`${subjectiveSummary.composition.singleCount} / ${subjectiveSummary.composition.paperCount}`}
+                  hint="套卷按「份」计，不拆成单题"
                 />
                 <StatCard
                   label="作答次数（累计）"
@@ -391,7 +402,7 @@ export function AnalyticsPage() {
                 })}
               </div>
               <div className="text-xs text-slate-400 leading-relaxed">
-                只读自 subjectiveAnswers（当前学员 · 申论），不写入训练记录，不参与训练统计口径；缺失维度分不计入均值。
+                只读自 subjectiveAnswers（当前学员 · 申论），不写入训练记录，不参与训练统计口径；单题与套卷分开计数，套卷按「份」计不拆题；缺失维度分不计入均值。
               </div>
             </div>
           )}
@@ -400,8 +411,8 @@ export function AnalyticsPage() {
             <b className="text-slate-700">口径说明</b>：掌握度 = 0.7 × 陌生题正确率 + 0.3 × 整体正确率（无陌生题样本退化为整体正确率）；
             训练 ROI 与退步检测已统一使用该掌握度（不再使用原始正确率）；模块层不套用该加权，统一称「模块正确率」；
             目标分只读报名记录 targetScore；时间窗口全站共用{TIME_WINDOW_LABEL[windowKey]}。
-            申论掌握度优先取 subjectiveAnswers 的四维评分均值，完全没有维度分时才退回训练记录正确率，页面上会标明当前是哪种来源；
-            申论作答汇总只读，不写入训练记录，也不参与非申论学科的掌握度计算。
+            申论掌握度优先取 subjectiveAnswers 的四维评分均值（单题与套卷同等参与），完全没有维度分时才用套卷得分率、再退回训练记录正确率，页面上会标明当前是哪种来源；
+            同一份套卷同时有四维评分与卷面得分时，以四维评分为准；申论作答汇总只读，不写入训练记录，也不参与非申论学科的掌握度计算。
           </div>
 
           <div className="card p-5 space-y-4">
