@@ -156,30 +156,29 @@ export function selectValidRecords(records: TrainingRecord[]): TrainingRecord[] 
   );
 }
 
-const dateSubjectKey = (r: TrainingRecord) => `${r.date}::${r.subject}`;
+const hasExamId = (r: TrainingRecord): string | null => (r.examId ? r.examId : null);
 
 /**
  * 学科级聚合去重：
  * - 先剔除 `duplicate` 与 `derived`；
- * - 同日期同科目存在整卷行时，该日期该科目的模块行全部排除，只保留整卷行；
- *   有 examId 时同样保证同一份卷的整卷压制模块；
- * - 无整卷的模块行照常保留累加（不能因为没勾选双写就丢模块数据）；
- * - 缺 aggregationRole 且缺 scope 的老记录按独立记录保留。
+ * - 压制只在同一个 `examId` 内发生：该 examId 存在整卷行时排除它的模块明细；
+ * - 不同 examId 之间互不影响；
+ * - **没有 examId 的记录不做任何压制**，各自独立计入（历史数据 228 条无 examId，
+ *   用日期+科目去压等于拿猜测当证据，会把「上午专项、晚上整卷」误判成同一次）；
+ * - 缺 aggregationRole 的老记录按 scope 映射角色，但同样只在有 examId 时参与压制。
  */
 export function selectAggregationRecords(records: TrainingRecord[]): TrainingRecord[] {
   const valid = selectValidRecords(records);
   const fullByExam = new Set<string>();
-  const fullByDateSubject = new Set<string>();
   for (const r of valid) {
     if (resolveAggregationRole(r) !== 'full_paper') continue;
-    if (r.examId) fullByExam.add(r.examId);
-    fullByDateSubject.add(dateSubjectKey(r));
+    const examId = hasExamId(r);
+    if (examId) fullByExam.add(examId);
   }
   return valid.filter((r) => {
-    const role = resolveAggregationRole(r);
-    if (role !== 'module_detail') return true;
-    if (r.examId && fullByExam.has(r.examId)) return false;
-    return !fullByDateSubject.has(dateSubjectKey(r));
+    if (resolveAggregationRole(r) !== 'module_detail') return true;
+    const examId = hasExamId(r);
+    return !(examId && fullByExam.has(examId));
   });
 }
 
@@ -188,24 +187,23 @@ export function selectAggregationRecords(records: TrainingRecord[]): TrainingRec
 /**
  * 模块级去重（F-03 模块口径）：
  * - 先剔除 `duplicate` 与 `derived`；
- * - 同日期同科目（或同一 examId）存在模块明细时排除整卷行，保留模块明细，
- *   否则模块时间/题量明细会消失；
- * - 只有整卷行（未勾选双写）时保留整卷行，避免整卷数据整体丢失。
+ * - 压制只在同一个 `examId` 内发生：该 examId 存在模块明细时排除它的整卷行，保留模块明细；
+ * - 只有整卷时保留整卷，避免整卷数据整体丢失；
+ * - **没有 examId 的记录不做任何压制**，整卷与模块各自独立计入。
  * 时间分配、模块统计、雷达的模块兜底统一使用本函数。
  */
 export function selectModuleLevelRecords(records: TrainingRecord[]): TrainingRecord[] {
   const valid = selectValidRecords(records);
   const modulesByExam = new Set<string>();
-  const modulesByDateSubject = new Set<string>();
   for (const r of valid) {
     if (resolveAggregationRole(r) !== 'module_detail') continue;
-    if (r.examId) modulesByExam.add(r.examId);
-    modulesByDateSubject.add(dateSubjectKey(r));
+    const examId = hasExamId(r);
+    if (examId) modulesByExam.add(examId);
   }
   return valid.filter((r) => {
     if (resolveAggregationRole(r) !== 'full_paper') return true;
-    if (r.examId && modulesByExam.has(r.examId)) return false;
-    return !modulesByDateSubject.has(dateSubjectKey(r));
+    const examId = hasExamId(r);
+    return !(examId && modulesByExam.has(examId));
   });
 }
 

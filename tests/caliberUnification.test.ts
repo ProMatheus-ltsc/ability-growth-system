@@ -79,10 +79,11 @@ describe('口径统一 · 掌握度 / 目标 / 时间窗口', () => {
 /**
  * 2026-11-09 双算修复：duplicate / derived / full_paper 三级过滤。
  * - duplicate（重复导入）与 derived（跨日期聚合）不进入任何聚合；
- * - 同日期同科目优先取 full_paper，压制 module_detail；
+ * - 压制只在同一个 examId 内发生：同 examId 的 full_paper 与 module_detail 二选一；
+ * - 不同 examId、没有 examId 的记录一律不压制，各自独立计入；
  * - 历史记录缺 aggregationRole 时按 scope 兼容映射，两者都缺失按独立记录保留。
  */
-describe('双算过滤 · duplicate / derived / full_paper', () => {
+describe('双算过滤 · duplicate / derived / full_paper（仅同 examId 压制）', () => {
   const base = fullAndModuleTrainings[0];
 
   it('duplicate 行不参与学科级与模块级聚合', () => {
@@ -111,23 +112,47 @@ describe('双算过滤 · duplicate / derived / full_paper', () => {
     expect(series[0].score).toBe(50);
   });
 
-  it('同日期同科目优先取 full_paper：无 examId 的整卷也压制同日同科目模块行', () => {
+  it('同一 examId 内整卷压制模块（学科级），模块级则反选模块明细', () => {
     const records = [
-      { ...base, id: 'full-1', aggregationRole: 'full_paper' as const, totalQuestions: 100, correctCount: 50, errorCount: 50 },
-      { ...base, id: 'm-1', aggregationRole: 'module_detail' as const, totalQuestions: 20, correctCount: 18, errorCount: 2 },
+      { ...base, id: 'full-1', examId: 'paper-1', aggregationRole: 'full_paper' as const, totalQuestions: 100, correctCount: 50, errorCount: 50 },
+      { ...base, id: 'm-1', examId: 'paper-1', aggregationRole: 'module_detail' as const, totalQuestions: 20, correctCount: 18, errorCount: 2 },
     ];
     expect(selectAggregationRecords(records).map((r) => r.id)).toEqual(['full-1']);
-    // 模块口径反选：保留模块明细、排除整卷
     expect(selectModuleLevelRecords(records).map((r) => r.id)).toEqual(['m-1']);
   });
 
-  it('缺 aggregationRole 的历史记录按 scope 兼容映射，两者都缺时按独立记录保留', () => {
-    const legacyFull = { ...base, id: 'legacy-full', scope: 'full' as const, totalQuestions: 100, errorCount: 50 };
-    const legacyModule = { ...base, id: 'legacy-module', scope: 'module' as const, module: '资料分析', totalQuestions: 20, errorCount: 2 };
-    const standalone = { ...base, id: 'standalone', scope: 'single' as const, module: '言语理解', totalQuestions: 10, errorCount: 1 };
+  it('同一天两个不同 examId（一个整卷一个模块）各自独立计入', () => {
+    const records = [
+      { ...base, id: 'full-a', examId: 'paper-a', aggregationRole: 'full_paper' as const, totalQuestions: 100, correctCount: 50, errorCount: 50 },
+      { ...base, id: 'mod-b', examId: 'paper-b', aggregationRole: 'module_detail' as const, module: '资料分析', totalQuestions: 20, correctCount: 18, errorCount: 2 },
+    ];
+    expect(selectAggregationRecords(records).map((r) => r.id)).toEqual(['full-a', 'mod-b']);
+    expect(selectModuleLevelRecords(records).map((r) => r.id)).toEqual(['full-a', 'mod-b']);
+  });
 
-    const records = [legacyFull, legacyModule, standalone];
-    expect(selectAggregationRecords(records).map((r) => r.id)).toEqual(['legacy-full', 'standalone']);
-    expect(selectModuleLevelRecords(records).map((r) => r.id)).toEqual(['legacy-module', 'standalone']);
+  it('没有 examId 的整卷与模块不做任何压制（同日专项 + 整卷是两笔训练）', () => {
+    const records = [
+      { ...base, id: 'full-1', examId: undefined, aggregationRole: 'full_paper' as const, totalQuestions: 100, correctCount: 50, errorCount: 50 },
+      { ...base, id: 'm-1', examId: undefined, aggregationRole: 'module_detail' as const, module: '资料分析', totalQuestions: 20, correctCount: 18, errorCount: 2 },
+    ];
+    expect(selectAggregationRecords(records).map((r) => r.id)).toEqual(['full-1', 'm-1']);
+    expect(selectModuleLevelRecords(records).map((r) => r.id)).toEqual(['full-1', 'm-1']);
+  });
+
+  it('缺 aggregationRole 时按 scope 映射角色：无 examId 不压制，有 examId 才压制', () => {
+    const legacyNoExam = [
+      { ...base, id: 'legacy-full', examId: undefined, scope: 'full' as const, totalQuestions: 100, errorCount: 50 },
+      { ...base, id: 'legacy-module', examId: undefined, scope: 'module' as const, module: '资料分析', totalQuestions: 20, errorCount: 2 },
+      { ...base, id: 'standalone', examId: undefined, scope: 'single' as const, module: '言语理解', totalQuestions: 10, errorCount: 1 },
+    ];
+    expect(selectAggregationRecords(legacyNoExam)).toHaveLength(3);
+    expect(selectModuleLevelRecords(legacyNoExam)).toHaveLength(3);
+
+    const legacyWithExam = [
+      { ...base, id: 'legacy-full', examId: 'paper-1', scope: 'full' as const, totalQuestions: 100, errorCount: 50 },
+      { ...base, id: 'legacy-module', examId: 'paper-1', scope: 'module' as const, module: '资料分析', totalQuestions: 20, errorCount: 2 },
+    ];
+    expect(selectAggregationRecords(legacyWithExam).map((r) => r.id)).toEqual(['legacy-full']);
+    expect(selectModuleLevelRecords(legacyWithExam).map((r) => r.id)).toEqual(['legacy-module']);
   });
 });
