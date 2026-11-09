@@ -25,6 +25,7 @@ import {
   Navigation2,
   CalendarRange,
   Tags,
+  Briefcase,
 } from 'lucide-react';
 
 import { useAuth } from './hooks/useAuth';
@@ -49,6 +50,7 @@ import { ExamDiagnosisPage } from './pages/ExamDiagnosisPage';
 import { SubjectiveAnswersPage } from './pages/SubjectiveAnswersPage';
 import { AnalyticsPage } from './pages/AnalyticsPage';
 import { LabelRankingPage } from './pages/LabelRankingPage';
+import { ExamRegistrationPage } from './pages/ExamRegistrationPage';
 
 // V5.8 新增模块
 import { PdcaPage } from './pages/PdcaPage';
@@ -122,6 +124,7 @@ function buildStudentGroups(v: Visibility): NavGroup[] {
         { to: '/career', icon: Compass, label: '职业选择', visible: v.career },
         { to: '/literacy', icon: GraduationCap, label: '学习素养', visible: v.literacy },
         { to: '/literacy-collab', icon: Users, label: '协作行为', visible: v.literacy },
+        { to: '/registrations', icon: Briefcase, label: '报考信息' },
       ],
     },
     {
@@ -198,6 +201,7 @@ function buildTeacherGroups(v: Visibility): NavGroup[] {
         { to: '/career', icon: Compass, label: '职业选择', visible: v.career },
         { to: '/literacy', icon: GraduationCap, label: '学习素养', visible: v.literacy },
         { to: '/literacy-collab', icon: Users, label: '协作行为', visible: v.literacy },
+        { to: '/registrations', icon: Briefcase, label: '报考信息' },
       ],
     },
     {
@@ -308,6 +312,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         <Route path="/timeline" element={<TimelinePage />} />
         <Route path="/analytics" element={<AnalyticsPage />} />
         <Route path="/label-ranking" element={<LabelRankingPage />} />
+        <Route path="/registrations" element={<ExamRegistrationPage />} />
         {/* /insights 已并入分析中心；保留重定向避免旧书签 404（验收缺陷 #1 的同类死页面问题） */}
         <Route path="/insights" element={<Navigate to="/analytics" replace />} />
         {/* 原「今日复盘」路由已下线（用户另有独立复盘站点）；旧书签由末尾 * 兜底重定向到首页，不留 404 */}

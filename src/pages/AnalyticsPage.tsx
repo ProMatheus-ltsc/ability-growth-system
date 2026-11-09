@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   BarChart,
   Bar,
@@ -100,7 +101,11 @@ export function AnalyticsPage() {
 
   const weeklyDelta = useMemo(() => buildWeeklyDelta(aggregationTrainings, subject), [aggregationTrainings, subject]);
   const timed = useMemo(() => timedComplianceRate(aggregationTrainings), [aggregationTrainings]);
-  const targetGap = useMemo(() => computeTargetGap(stats, targetScore), [stats, targetScore]);
+  // 目标分差只按当前选中学科统计（与页头学科切换保持一致）
+  const targetGap = useMemo(
+    () => computeTargetGap(subjectStats ? [subjectStats] : [], targetScore),
+    [subjectStats, targetScore],
+  );
   const moduleStats = useMemo(() => buildModuleStats(windowedTrainings), [windowedTrainings]);
   const weakestModule = useMemo(() => {
     const list = moduleStats
@@ -229,28 +234,33 @@ export function AnalyticsPage() {
                 timed.rate === null ? 'text-slate-600' : timed.rate >= 80 ? 'text-emerald-600' : 'text-orange-600'
               }
             />
-            <StatCard
-              label="目标分差"
-              value={
-                targetGap === null
-                  ? '—'
-                  : targetGap.current === null
+            {targetGap === null ? (
+              <Link to="/registrations" className="block rounded-xl" title="去填写报考信息">
+                <StatCard
+                  label="目标分差"
+                  value="—"
+                  hint="未设置目标分，去填写报考信息 →"
+                  accentClassName="text-blue-600"
+                />
+              </Link>
+            ) : (
+              <StatCard
+                label="目标分差"
+                value={
+                  targetGap.current === null
                     ? '暂无样本'
                     : targetGap.reached
                       ? '已达标'
                       : `差 ${targetGap.gap} 分`
-              }
-              hint={
-                targetGap === null
-                  ? '未设置目标（报名记录 targetScore）'
-                  : targetGap.current === null
+                }
+                hint={
+                  targetGap.current === null
                     ? `目标 ${targetGap.target}% · 有效样本 0 题（缺失不当 0 分）`
                     : `有效样本 ${targetGap.sampleQuestions} 题 · 当前 ${targetGap.current}% · 目标 ${targetGap.target}%（掌握度口径，非卷面分）`
-              }
-              accentClassName={
-                targetGap === null ? 'text-slate-600' : targetGap.reached ? 'text-emerald-600' : 'text-orange-600'
-              }
-            />
+                }
+                accentClassName={targetGap.reached ? 'text-emerald-600' : 'text-orange-600'}
+              />
+            )}
             <StatCard
               label={`最弱模块 · ${SUBJECT_LABEL[subject]}`}
               value={weakestModule === null ? '—' : weakestModule.module}

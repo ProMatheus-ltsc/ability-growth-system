@@ -1,3 +1,7 @@
+/**
+ * 报考信息：只维护「考试时间 + 目标分」，供分析中心目标分差使用。
+ * 存储结构沿用 ExamRegistration；编辑已有记录时其余字段原样保留，不破坏历史 targetScore。
+ */
 import { useCallback, useEffect, useState } from 'react';
 import { v4 as uuid } from 'uuid';
 import { Briefcase, PlusCircle, Trash2, X } from 'lucide-react';
@@ -7,22 +11,6 @@ import { getAllRecords, putRecord, deleteRecord } from '../services/localDB';
 import { PageHeader } from '../components/PageHeader';
 import { EmptyState } from '../components/EmptyState';
 import type { ExamRegistration } from '../domain/types';
-
-const EXAM_TYPES: Array<{ v: ExamRegistration['examType']; label: string }> = [
-  { v: 'national', label: '国考' },
-  { v: 'provincial', label: '省考' },
-  { v: 'selected', label: '选调' },
-  { v: 'public-inst', label: '事业单位' },
-  { v: 'military', label: '军队文职' },
-];
-
-const POST_LEVELS: Array<{ v: ExamRegistration['postLevel']; label: string }> = [
-  { v: 'central', label: '中央' },
-  { v: 'province', label: '省级' },
-  { v: 'city', label: '市级' },
-  { v: 'county', label: '县级' },
-  { v: 'town', label: '乡镇' },
-];
 
 export function ExamRegistrationPage() {
   const { prefs } = useAppSession();
@@ -50,47 +38,32 @@ export function ExamRegistrationPage() {
   return (
     <div className="space-y-5">
       <PageHeader
-        title="公考报考信息"
-        description="仅作信息记录与备考规划参考,不做分数预测/岗位匹配度分数对比。"
+        title="报考信息"
+        description="只记录考试时间与目标分，用于分析中心计算目标分差；目标分为掌握度口径（0–100），不是卷面分。"
         actions={
           <button className="btn-primary" onClick={() => { setEditing(null); setShowForm(true); }}>
-            <PlusCircle size={16} /> 新增岗位
+            <PlusCircle size={16} /> 新增报考信息
           </button>
         }
       />
 
       {list.length === 0 ? (
-        <EmptyState icon={Briefcase} title="还没有报考信息" description="记录目标岗位便于设定备考计划" />
+        <EmptyState icon={Briefcase} title="还没有报考信息" description="填写考试时间与目标分后，分析中心会显示目标分差" />
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           {list.map((r) => (
             <div key={r.id} className="card p-4">
-              <div className="flex items-start justify-between">
-                <div className="flex-1">
-                  <div className="font-semibold text-slate-900">{r.postName}</div>
-                  <div className="text-xs text-slate-500 mt-1">
-                    {r.department ? `${r.department} · ` : ''}
-                    {r.postLevel ? POST_LEVELS.find((p) => p.v === r.postLevel)?.label : ''}
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="font-semibold text-slate-900">
+                    {r.targetScore !== undefined ? `目标分 ${r.targetScore}%` : '未设置目标分'}
                   </div>
-                  <div className="text-sm text-slate-700 mt-2">
-                    {EXAM_TYPES.find((e) => e.v === r.examType)?.label} · 考试日期 {r.examDate}
-                  </div>
-                  {r.headcount && (
-                    <div className="text-xs text-slate-500 mt-1">
-                      招录 {r.headcount} 人{r.applicantsHistory ? ` · 历年报名 ${r.applicantsHistory}` : ''}
-                    </div>
+                  <div className="text-xs text-slate-500 mt-1">考试时间 {r.examDate}</div>
+                  {r.postName && r.postName !== '报考信息' && (
+                    <div className="text-xs text-slate-400 mt-0.5">原记录：{r.postName}</div>
                   )}
-                  {r.educationLimit && <div className="text-xs text-slate-500 mt-0.5">学历要求: {r.educationLimit}</div>}
-                  {r.majorLimit && <div className="text-xs text-slate-500 mt-0.5">专业限制: {r.majorLimit}</div>}
-                  {r.interviewLineHistory && (
-                    <div className="text-xs text-slate-500 mt-0.5">历年进面: {r.interviewLineHistory}</div>
-                  )}
-                  {r.targetScore !== undefined && (
-                    <div className="text-xs text-slate-500 mt-0.5">目标分: {r.targetScore}</div>
-                  )}
-                  {r.note && <div className="text-xs text-slate-500 mt-1">备注: {r.note}</div>}
                 </div>
-                <div className="flex flex-col gap-1">
+                <div className="flex flex-col gap-1 shrink-0">
                   <button className="btn-ghost text-blue-600" onClick={() => { setEditing(r); setShowForm(true); }}>编辑</button>
                   <button className="btn-ghost text-red-500" onClick={() => remove(r.id)}>
                     <Trash2 size={14} />
@@ -129,112 +102,50 @@ function RegForm({
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const [postName, setPostName] = useState(initial?.postName ?? '');
-  const [department, setDepartment] = useState(initial?.department ?? '');
-  const [postLevel, setPostLevel] = useState<ExamRegistration['postLevel']>(initial?.postLevel ?? 'county');
-  const [examType, setExamType] = useState<ExamRegistration['examType']>(initial?.examType ?? 'national');
   const [examDate, setExamDate] = useState(initial?.examDate ?? '');
-  const [headcount, setHeadcount] = useState(String(initial?.headcount ?? ''));
-  const [educationLimit, setEducationLimit] = useState(initial?.educationLimit ?? '');
-  const [majorLimit, setMajorLimit] = useState(initial?.majorLimit ?? '');
-  const [applicants, setApplicants] = useState(initial?.applicantsHistory ?? '');
-  const [interview, setInterview] = useState(initial?.interviewLineHistory ?? '');
-  const [note, setNote] = useState(initial?.note ?? '');
   const [targetScore, setTargetScore] = useState(
     initial?.targetScore !== undefined ? String(initial.targetScore) : '',
   );
 
   const save = async () => {
-    if (!postName.trim() || !examDate) return;
-    const targetValue = targetScore.trim() === '' ? undefined : Number(targetScore);
+    if (!examDate) return;
+    const trimmed = targetScore.trim();
+    const targetValue = trimmed === '' ? undefined : Number(trimmed);
     if (targetValue !== undefined && (!Number.isFinite(targetValue) || targetValue < 0 || targetValue > 100)) {
       window.alert('目标分需为 0-100 的数字（掌握度口径），或留空表示未设置');
       return;
     }
     const now = new Date().toISOString();
     const record: ExamRegistration = {
+      ...(initial ?? {}),
       id: initial?.id ?? uuid(),
-      studentId,
-      postName: postName.trim(),
-      department: department.trim() || undefined,
-      postLevel,
-      examType,
+      studentId: studentId ?? initial?.studentId,
+      // 存储层这两个字段必填；新记录用中性默认值，编辑老记录时保留原值
+      postName: initial?.postName ?? '报考信息',
+      examType: initial?.examType ?? 'national',
       examDate,
-      headcount: headcount ? +headcount : undefined,
-      educationLimit: educationLimit.trim() || undefined,
-      majorLimit: majorLimit.trim() || undefined,
-      applicantsHistory: applicants.trim() || undefined,
-      interviewLineHistory: interview.trim() || undefined,
-      note: note.trim() || undefined,
-      ...(targetValue !== undefined ? { targetScore: targetValue } : {}),
       createdAt: initial?.createdAt ?? now,
       updatedAt: now,
     };
+    if (targetValue === undefined) delete record.targetScore;
+    else record.targetScore = targetValue;
     await putRecord('registrations', record);
     onSaved();
   };
 
   return (
     <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="card w-full max-w-xl max-h-[90vh] overflow-y-auto p-6 modal-clamp [--modal-max:36rem] [--modal-max-h:90vh]">
+      <div className="card w-full max-w-md p-6 modal-clamp [--modal-max:28rem] [--modal-max-h:90vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="font-bold">{initial ? '编辑' : '新增'}岗位信息</h2>
+          <h2 className="font-bold">{initial ? '编辑' : '新增'}报考信息</h2>
           <button onClick={onClose}><X size={18} /></button>
         </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div className="col-span-2">
-            <label className="label">岗位名称 ★</label>
-            <input className="input" value={postName} onChange={(e) => setPostName(e.target.value)} />
-          </div>
+        <div className="space-y-3">
           <div>
-            <label className="label">部门</label>
-            <input className="input" value={department} onChange={(e) => setDepartment(e.target.value)} />
-          </div>
-          <div>
-            <label className="label">岗位层级</label>
-            <select className="input" value={postLevel} onChange={(e) => setPostLevel(e.target.value as ExamRegistration['postLevel'])}>
-              {POST_LEVELS.map((p) => (
-                <option key={p.v} value={p.v}>
-                  {p.label}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="label">考试类型</label>
-            <select className="input" value={examType} onChange={(e) => setExamType(e.target.value as ExamRegistration['examType'])}>
-              {EXAM_TYPES.map((t) => (
-                <option key={t.v} value={t.v}>
-                  {t.label}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="label">考试日期 ★</label>
+            <label className="label">考试时间 ★</label>
             <input className="input" type="date" value={examDate} onChange={(e) => setExamDate(e.target.value)} />
           </div>
           <div>
-            <label className="label">招录人数</label>
-            <input className="input" type="number" min={0} value={headcount} onChange={(e) => setHeadcount(e.target.value)} />
-          </div>
-          <div>
-            <label className="label">学历要求</label>
-            <input className="input" value={educationLimit} onChange={(e) => setEducationLimit(e.target.value)} />
-          </div>
-          <div className="col-span-2">
-            <label className="label">专业要求</label>
-            <input className="input" value={majorLimit} onChange={(e) => setMajorLimit(e.target.value)} />
-          </div>
-          <div>
-            <label className="label">历年报名人数</label>
-            <input className="input" value={applicants} onChange={(e) => setApplicants(e.target.value)} placeholder="例:近3年 300/450/500" />
-          </div>
-          <div>
-            <label className="label">历年进面情况</label>
-            <input className="input" value={interview} onChange={(e) => setInterview(e.target.value)} placeholder="例:面试线 130 分" />
-          </div>
-          <div className="col-span-2">
             <label className="label">目标分（0-100，掌握度口径，可留空）</label>
             <input
               className="input"
@@ -246,14 +157,10 @@ function RegForm({
               placeholder="例: 80，留空表示未设置"
             />
           </div>
-          <div className="col-span-2">
-            <label className="label">备注</label>
-            <textarea className="input min-h-[70px]" value={note} onChange={(e) => setNote(e.target.value)} />
-          </div>
         </div>
         <div className="flex justify-end gap-2 mt-4">
           <button className="btn-secondary" onClick={onClose}>取消</button>
-          <button className="btn-primary" onClick={save} disabled={!postName.trim() || !examDate}>
+          <button className="btn-primary" onClick={save} disabled={!examDate}>
             保存
           </button>
         </div>
