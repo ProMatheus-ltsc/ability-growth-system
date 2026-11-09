@@ -24,6 +24,7 @@
  */
 import type { D1Database, D1PreparedStatement, PagesFunction } from '@cloudflare/workers-types';
 import { STORE_NAMES, type ExportedSnapshot, type StoreName } from '../../src/services/snapshot';
+import { guardTrainingRecords } from '../../src/domain/storeGuards';
 
 interface Env {
   DB: D1Database;
@@ -651,6 +652,16 @@ async function handle(request: Request, env: Env): Promise<Response> {
     if (segments.length === 3 && segments[2] === 'bulk' && method === 'POST') {
       const body = (await request.json()) as { records?: unknown } | unknown[];
       const records = validRecords(Array.isArray(body) ? body : body.records);
+      // 口径拦截：申论 / 面试不得写入训练记录（历史记录不受影响，不做迁移与删除）
+      if (store === 'trainings') {
+        const guard = guardTrainingRecords(records);
+        if (!guard.ok) {
+          return fail(
+            `${guard.message}（本次请求中第 ${guard.rejectedIndexes.map((i) => i + 1).join('、')} 条不符合）`,
+            422,
+          );
+        }
+      }
       if (records.length > 0) {
         await runBatches(env.DB, upsertStatements(env.DB, store, workspace, records, false));
       }
@@ -671,6 +682,11 @@ async function handle(request: Request, env: Env): Promise<Response> {
       const body = (await request.json()) as Partial<JsonRecord>;
       if (!body || typeof body !== 'object') return fail('请求体必须是记录对象');
       const record: JsonRecord = { ...(body as JsonRecord), id };
+      // 口径拦截：申论 / 面试不得写入训练记录（历史记录不受影响，不做迁移与删除）
+      if (store === 'trainings') {
+        const guard = guardTrainingRecords([record]);
+        if (!guard.ok) return fail(guard.message, 422);
+      }
       await runBatches(env.DB, upsertStatements(env.DB, store, workspace, [record], false));
       return json({ ok: true, id });
     }

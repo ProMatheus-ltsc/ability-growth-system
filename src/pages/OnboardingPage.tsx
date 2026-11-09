@@ -13,6 +13,7 @@ import {
   type TrainingType,
 } from '../domain/types';
 import { getModules } from '../domain/abilityTags';
+import { selectTrainingEntrySubjects } from '../domain/storeGuards';
 import { putRecord } from '../services/localDB';
 import { deriveGapsFromTraining, deriveSnapshotFromTraining } from '../services/analytics';
 
@@ -289,8 +290,8 @@ function BaselineForm({
   onSkipChange: (v: boolean) => void;
   onChange: (v: BaselineDraft | null) => void;
 }) {
-  // 申论 → 申论作答；面试 → 面试记录。基线只接收行测等客观题
-  const baselineSubjects = subjects.filter((s) => s !== 'shenlun' && s !== 'mianshi');
+  // 申论 → 申论作答；面试 → 面试记录。基线只接收行测等客观题（与后端 guard 同一份规则）
+  const baselineSubjects = selectTrainingEntrySubjects(subjects);
   const primarySubject = baselineSubjects[0];
   const moduleOptions = primarySubject ? getModules(gradeLevel, primarySubject) : [];
   const defaultModule = moduleOptions[0] ?? '基础模块';

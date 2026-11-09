@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { v4 as uuid } from 'uuid';
 import { Link } from 'react-router-dom';
-import { PlusCircle, Trash2, Zap, X, Filter, ArrowRight } from 'lucide-react';
+import { PlusCircle, Trash2, Zap, X, Filter, ArrowRight, FileText } from 'lucide-react';
 import { useToast } from '@shared/core';
 import { useAppSession } from '../hooks/useAppSession';
 import { getTrainingsCopy } from '../domain/trainingsCopy';
-import { findTrainingsByStudent, findGaps, putRecord, deleteRecord, getMeta, setMeta } from '../services/localDB';
-import { deriveGapsFromTraining, deriveSnapshotFromTraining, isTimedMet } from '../services/analytics';
+import { findTrainingsByStudent, findGaps, putRecord, deleteRecord, getMeta, setMeta, getAllRecords } from '../services/localDB';
+import { deriveGapsFromTraining, deriveSnapshotFromTraining, isTimedMet, interviewAnsweredAt, interviewScorePercent } from '../services/analytics';
 import { getAbilityTags, getModules } from '../domain/abilityTags';
+import { selectTrainingEntrySubjects, isTrainingExcludedSubject } from '../domain/storeGuards';
 import {
   SUBJECT_LABEL,
   SUBJECT_MATRIX,
@@ -16,8 +17,10 @@ import {
   PAPER_TYPE_LABEL,
   PAPER_TYPE_OPTIONS,
   type ErrorCategory,
+  type InterviewRecord,
   type PaperType,
   type Subject,
+  type SubjectiveAnswer,
   type TrainingRecord,
   type TrainingType,
 } from '../domain/types';
@@ -42,16 +45,38 @@ export function TrainingsPage() {
   const [quickMode, setQuickMode] = useState(false);
   const [filterSubject, setFilterSubject] = useState<Subject | 'all'>('all');
   const [recent, setRecent] = useState<RecentDefaults | null>(null);
+  // 申论 / 面试只在训练记录页只读展示，录入仍走各自唯一入口（不写 trainings）
+  const [shenlunAnswers, setShenlunAnswers] = useState<SubjectiveAnswer[]>([]);
+  const [interviewRecords, setInterviewRecords] = useState<InterviewRecord[]>([]);
+  const [subjectiveFilter, setSubjectiveFilter] = useState<'all' | 'shenlun' | 'mianshi'>('all');
 
   const refresh = useCallback(async () => {
     const list = await findTrainingsByStudent(prefs.currentStudentId);
     setRecords(list);
+    const [answers, interviews] = await Promise.all([
+      getAllRecords('subjectiveAnswers'),
+      getAllRecords('interviewRecords'),
+    ]);
+    const scopeAnswers = prefs.currentStudentId
+      ? answers.filter((r) => r.studentId === prefs.currentStudentId)
+      : answers;
+    const scopeInterviews = prefs.currentStudentId
+      ? interviews.filter((r) => r.studentId === prefs.currentStudentId)
+      : interviews;
+    setShenlunAnswers(scopeAnswers.filter((r) => r.subject === 'shenlun'));
+    setInterviewRecords(scopeInterviews);
   }, [prefs.currentStudentId]);
 
   useEffect(() => {
     void refresh();
     void getMeta<RecentDefaults | null>(RECENT_KEY, null).then(setRecent);
   }, [refresh]);
+
+  /** 训练记录只允许客观题学科：申论 / 面试从学科下拉与筛选里一起剔除 */
+  const entrySubjects = useMemo(
+    () => selectTrainingEntrySubjects(prefs.subjects.length > 0 ? prefs.subjects : SUBJECT_MATRIX[prefs.gradeLevel]),
+    [prefs.subjects, prefs.gradeLevel],
+  );
 
   const filtered = useMemo(
     () => (filterSubject === 'all' ? records : records.filter((r) => r.subject === filterSubject)),
@@ -129,8 +154,8 @@ export function TrainingsPage() {
 
       <div className="rounded-lg bg-blue-50 px-3 py-2 text-xs text-blue-700 leading-relaxed flex flex-wrap items-center gap-2">
         <span>
-          申论已统一到「学科专项 → 申论作答」录入（单题 / 套卷均可，套卷逐题记题型）；面试已统一到「学科专项 → 面试记录」。
-          训练记录只用于行测等客观题，无法再新建申论 / 面试训练记录；
+          训练记录只接收行测等客观题。申论请到「学科专项 → 申论作答」录入（单题 / 套卷均可，套卷逐题记题型），
+          面试请到「学科专项 → 面试记录」录入；这两处保存的作答在本页下方以只读形式展示，不重复计入训练记录。
           历史申论 / 面试训练记录仍然有效，继续参与统计并作为无四维评分时的回退口径。
         </span>
         <Link to="/subjective" className="underline font-medium">去申论作答 →</Link>
@@ -146,7 +171,7 @@ export function TrainingsPage() {
         >
           全部
         </button>
-        {prefs.subjects.map((s) => (
+        {entrySubjects.map((s) => (
           <button
             key={s}
             className={`px-2 py-1 rounded ${filterSubject === s ? 'bg-blue-100 text-blue-700' : 'hover:bg-slate-100'}`}
@@ -186,6 +211,155 @@ export function TrainingsPage() {
           gradeLevel={prefs.gradeLevel}
           availableSubjects={prefs.subjects.length > 0 ? prefs.subjects : SUBJECT_MATRIX[prefs.gradeLevel]}
         />
+      )}
+
+      <SubjectiveReadOnlySection
+        answers={shenlunAnswers}
+        interviews={interviewRecords}
+        filter={subjectiveFilter}
+        onFilter={setSubjectiveFilter}
+      />
+    </div>
+  );
+}
+
+/**
+ * 只读分区：把「申论作答」「面试记录」两个唯一入口的数据在训练记录页原样列出。
+ * 只读、不写回、不参与 trainings 统计——避免同一次作答被两处各算一遍。
+ */
+function SubjectiveReadOnlySection({
+  answers,
+  interviews,
+  filter,
+  onFilter,
+}: {
+  answers: SubjectiveAnswer[];
+  interviews: InterviewRecord[];
+  filter: 'all' | 'shenlun' | 'mianshi';
+  onFilter: (next: 'all' | 'shenlun' | 'mianshi') => void;
+}) {
+  const shenlunRows = useMemo(
+    () =>
+      [...answers].sort((a, b) =>
+        (b.answeredAt ?? b.createdAt ?? b.date).localeCompare(a.answeredAt ?? a.createdAt ?? a.date),
+      ),
+    [answers],
+  );
+  const interviewRows = useMemo(
+    () => [...interviews].sort((a, b) => interviewAnsweredAt(b).localeCompare(interviewAnsweredAt(a))),
+    [interviews],
+  );
+  const total = shenlunRows.length + interviewRows.length;
+  const showShenlun = filter === 'all' || filter === 'shenlun';
+  const showInterview = filter === 'all' || filter === 'mianshi';
+
+  return (
+    <div className="card p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <FileText size={16} className="text-blue-600" />
+          <h2 className="font-semibold text-slate-900">申论 / 面试（只读）</h2>
+          <span className="text-xs text-slate-400">
+            共 {total} 条 · 在各自入口录入，这里只展示，不计入上方训练统计
+          </span>
+        </div>
+        <div className="flex items-center gap-1">
+          {([
+            { k: 'all', label: `全部 ${total}` },
+            { k: 'shenlun', label: `申论 ${shenlunRows.length}` },
+            { k: 'mianshi', label: `面试 ${interviewRows.length}` },
+          ] as Array<{ k: 'all' | 'shenlun' | 'mianshi'; label: string }>).map((it) => (
+            <button
+              key={it.k}
+              onClick={() => onFilter(it.k)}
+              className={`px-2 py-1 rounded text-xs ${
+                filter === it.k ? 'bg-blue-100 text-blue-700' : 'hover:bg-slate-100 text-slate-600'
+              }`}
+            >
+              {it.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {total === 0 ? (
+        <div className="text-sm text-slate-500 leading-relaxed">
+          还没有申论 / 面试记录。申论到
+          <Link to="/subjective" className="underline mx-1">申论作答</Link>
+          录入，面试到
+          <Link to="/interview" className="underline mx-1">面试记录</Link>
+          录入，保存后会出现在这里。
+        </div>
+      ) : (
+        <div className="divide-y divide-slate-100">
+          {showShenlun &&
+            shenlunRows.map((r) => {
+              const isPaper = r.mode === 'paper';
+              const title = isPaper
+                ? r.paperSource || r.paperTitle || r.scenario || '未命名套卷'
+                : r.questionType || r.scenario || '未分类';
+              const dims = r.dimensionScores;
+              const dimValues = dims
+                ? [dims.points, dims.structure, dims.language, dims.logic].filter(
+                    (v): v is number => typeof v === 'number' && Number.isFinite(v),
+                  )
+                : [];
+              const dimAvg =
+                dimValues.length === 0
+                  ? null
+                  : Math.round((dimValues.reduce((s, v) => s + v, 0) / dimValues.length) * 10) / 10;
+              return (
+                <div key={r.id} className="py-2.5 flex flex-wrap items-center gap-2 text-sm">
+                  <span className="badge bg-blue-50 text-blue-700 shrink-0">申论</span>
+                  <span className="badge bg-slate-100 text-slate-600 shrink-0">{isPaper ? '套卷' : '单题'}</span>
+                  <span className="font-medium text-slate-800 min-w-0 truncate">{title}</span>
+                  <span className="text-xs text-slate-500">
+                    {(r.answeredAt ?? r.createdAt ?? r.date).slice(0, 10)}
+                    {r.questionNo ? ` · 第 ${r.questionNo} 题` : ''}
+                    {isPaper && r.paperQuestionCount ? ` · ${r.paperQuestionCount} 题` : ''}
+                    {isPaper && r.paperScore !== undefined && r.paperFullMark !== undefined
+                      ? ` · 得分 ${r.paperScore}/${r.paperFullMark}`
+                      : ''}
+                    {r.durationMinutes !== undefined ? ` · ${r.durationMinutes} 分` : ''}
+                  </span>
+                  {dimAvg !== null && (
+                    <span className="badge bg-emerald-50 text-emerald-700">四维 {dimAvg}</span>
+                  )}
+                  {r.version > 1 && <span className="text-xs text-slate-400">v{r.version}</span>}
+                  <Link to="/subjective" className="text-xs text-blue-600 underline ml-auto shrink-0">
+                    查看 / 追加修订
+                  </Link>
+                </div>
+              );
+            })}
+          {showInterview &&
+            interviewRows.map((r) => {
+              const score = interviewScorePercent(r);
+              return (
+                <div key={r.id} className="py-2.5 flex flex-wrap items-center gap-2 text-sm">
+                  <span className="badge bg-purple-50 text-purple-700 shrink-0">面试</span>
+                  <span className="font-medium text-slate-800 min-w-0 truncate">
+                    {r.questionType?.trim() || '未分类'}
+                  </span>
+                  <span className="text-xs text-slate-500">
+                    {interviewAnsweredAt(r).slice(0, 10)}
+                    {r.paperSource ? ` · ${r.paperSource}` : ''}
+                    {r.questionNo ? ` · 第 ${r.questionNo} 题` : ''}
+                    {` · 思考 ${r.thinkingSec}s / 答题 ${r.answerSec}s`}
+                  </span>
+                  <span className={`badge ${score === null ? 'bg-slate-100 text-slate-500' : 'bg-emerald-50 text-emerald-700'}`}>
+                    {score === null ? '未评分' : `综合 ${score}%`}
+                  </span>
+                  {r.version !== undefined && r.version > 1 && (
+                    <span className="text-xs text-slate-400">v{r.version}</span>
+                  )}
+                  <Link to="/interview" className="text-xs text-blue-600 underline ml-auto shrink-0">
+                    查看 / 追加修订
+                  </Link>
+                </div>
+              );
+            })}
+        </div>
       )}
     </div>
   );
@@ -256,8 +430,8 @@ interface FormProps {
 }
 
 function TrainingForm({ quick, defaults, studentId, gradeLevel, availableSubjects, onClose, onSave }: FormProps) {
-  // 申论 → 申论作答；面试 → 面试记录。训练记录不再接收主观题
-  const entrySubjects: Subject[] = availableSubjects.filter((s) => s !== 'shenlun' && s !== 'mianshi');
+  // 申论 → 申论作答；面试 → 面试记录。训练记录不再接收主观题（与后端 guard 同一份规则）
+  const entrySubjects: Subject[] = selectTrainingEntrySubjects(availableSubjects);
   const initSubject =
     defaults?.subject && entrySubjects.includes(defaults.subject) ? defaults.subject : (entrySubjects[0] ?? 'xingce');
   const [subject, setSubject] = useState<Subject>(initSubject);
@@ -306,6 +480,12 @@ function TrainingForm({ quick, defaults, studentId, gradeLevel, availableSubject
   const submit = async () => {
     if (!effectiveModule) return;
     const validation: string[] = [];
+    // 与后端同一份口径：主观题不允许写进训练记录，UI 先拦一次，避免只靠接口兜底
+    if (isTrainingExcludedSubject(subject)) {
+      validation.push(
+        '训练记录只接收行测等客观题：申论请到「学科专项 → 申论作答」录入，面试请到「学科专项 → 面试记录」录入',
+      );
+    }
     const yearValue = paperYear.trim() === '' ? undefined : Number(paperYear);
     if (yearValue !== undefined && (!Number.isInteger(yearValue) || yearValue < 1900 || yearValue > 2100)) {
       validation.push('年份须为 1900-2100 的整数');

@@ -9,6 +9,7 @@ import { PageHeader } from '../components/PageHeader';
 import { EmptyState } from '../components/EmptyState';
 import { MasteryBar } from '../components/MasteryBar';
 import { getModules } from '../domain/abilityTags';
+import { selectTrainingEntrySubjects } from '../domain/storeGuards';
 import { deriveGapsFromTraining } from '../services/analytics';
 import { PAPER_TYPE_LABEL, PAPER_TYPE_OPTIONS, scoreToLevel, SUBJECT_LABEL } from '../domain/types';
 import type {
@@ -308,8 +309,8 @@ function ExamForm({
   gradeLevel: GradeLevel;
   subjects: Subject[];
 }) {
-  // 申论 → 申论作答；面试 → 面试记录。测验诊断只接收行测等客观题
-  const examSubjects = subjects.filter((s) => s !== 'shenlun' && s !== 'mianshi');
+  // 申论 → 申论作答；面试 → 面试记录。测验诊断只接收行测等客观题（与后端 guard 同一份规则）
+  const examSubjects = selectTrainingEntrySubjects(subjects);
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [subject, setSubject] = useState<Subject>(examSubjects[0] ?? 'xingce');
   const [scenario, setScenario] = useState('全套模拟');
