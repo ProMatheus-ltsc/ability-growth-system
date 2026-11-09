@@ -297,24 +297,38 @@ export function buildWeeklyDelta(records: TrainingRecord[], subject: Subject): W
 /** ============ F-05 / A3 限时达标 ============ */
 
 /**
- * 单题实际用时 ≤ 单题标准用时为达标；任一侧缺失或总题量为 0 返回 null。
+ * 数据契约（与数据侧对齐）：推断出来的 standardMinutes 会在 note 中显式标注「推断」。
+ * 推断值不与真实用时混算，限时达标率只统计真实基准记录，推断记录单独计数。
  */
+export function isInferredStandardMinutes(record: TrainingRecord): boolean {
+  return typeof record.note === 'string' && record.note.includes('推断');
+}
+
 export function isTimedMet(record: TrainingRecord): boolean | null {
   if (record.standardMinutes === undefined || record.durationMinutes === undefined) return null;
   if (record.standardMinutes <= 0 || record.durationMinutes <= 0 || record.totalQuestions <= 0) return null;
+  if (isInferredStandardMinutes(record)) return null;
   return record.durationMinutes <= record.standardMinutes;
 }
 
 export interface TimedCompliance {
   rate: number | null;
+  /** 真实基准的有效样本数 */
   sampleSize: number;
+  /** 被排除的推断基准记录数（不作为分母） */
+  inferredSamples: number;
 }
 
-/** 仅统计可判定记录；无样本时 rate=null */
+/** 仅统计可判定记录；推断基准与缺失基准都不进入分母，无样本时 rate=null */
 export function timedComplianceRate(records: TrainingRecord[]): TimedCompliance {
   let met = 0;
   let sampleSize = 0;
+  let inferredSamples = 0;
   for (const r of records) {
+    if (isInferredStandardMinutes(r) && (r.standardMinutes ?? 0) > 0) {
+      inferredSamples += 1;
+      continue;
+    }
     const result = isTimedMet(r);
     if (result === null) continue;
     sampleSize += 1;
@@ -323,6 +337,7 @@ export function timedComplianceRate(records: TrainingRecord[]): TimedCompliance 
   return {
     rate: sampleSize === 0 ? null : +((met / sampleSize) * 100).toFixed(1),
     sampleSize,
+    inferredSamples,
   };
 }
 
@@ -330,14 +345,17 @@ export function timedComplianceRate(records: TrainingRecord[]): TimedCompliance 
 
 export interface TargetGap {
   target: number;
-  current: number;
-  gap: number;
+  /** 无有效样本时为 null（不把缺失当 0 分展示） */
+  current: number | null;
+  gap: number | null;
   reached: boolean;
+  /** 参与计算的有效题量（有效样本数） */
+  sampleQuestions: number;
 }
 
 /**
  * 目标分为掌握度口径；targetScore 缺失或越界（<0 或 >100）返回 null。
- * current 为按题量加权的整体正确率（无样本为 0）。
+ * current 为按题量加权的整体正确率；无有效样本时 current/gap 为 null，由 UI 显示「暂无样本」。
  */
 export function computeTargetGap(stats: SubjectStats[], targetScore?: number): TargetGap | null {
   if (targetScore === undefined || targetScore === null) return null;
@@ -345,9 +363,12 @@ export function computeTargetGap(stats: SubjectStats[], targetScore?: number): T
 
   const totalQuestions = stats.reduce((s, item) => s + item.totalQuestions, 0);
   const totalCorrect = stats.reduce((s, item) => s + (item.totalQuestions - item.totalErrors), 0);
-  const current = totalQuestions === 0 ? 0 : Math.round((totalCorrect / totalQuestions) * 100);
+  if (totalQuestions === 0) {
+    return { target: targetScore, current: null, gap: null, reached: false, sampleQuestions: 0 };
+  }
+  const current = Math.round((totalCorrect / totalQuestions) * 100);
   const gap = +(targetScore - current).toFixed(1);
-  return { target: targetScore, current, gap, reached: gap <= 0 };
+  return { target: targetScore, current, gap, reached: gap <= 0, sampleQuestions: totalQuestions };
 }
 
 /**

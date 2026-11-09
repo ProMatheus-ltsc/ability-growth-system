@@ -157,7 +157,7 @@ export function AbilityCenterPage() {
         <ResponsiveGrid minItemWidth="160px" gap="0.75rem">
           <StatBlock
             label={withWindowLabel('综合掌握度', windowKey)}
-            value={`${subjectStats.masteryScore}%`}
+            value={subjectStats.totalQuestions === 0 ? '无数据' : `${subjectStats.masteryScore}%`}
             tone="blue"
           />
           <StatBlock

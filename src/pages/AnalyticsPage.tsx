@@ -218,18 +218,34 @@ export function AnalyticsPage() {
             <StatCard
               label={withWindowLabel('限时达标率', windowKey)}
               value={timed.rate === null ? '—' : `${timed.rate}%`}
-              hint={timed.sampleSize === 0 ? '暂无时间基准' : `可判定 ${timed.sampleSize} 条记录`}
+              hint={
+                timed.sampleSize === 0
+                  ? timed.inferredSamples > 0
+                    ? `仅有推断基准 ${timed.inferredSamples} 条，未参与计算`
+                    : '暂无时间基准（缺失不计入分母）'
+                  : `真实基准 ${timed.sampleSize} 条${timed.inferredSamples > 0 ? ` · 推断基准 ${timed.inferredSamples} 条已排除` : ''}`
+              }
               accentClassName={
                 timed.rate === null ? 'text-slate-600' : timed.rate >= 80 ? 'text-emerald-600' : 'text-orange-600'
               }
             />
             <StatCard
               label="目标分差"
-              value={targetGap === null ? '—' : targetGap.reached ? '已达标' : `差 ${targetGap.gap} 分`}
+              value={
+                targetGap === null
+                  ? '—'
+                  : targetGap.current === null
+                    ? '暂无样本'
+                    : targetGap.reached
+                      ? '已达标'
+                      : `差 ${targetGap.gap} 分`
+              }
               hint={
                 targetGap === null
                   ? '未设置目标（报名记录 targetScore）'
-                  : `当前 ${targetGap.current}% · 目标 ${targetGap.target}%（掌握度口径，非卷面分）`
+                  : targetGap.current === null
+                    ? `目标 ${targetGap.target}% · 有效样本 0 题（缺失不当 0 分）`
+                    : `有效样本 ${targetGap.sampleQuestions} 题 · 当前 ${targetGap.current}% · 目标 ${targetGap.target}%（掌握度口径，非卷面分）`
               }
               accentClassName={
                 targetGap === null ? 'text-slate-600' : targetGap.reached ? 'text-emerald-600' : 'text-orange-600'
