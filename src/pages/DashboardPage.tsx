@@ -298,7 +298,7 @@ function TimelineSummary({ registrations, stagePlans }: { registrations: ExamReg
     .sort((a, b) => a.examDate.localeCompare(b.examDate))[0];
   const activeStage = stagePlans
     .filter((s) => s.startDate <= today && s.endDate >= today)
-    .sort((a, b) => a.startDate.localeCompare(b.startDate))[0];
+    .sort((a, b) => b.startDate.localeCompare(a.startDate))[0];
   const nextStage = stagePlans
     .filter((s) => s.startDate > today)
     .sort((a, b) => a.startDate.localeCompare(b.startDate))[0];

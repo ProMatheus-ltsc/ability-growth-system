@@ -563,6 +563,8 @@ export interface StagePlan {
   focusModules: string[];
   focusAbilities: string[];
   weeklyGoal?: string;
+  /** 来源：自动生成 / 手动添加。老数据无该字段，视为历史数据不参与自动覆盖 */
+  source?: 'auto' | 'manual';
   createdAt: string;
   updatedAt: string;
 }
