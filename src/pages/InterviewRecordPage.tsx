@@ -1,10 +1,7 @@
 /**
- * 停用：无路由入口，保留数据与 store。
- * 本页与 interviewRecords store 均未在 App.tsx 注册路由/导航，当前用户不可达；
- * 页面文件、store 与历史数据全部保留，等后续决定是否接回导航或并入其他录入入口。
- *
- * PRD V5.8 §15.1 面试专项训练记录
+ * 面试专项训练记录（/interview，学生/教师导航「学科专项」→「面试记录」）
  * 音视频附件(浏览器录音/录像转 Base64) · 思考时间 · 答题时间 · 自评+他评双轨
+ * 数据只写 interviewRecords，按当前学员过滤；本地 IndexedDB 与云端 D1 同名表、随快照同步。
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { v4 as uuid } from 'uuid';

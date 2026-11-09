@@ -69,7 +69,7 @@ function StatCard({ label, value, tone }: { label: string; value: string | numbe
   );
 }
 
-export function LabelRankingPage() {
+export function LabelRankingPage({ embedded = false }: { embedded?: boolean } = {}) {
   const { prefs } = useAppSession();
   const [leaves, setLeaves] = useState<LabelStat[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -247,16 +247,19 @@ export function LabelRankingPage() {
     });
 
   return (
-    <div className="space-y-5">
-      <PageHeader
-        title="题型正确率排名"
-        description={`按考点路径逐层钻取，正确率从低到高；作答次数少于 ${MIN_SAMPLE} 次的标签不进排名，单独列示`}
-      />
+    <div className={embedded ? 'space-y-4' : 'space-y-5'}>
+      {!embedded && (
+        <>
+          <PageHeader
+            title="题型正确率排名"
+            description={`按考点路径逐层钻取，正确率从低到高；作答次数少于 ${MIN_SAMPLE} 次的标签不进排名，单独列示`}
+          />
 
-      <div className="card p-3 text-xs text-slate-500 leading-relaxed">
-        数据来源：云端题库标签聚合（labelStats）。本页只读，本地没有写入路径；未同步到 labelStats 时本页保持空态，不会用其他数据推算或预置示例。
-      </div>
-
+          <div className="card p-3 text-xs text-slate-500 leading-relaxed">
+            数据来源：云端题库标签聚合（labelStats）。本页只读，本地没有写入路径；未同步到 labelStats 时本页保持空态，不会用其他数据推算或预置示例。
+          </div>
+        </>
+      )}
       {!loaded ? (
         <div className="text-sm text-slate-400">正在读取题型统计…</div>
       ) : leaves.length === 0 ? (

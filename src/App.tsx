@@ -24,8 +24,9 @@ import {
   GraduationCap,
   Navigation2,
   CalendarRange,
-  Tags,
   Briefcase,
+  Mic,
+  Target,
 } from 'lucide-react';
 
 import { useAuth } from './hooks/useAuth';
@@ -49,7 +50,8 @@ import { TimelinePage } from './pages/TimelinePage';
 import { ExamDiagnosisPage } from './pages/ExamDiagnosisPage';
 import { SubjectiveAnswersPage } from './pages/SubjectiveAnswersPage';
 import { AnalyticsPage } from './pages/AnalyticsPage';
-import { LabelRankingPage } from './pages/LabelRankingPage';
+import { WeaknessPage } from './pages/WeaknessPage';
+import { InterviewRecordPage } from './pages/InterviewRecordPage';
 import { ExamRegistrationPage } from './pages/ExamRegistrationPage';
 
 // V5.8 新增模块
@@ -107,7 +109,7 @@ function buildStudentGroups(v: Visibility): NavGroup[] {
       icon: BarChart3,
       children: [
         { to: '/analytics', icon: BarChart3, label: '数据分析' },
-        { to: '/label-ranking', icon: Tags, label: '题型排名' },
+        { to: '/weakness', icon: Target, label: '薄弱点' },
       ],
     },
     {
@@ -117,6 +119,7 @@ function buildStudentGroups(v: Visibility): NavGroup[] {
       icon: FileText,
       children: [
         { to: '/subjective', icon: FileText, label: '申论作答' },
+        { to: '/interview', icon: Mic, label: '面试记录' },
       ],
     },
     {
@@ -200,7 +203,7 @@ function buildTeacherGroups(v: Visibility): NavGroup[] {
       icon: BarChart3,
       children: [
         { to: '/analytics', icon: BarChart3, label: '数据分析' },
-        { to: '/label-ranking', icon: Tags, label: '题型排名' },
+        { to: '/weakness', icon: Target, label: '薄弱点' },
       ],
     },
     {
@@ -210,6 +213,7 @@ function buildTeacherGroups(v: Visibility): NavGroup[] {
       icon: FileText,
       children: [
         { to: '/subjective', icon: FileText, label: '申论作答' },
+        { to: '/interview', icon: Mic, label: '面试记录' },
       ],
     },
     {
@@ -343,7 +347,10 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         <Route path="/subjective" element={<SubjectiveAnswersPage />} />
         <Route path="/timeline" element={<TimelinePage />} />
         <Route path="/analytics" element={<AnalyticsPage />} />
-        <Route path="/label-ranking" element={<LabelRankingPage />} />
+        <Route path="/weakness" element={<WeaknessPage />} />
+        <Route path="/label-ranking" element={<Navigate to="/weakness" replace />} />
+        <Route path="/interview" element={<InterviewRecordPage />} />
+        <Route path="/interview-records" element={<Navigate to="/interview" replace />} />
         <Route path="/registrations" element={<ExamRegistrationPage />} />
         {/* /insights 已并入分析中心；保留重定向避免旧书签 404（验收缺陷 #1 的同类死页面问题） */}
         <Route path="/insights" element={<Navigate to="/analytics" replace />} />
