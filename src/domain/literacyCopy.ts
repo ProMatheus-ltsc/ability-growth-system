@@ -26,7 +26,7 @@ const PRIMARY: LiteracyCopy = {
 
 const JUNIOR: LiteracyCopy = {
   pageTitle: '学习素养',
-  pageDescription: '五个方面看看你会不会学习:计划、执行、复盘、批判性思考、跟别人协作。',
+  pageDescription: '五个方面看看你会不会学习:计划、执行、元认知、批判性思考、跟别人协作。',
   levelHint: '初中 · 方法形成期 - 用得稳定了才算掌握',
   adultBlockedTitle: '成年人学段不开放本模块',
   adultBlockedDescription: '成年人的能力体系由「问题跟进(PDCA)」和「职业选择」承载',

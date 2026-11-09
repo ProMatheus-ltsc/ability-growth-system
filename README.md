@@ -54,11 +54,11 @@
 
 | 模块 | 页面 | 说明 |
 |------|------|------|
-| 今日工作台 | `/` | 每日核心任务、待修复问题、复盘提醒、能力变化、云端存储状态 |
+| 今日工作台 | `/` | 每日核心任务、待修复问题、能力变化、云端存储状态 |
 | 训练记录 | `/trainings` | 支持多学段多学科的训练记录,含标准/快速模式、错误 chips、陌生题标记 |
 | 能力中心 | `/abilities` | 能力雷达图、增长曲线、模块掌握度、三级能力标签明细 |
 | 问题中心 | `/problems` | 跨学科统一管理未修复能力缺口,含错误复现率、修复→验证状态机 |
-| 复盘中心 | `/reviews` | 日 / 周 / 月三级复盘,自动带出训练摘要与短板推荐 |
+| 复盘中心 | — | 已下线（2026-11-09 用户另有独立复盘站点，界面与素养指标一并移除；`reviews` 表待 `0004_drop_reviews.sql` 执行后删除，当前未执行） |
 | 学段学科配置 | `Onboarding` | 5 分钟启动引导:身份 → 学段 → 学科 |
 | 学生管理 (教师) | `/students` | 添加/编辑学生,含学段/年级/学科/分组/考试类型 |
 | 设置 | `/settings` | 身份/学段/学科偏好,清空云端数据 |
@@ -128,7 +128,7 @@
 | 模块 | 页面 | 说明 |
 |------|------|------|
 | 素养五维雷达 | `/literacy` | 元认知 / 时间管理 / 信息检索 / 批判性思维 / 协作沟通 |
-| 行为锚点 | 页面内 | L1/L2/L3 分级, 数据来自训练/复盘/能力缺口 |
+| 行为锚点 | 页面内 | L1/L2/L3 分级, 数据来自训练/能力缺口 |
 | 协作行为录入 | `/literacy-collab` | 讲题 / 小组任务 / 互助修复 专项行为记录 |
 | 学期报告 | (数据服务) | `buildTermReport` 可派生学期成长报告(每学期) |
 | 与职业选择联动 | 自动 | 高中素养数据校准职业选择·能力检测的自评偏差 |
@@ -141,7 +141,7 @@
 | 面试专项训练 (§15.1) | `/interview` | 音频录制 · 思考时间 · 答题时间 · 自评+他评 |
 | 学生 CSV 批量导入 (§29.2) | `/students/import` | CSV/表格粘贴 · 学段/学科自动校验 |
 | 模考诊断→修复任务 | `/exams` | 一键把 <60% 模块转为能力缺口 + 修复任务 |
-| 键盘快捷键 (§29.5) | 全局 | Ctrl+N 新建训练 · Ctrl+R 日复盘 · Ctrl+M 快速标记 |
+| 键盘快捷键 (§29.5) | 全局 | Ctrl+N 新建训练 · Ctrl+M 快速标记 |
 
 ---
 
@@ -259,7 +259,7 @@ CREATE INDEX idx_trainings_workspace_updated ON trainings(workspace, updated_at)
 | `gaps` | 能力缺口 | subject · abilityPath · severity · status · occurrenceCount |
 | `abilities` | 能力快照 | subject · abilityPath · score · level · confidence · source |
 | `students` | 学生档案 | name · gradeLevel · subjects · group · examDate |
-| `reviews` | 复盘记录 | level · date · did · issues · next |
+| `reviews` | 日/周/月复盘记录(已下线) | level · date · did · issues · next |
 | `tasks` | 修复/验证任务 | subject · abilityPath · type · status |
 | `templates` | 任务模板库 | gradeLevel · subject · taskKind · suggestedQuestions |
 | `assignments` | 教师任务下发 | title · subject · totalQuestions · dueAt · assigneeStudentIds |
@@ -330,7 +330,7 @@ CREATE INDEX idx_trainings_workspace_updated ON trainings(workspace, updated_at)
 | `/abilities` 能力中心 | ✅ | ✅ | 同上 |
 | `/problems` 问题中心 | ✅ | ✅ | 同上 |
 | `/exams` 测验诊断 | ✅ | ✅ | 同上 |
-| `/reviews` 复盘中心 | ✅ | ✅ | 同上 |
+| `/reviews` 复盘中心 | — | — | 已下线（用户另有独立复盘站点），旧入口重定向到首页 |
 | `/timeline` 学习时间线 | ✅ | ✅ | 学生自行规划,教师可代规划 |
 | `/analytics` 训练收益 | ✅ | ✅ | 同上 |
 | `/insights` 深度洞察 (P2) | ✅ | ✅ | 同上 |

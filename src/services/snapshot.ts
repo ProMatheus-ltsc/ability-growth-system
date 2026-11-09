@@ -22,7 +22,6 @@ import type {
   PDCAProblem,
   PdcaArtifact,
   RetestReflection,
-  ReviewRecord,
   SpacedReviewItem,
   StagePlan,
   StudentProfile,
@@ -38,7 +37,6 @@ export const STORE_NAMES = [
   'gaps',
   'abilities',
   'students',
-  'reviews',
   'tasks',
   'templates',
   'assignments',
@@ -73,7 +71,6 @@ export interface ExportedSnapshot {
   gaps: AbilityGap[];
   abilities: AbilitySnapshot[];
   students: StudentProfile[];
-  reviews: ReviewRecord[];
   tasks: FixTask[];
   templates: TaskTemplate[];
   assignments: Assignment[];

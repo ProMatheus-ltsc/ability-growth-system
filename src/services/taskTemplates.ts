@@ -119,11 +119,6 @@ export const EMPTY_STATE_HINTS: Record<string, { title: string; description: str
     title: '当前没有未修复的问题,继续保持!',
     description: '正向反馈:能力缺口越少,能力增长越稳定',
   },
-  reviews: {
-    title: '开始你的第一次复盘,只需 2 分钟',
-    description: '日 → 周 → 月 三级复盘,形成能力增长闭环',
-    cta: '开始复盘',
-  },
   students: {
     title: '还没有学生,添加第一个学生开始管理',
     description: '教师端支持批量导入 (CSV/表格粘贴)',
@@ -139,7 +134,6 @@ export const EMPTY_STATE_HINTS: Record<string, { title: string; description: str
 /** PRD §29.5 快捷键 */
 export const KEYBOARD_SHORTCUTS = [
   { key: 'Ctrl/Cmd + N', label: '新建训练记录', scope: '全局' },
-  { key: 'Ctrl/Cmd + R', label: '开始日复盘', scope: '全局' },
   { key: 'Ctrl/Cmd + M', label: '快速标记错误', scope: '训练页面' },
   { key: 'Ctrl/Cmd + Enter', label: '保存并继续', scope: '表单页' },
   { key: 'Tab', label: '下一字段', scope: '表单页' },

@@ -20,7 +20,6 @@ const GRADE_TONE: Record<GradeLevel, {
   desc: string;
   actionLabel: string;
   focusTitle: string;
-  reviewTitle: string;
   metricGap: string;
   metricTrain: string;
   metricAbility: string;
@@ -32,7 +31,6 @@ const GRADE_TONE: Record<GradeLevel, {
     desc: '小任务闯一闯:练一练 → 找找错在哪 → 把弱项补回来 → 再来一次 → 变得更厉害!',
     actionLabel: '开始小任务',
     focusTitle: '今天要闯的关卡 🎯',
-    reviewTitle: '今天的小结 🎈',
     metricGap: '要修理的小怪兽',
     metricTrain: '这个月练了几次',
     metricAbility: '收集到的能力星星',
@@ -44,7 +42,6 @@ const GRADE_TONE: Record<GradeLevel, {
     desc: '练一次 → 看看哪里错了 → 补一补 → 再验证 · 一点一点变强',
     actionLabel: '记一次练习',
     focusTitle: '今天要搞定的事',
-    reviewTitle: '今日回顾',
     metricGap: '还没解决的薄弱点',
     metricTrain: '本月练了几次',
     metricAbility: '能力记录数',
@@ -56,7 +53,6 @@ const GRADE_TONE: Record<GradeLevel, {
     desc: '目标 → 训练 → 错题定位 → 弱项修复 → 验证闭环 · 提高陌生题正确率',
     actionLabel: '记录训练',
     focusTitle: '今日重点',
-    reviewTitle: '今日复盘',
     metricGap: '待修复弱项',
     metricTrain: '近 30 天训练',
     metricAbility: '能力快照',
@@ -68,7 +64,6 @@ const GRADE_TONE: Record<GradeLevel, {
     desc: '训练 → 反馈 → 能力缺口 → 修复 → 验证 · 数据驱动的能力增长闭环',
     actionLabel: '记录训练',
     focusTitle: '今天的核心任务',
-    reviewTitle: '今日复盘',
     metricGap: '待修复能力缺口',
     metricTrain: '近 30 天训练次数',
     metricAbility: '能力快照数量',

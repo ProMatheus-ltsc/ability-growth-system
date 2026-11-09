@@ -26,7 +26,6 @@ import type {
   PDCAProblem,
   PdcaArtifact,
   RetestReflection,
-  ReviewRecord,
   SpacedReviewItem,
   StagePlan,
   StudentProfile,
@@ -65,11 +64,6 @@ interface AGSchema extends DBSchema {
     key: string;
     value: StudentProfile;
     indexes: { gradeLevel: string; updatedAt: string };
-  };
-  reviews: {
-    key: string;
-    value: ReviewRecord;
-    indexes: { studentId: string; level: string; date: string };
   };
   tasks: {
     key: string;
@@ -235,11 +229,6 @@ function db(): Promise<IDBPDatabase<AGSchema>> {
           students.createIndex('gradeLevel', 'gradeLevel');
           students.createIndex('updatedAt', 'updatedAt');
 
-          const reviews = dbi.createObjectStore('reviews', { keyPath: 'id' });
-          reviews.createIndex('studentId', 'studentId');
-          reviews.createIndex('level', 'level');
-          reviews.createIndex('date', 'date');
-
           const tasks = dbi.createObjectStore('tasks', { keyPath: 'id' });
           tasks.createIndex('studentId', 'studentId');
           tasks.createIndex('subject', 'subject');
@@ -348,14 +337,6 @@ export async function findAbilities(studentId?: string, subject?: string): Promi
     .filter((r) => (studentId ? r.studentId === studentId : true))
     .filter((r) => (subject ? r.subject === subject : true))
     .sort((a, b) => b.evaluationTime.localeCompare(a.evaluationTime));
-}
-
-export async function findReviews(level?: ReviewRecord['level'], studentId?: string): Promise<ReviewRecord[]> {
-  const list = await getAllRecords('reviews');
-  return list
-    .filter((r) => (level ? r.level === level : true))
-    .filter((r) => (studentId ? r.studentId === studentId : true))
-    .sort((a, b) => b.date.localeCompare(a.date));
 }
 
 export async function findTasks(studentId?: string, status?: FixTask['status']): Promise<FixTask[]> {

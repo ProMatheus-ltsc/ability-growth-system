@@ -199,14 +199,13 @@ export function CareerAssessmentFlow({ gradeLevel, studentId, onComplete, onCanc
       const personality = scoreMBTILikert(mbtiLikertAnswers, activeMbtiLikertQuestions);
 
       // V5.12 · 从训练记录 + 素养 + 能力缺口 派生系统校准数据,融合到能力雷达
-      const [allTrainings, allGaps, allAbilities, allReviews] = await Promise.all([
+      const [allTrainings, allGaps, allAbilities] = await Promise.all([
         getAllRecords('trainings') as Promise<import('../../domain/types').TrainingRecord[]>,
         getAllRecords('gaps') as Promise<import('../../domain/types').AbilityGap[]>,
         getAllRecords('abilities') as Promise<import('../../domain/types').AbilitySnapshot[]>,
-        getAllRecords('reviews') as Promise<import('../../domain/types').ReviewRecord[]>,
       ]);
       const trainingCalibration = deriveAbilityCalibration(allTrainings, allGaps, allAbilities);
-      const literacyProfile = deriveLiteracyProfile(gradeLevel, allTrainings, allReviews, allGaps);
+      const literacyProfile = deriveLiteracyProfile(gradeLevel, allTrainings, allGaps);
       const literacyCalibration = literacyToAbilityCalibration(literacyProfile);
       // 合并两种校准:同维度取平均;仅一方有则用该方
       const merged: Partial<Record<AbilityEightDim, number>> = {};

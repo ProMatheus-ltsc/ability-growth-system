@@ -36,7 +36,7 @@ export function SettingsPage() {
   };
 
   const doClear = async () => {
-    if (!window.confirm('确认清空当前账户的云端训练/能力/复盘/学生数据？此操作不可撤销')) return;
+    if (!window.confirm('确认清空当前账户的云端训练/能力/学生数据？此操作不可撤销')) return;
     await clearAllBusinessData();
     showToast('已清空云端业务数据', 'warning');
   };

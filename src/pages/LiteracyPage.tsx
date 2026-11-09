@@ -6,7 +6,7 @@ import { EmptyState } from '../components/EmptyState';
 import { AbilityRadar } from '../components/RadarChart';
 import { MasteryBar } from '../components/MasteryBar';
 import { useAppSession } from '../hooks/useAppSession';
-import { findGaps, findReviews, findTrainingsByStudent } from '../services/localDB';
+import { findGaps, findTrainingsByStudent } from '../services/localDB';
 import { deriveLiteracyProfile, type LiteracyDimensionSummary } from '../services/literacy';
 import {
   LITERACY_DIMENSION_LABEL,
@@ -25,12 +25,11 @@ export function LiteracyPage() {
 
   useEffect(() => {
     (async () => {
-      const [trainings, reviews, gaps] = await Promise.all([
+      const [trainings, gaps] = await Promise.all([
         findTrainingsByStudent(prefs.currentStudentId),
-        findReviews(undefined, prefs.currentStudentId),
         findGaps(prefs.currentStudentId),
       ]);
-      const derived = deriveLiteracyProfile(prefs.gradeLevel, trainings, reviews, gaps);
+      const derived = deriveLiteracyProfile(prefs.gradeLevel, trainings, gaps);
       setProfile(derived);
       setLoading(false);
     })();
@@ -91,7 +90,7 @@ export function LiteracyPage() {
             <b>{copy.levelHint}</b>
           </div>
           <div className="text-xs text-slate-500 mt-1">
-            指标数据由训练记录/复盘/能力缺口自动派生,不会打扰学生;跨学段升学时素养曲线连续追踪。
+            指标数据由训练记录/能力缺口自动派生,不会打扰学生;跨学段升学时素养曲线连续追踪。
           </div>
         </div>
       </div>

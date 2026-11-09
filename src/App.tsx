@@ -47,7 +47,6 @@ import { TimelinePage } from './pages/TimelinePage';
 import { ExamDiagnosisPage } from './pages/ExamDiagnosisPage';
 import { SubjectiveAnswersPage } from './pages/SubjectiveAnswersPage';
 import { AnalyticsPage } from './pages/AnalyticsPage';
-import { ReviewPage } from './pages/ReviewPage';
 
 // V5.8 新增模块
 import { PdcaPage } from './pages/PdcaPage';
@@ -80,7 +79,8 @@ type Visibility = (typeof MODULE_VISIBILITY)[keyof typeof MODULE_VISIBILITY];
 
 /** 构建学生视图分层导航 */
 function buildStudentGroups(v: Visibility): NavGroup[] {
-  // 阶段三（验收缺陷 #1/#13）：训练闭环内补齐「数据分析 / 学习时间线 / 今日复盘」，
+  // 阶段三（验收缺陷 #1/#13）：训练闭环内补齐「数据分析 / 学习时间线」，
+  // 原「今日复盘」模块已下线（用户有独立复盘站点，2026-11-09 要求移除）
   // 原来的「数据分析」独立分组与「深度洞察」入口取消（Analytics 与 Insights 已合并为分析中心）。
   return [
     { key: 'home', label: '今日工作台', icon: Home, to: '/', end: true },
@@ -94,7 +94,6 @@ function buildStudentGroups(v: Visibility): NavGroup[] {
         { to: '/problems', icon: AlertOctagon, label: '问题中心' },
         { to: '/exams', icon: FlaskConical, label: '测验诊断' },
         { to: '/subjective', icon: FileText, label: '申论作答' },
-        { to: '/review', icon: ClipboardList, label: '今日复盘' },
         { to: '/timeline', icon: Timer, label: '学习时间线' },
         { to: '/analytics', icon: BarChart3, label: '数据分析' },
       ],
@@ -170,7 +169,6 @@ function buildTeacherGroups(v: Visibility): NavGroup[] {
         { to: '/problems', icon: AlertOctagon, label: '问题中心' },
         { to: '/exams', icon: FlaskConical, label: '测验诊断' },
         { to: '/subjective', icon: FileText, label: '申论作答' },
-        { to: '/review', icon: ClipboardList, label: '今日复盘' },
         { to: '/timeline', icon: Timer, label: '学习时间线' },
         { to: '/analytics', icon: BarChart3, label: '数据分析' },
       ],
@@ -307,7 +305,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         <Route path="/analytics" element={<AnalyticsPage />} />
         {/* /insights 已并入分析中心；保留重定向避免旧书签 404（验收缺陷 #1 的同类死页面问题） */}
         <Route path="/insights" element={<Navigate to="/analytics" replace />} />
-        <Route path="/review" element={<ReviewPage />} />
+        {/* 原「今日复盘」路由已下线（用户另有独立复盘站点）；旧书签由末尾 * 兜底重定向到首页，不留 404 */}
         <Route path="/storage" element={<StoragePage />} />
         <Route path="/settings" element={<SettingsPage />} />
 

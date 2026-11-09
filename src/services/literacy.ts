@@ -2,7 +2,7 @@
  * 学习素养服务 (PRD V5.8 §18A)
  *
  * 零新增测评: 五大维度的所有量化指标从现有场景数据派生
- *  - 元认知能力      ← 日复盘完成率 / 陌生题主动占比 / 错误复现率下降
+ *  - 元认知能力      ← 陌生题主动占比 / 错误复现率下降
  *  - 时间管理与规划  ← 今日工作台任务完成率 / 拖延占比 / 复习节点准时率
  *  - 信息检索处理    ← 训练记录订正字段填写率 / 错题关联率
  *  - 批判性思维      ← 存疑标记数 / 一题多解 / 判断类错误占比
@@ -16,7 +16,6 @@ import type {
   LiteracyDimension,
   LiteracyLevel,
   LiteracyMeasurement,
-  ReviewRecord,
   TrainingRecord,
 } from '../domain/types';
 
@@ -31,15 +30,14 @@ export interface LiteracyDimensionSummary {
 export function deriveLiteracyProfile(
   gradeLevel: GradeLevel,
   trainings: TrainingRecord[],
-  reviews: ReviewRecord[],
   gaps: AbilityGap[],
 ): LiteracyDimensionSummary[] {
   return [
-    deriveMetacognition(gradeLevel, trainings, reviews, gaps),
-    deriveTimeManagement(gradeLevel, trainings, reviews),
+    deriveMetacognition(gradeLevel, trainings, gaps),
+    deriveTimeManagement(gradeLevel, trainings),
     deriveInfoProcessing(gradeLevel, trainings, gaps),
     deriveCriticalThinking(gradeLevel, trainings, gaps),
-    deriveCollaboration(gradeLevel, trainings, reviews),
+    deriveCollaboration(gradeLevel, trainings),
   ];
 }
 
@@ -48,26 +46,9 @@ export function deriveLiteracyProfile(
 function deriveMetacognition(
   _gradeLevel: GradeLevel,
   trainings: TrainingRecord[],
-  reviews: ReviewRecord[],
   gaps: AbilityGap[],
 ): LiteracyDimensionSummary {
   const measurements: LiteracyMeasurement[] = [];
-
-  // 日复盘完成率(过去 8 周)
-  const now = Date.now();
-  const eightWeeksAgo = now - 8 * 7 * 86400000;
-  const dailyReviews = reviews.filter(
-    (r) => r.level === 'day' && new Date(r.date).getTime() >= eightWeeksAgo,
-  );
-  const rate = Math.min(1, dailyReviews.length / (8 * 7));
-  measurements.push({
-    dimension: 'metacognition',
-    indicator: '日复盘完成率(8 周)',
-    value: +(rate * 100).toFixed(1),
-    level: rate >= 0.9 ? 'L3' : rate >= 0.8 ? 'L2' : rate >= 0.6 ? 'L1' : 'L1',
-    evidence: `过去 8 周共 ${dailyReviews.length} 次日复盘`,
-    measuredAt: new Date().toISOString(),
-  });
 
   // 陌生题主动训练占比
   const totalTraining = trainings.length;
@@ -103,7 +84,6 @@ function deriveMetacognition(
 function deriveTimeManagement(
   _gradeLevel: GradeLevel,
   trainings: TrainingRecord[],
-  reviews: ReviewRecord[],
 ): LiteracyDimensionSummary {
   const measurements: LiteracyMeasurement[] = [];
 
@@ -118,18 +98,6 @@ function deriveTimeManagement(
     value: +(frequency * 100).toFixed(1),
     level: frequency >= 0.7 ? 'L3' : frequency >= 0.5 ? 'L2' : 'L1',
     evidence: `28 天中 ${days} 天有训练记录`,
-    measuredAt: new Date().toISOString(),
-  });
-
-  // 周复盘完成率
-  const weekReviews = reviews.filter((r) => r.level === 'week');
-  const weekRate = Math.min(1, weekReviews.length / 4);
-  measurements.push({
-    dimension: 'time-management',
-    indicator: '周复盘完成率(近 4 周)',
-    value: +(weekRate * 100).toFixed(1),
-    level: weekRate >= 0.75 ? 'L3' : weekRate >= 0.5 ? 'L2' : 'L1',
-    evidence: `近 4 周完成 ${weekReviews.length} 次周复盘`,
     measuredAt: new Date().toISOString(),
   });
 
@@ -228,13 +196,12 @@ function deriveCriticalThinking(
 function deriveCollaboration(
   _gradeLevel: GradeLevel,
   trainings: TrainingRecord[],
-  reviews: ReviewRecord[],
 ): LiteracyDimensionSummary {
   const measurements: LiteracyMeasurement[] = [];
 
   // 系统内暂不收集"讲题"等社交行为数据, 这里给出保守占位, 待教师端补录后升级
   const experimentTraining = trainings.filter((t) => t.trainingType === 'experiment').length;
-  const collaborativeSignal = experimentTraining + reviews.filter((r) => r.did.includes('讲')).length;
+  const collaborativeSignal = experimentTraining;
   const rate = Math.min(1, collaborativeSignal / 5);
   measurements.push({
     dimension: 'collaboration',
@@ -292,7 +259,6 @@ export interface LiteracyTermReport {
 export function buildTermReport(
   gradeLevel: import('../domain/types').GradeLevel,
   trainings: import('../domain/types').TrainingRecord[],
-  reviews: import('../domain/types').ReviewRecord[],
   gaps: import('../domain/types').AbilityGap[],
   collabEvents: CollaborationEvent[],
   fromDate: string,
@@ -300,10 +266,9 @@ export function buildTermReport(
 ): LiteracyTermReport {
   const scoped = {
     trainings: trainings.filter((t) => t.date >= fromDate && t.date <= toDate),
-    reviews: reviews.filter((r) => r.date >= fromDate && r.date <= toDate),
     gaps: gaps.filter((g) => g.updatedAt.slice(0, 10) >= fromDate && g.updatedAt.slice(0, 10) <= toDate),
   };
-  const dimensions = deriveLiteracyProfile(gradeLevel, scoped.trainings, scoped.reviews, scoped.gaps);
+  const dimensions = deriveLiteracyProfile(gradeLevel, scoped.trainings, scoped.gaps);
   const collaborationHighlights = collabEvents
     .filter((e) => e.date >= fromDate && e.date <= toDate)
     .slice(0, 5)
@@ -339,13 +304,11 @@ export async function summarizeClassLiteracy(students: StudentProfile[]): Promis
       metacognition: [], 'time-management': [], 'info-processing': [], 'critical-thinking': [], collaboration: [],
     };
     const allTrainings = await getAllRecords('trainings');
-    const allReviews = await getAllRecords('reviews');
     const allGaps = await getAllRecords('gaps');
     for (const s of list) {
       const t = allTrainings.filter((r) => r.studentId === s.id);
-      const r = allReviews.filter((x) => x.studentId === s.id);
       const g = allGaps.filter((x) => x.studentId === s.id);
-      const profile = deriveLiteracyProfile(s.gradeLevel, t, r, g);
+      const profile = deriveLiteracyProfile(s.gradeLevel, t, g);
       for (const p of profile) perDim[p.dimension].push(p.score);
     }
     const avg: Record<LiteracyDimension, number> = {} as Record<LiteracyDimension, number>;

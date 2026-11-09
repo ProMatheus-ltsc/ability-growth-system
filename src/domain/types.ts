@@ -330,27 +330,6 @@ export interface StudentProfile {
   updatedAt: string;
 }
 
-/** 日/周/月复盘记录 */
-export type ReviewLevel = 'day' | 'week' | 'month';
-
-export interface ReviewRecord {
-  id: string;
-  studentId?: string;
-  level: ReviewLevel;
-  date: string;
-  did: string;
-  issues: string;
-  next: string;
-  autoSummary?: {
-    trainingCount: number;
-    totalQuestions: number;
-    errorCount: number;
-    abilityDelta?: number;
-  };
-  createdAt: string;
-  updatedAt: string;
-}
-
 /** 修复任务/验证任务 */
 export interface FixTask {
   id: string;
@@ -724,7 +703,7 @@ export interface PDCACheckEntry {
   nextAction?: string;
   /** V5.11 · ACE C-Connect: 跨模块引用 */
   crossRefs?: Array<{
-    module: 'timeline' | 'analytics' | 'review';
+    module: 'timeline' | 'analytics';
     refId: string;
     note?: string;
   }>;
