@@ -1,12 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine, Legend } from 'recharts';
+import { useMemo, useState } from 'react';
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine } from 'recharts';
 import { ResponsiveChart } from '@shared/core';
-import { Lightbulb, Compass, Cpu, GitBranch, Play, Sparkles } from 'lucide-react';
-import { PageHeader } from '../components/PageHeader';
+import { Lightbulb, Compass, Cpu, GitBranch, Play } from 'lucide-react';
 import { EmptyState } from '../components/EmptyState';
 import { MasteryBar } from '../components/MasteryBar';
-import { useAppSession } from '../hooks/useAppSession';
-import { findGaps, findTrainingsByStudent } from '../services/localDB';
 import {
   aggregateSubjectForecasts,
   buildCausalGraph,
@@ -21,64 +18,14 @@ import {
 } from '../services/insights';
 import type { AbilityGap, Subject, TrainingRecord } from '../domain/types';
 import { SUBJECT_LABEL } from '../domain/types';
-import { getInsightsCopy, type InsightsCopy } from '../domain/insightsCopy';
+import type { InsightsCopy } from '../domain/insightsCopy';
 
-type Tab = 'strategy' | 'forecast' | 'simulate' | 'causal' | 'leverage';
-
-export function InsightsPage() {
-  const { prefs } = useAppSession();
-  const [tab, setTab] = useState<Tab>('strategy');
-  const [trainings, setTrainings] = useState<TrainingRecord[]>([]);
-  const [gaps, setGaps] = useState<AbilityGap[]>([]);
-
-  useEffect(() => {
-    void findTrainingsByStudent(prefs.currentStudentId).then(setTrainings);
-    void findGaps(prefs.currentStudentId).then(setGaps);
-  }, [prefs.currentStudentId]);
-
-  const copy = getInsightsCopy(prefs.gradeLevel);
-  return (
-    <div className="space-y-5">
-      <PageHeader
-        title={copy.pageTitle}
-        description={copy.pageDescription}
-      />
-
-      <div className="flex flex-wrap items-center gap-2">
-        {(
-          [
-            { k: 'strategy', label: '策略推荐', icon: Lightbulb },
-            { k: 'forecast', label: '收益预测', icon: Compass },
-            { k: 'simulate', label: 'What-if 模拟', icon: Play },
-            { k: 'causal', label: '因果建模', icon: GitBranch },
-            { k: 'leverage', label: '迁移杠杆', icon: Cpu },
-          ] as Array<{ k: Tab; label: string; icon: typeof Sparkles }>
-        ).map((it) => (
-          <button
-            key={it.k}
-            className={`px-3 py-1.5 rounded-lg text-sm flex items-center gap-1 ${
-              tab === it.k ? 'bg-blue-600 text-white' : 'bg-white border border-slate-200 text-slate-600'
-            }`}
-            onClick={() => setTab(it.k)}
-          >
-            <it.icon size={14} />
-            {it.label}
-          </button>
-        ))}
-      </div>
-
-      {tab === 'strategy' && <StrategyTab records={trainings} gaps={gaps} copy={copy} />}
-      {tab === 'forecast' && <ForecastTab records={trainings} subjects={prefs.subjects} copy={copy} />}
-      {tab === 'simulate' && <SimulationTab records={trainings} subjects={prefs.subjects} />}
-      {tab === 'causal' && <CausalTab records={trainings} gaps={gaps} copy={copy} />}
-      {tab === 'leverage' && <LeverageTab gaps={gaps} copy={copy} />}
-    </div>
-  );
-}
+// 说明（阶段三）：原「深度洞察」页面已并入分析中心，本文件仅保留各 Tab 组件，
+// 由 src/pages/AnalyticsPage.tsx 组合为「收益与预测 / 策略与因果」。/insights 路由重定向到 /analytics。
 
 // ============ 策略推荐 ============
 
-function StrategyTab({ records, gaps, copy }: { records: TrainingRecord[]; gaps: AbilityGap[]; copy: InsightsCopy }) {
+export function StrategyTab({ records, gaps, copy }: { records: TrainingRecord[]; gaps: AbilityGap[]; copy: InsightsCopy }) {
   const recs: StrategyRecommendation[] = useMemo(() => recommendStrategies(records, gaps), [records, gaps]);
   if (recs.length === 0) {
     return <EmptyState icon={Lightbulb} title={copy.strategyEmptyTitle} description={copy.strategyEmptyDescription} />;
@@ -110,10 +57,24 @@ function StrategyTab({ records, gaps, copy }: { records: TrainingRecord[]; gaps:
 
 // ============ 收益预测 ============
 
-function ForecastTab({ records, subjects, copy }: { records: TrainingRecord[]; subjects: Subject[]; copy: InsightsCopy }) {
-  const summaries = useMemo(() => aggregateSubjectForecasts(records, subjects), [records, subjects]);
+export function ForecastTab({
+  records,
+  subjects,
+  copy,
+  targetScore,
+}: {
+  records: TrainingRecord[];
+  subjects: Subject[];
+  copy: InsightsCopy;
+  /** 统一目标分（报名 targetScore）；未设置时不画目标线，也不再使用写死的 85/95 */
+  targetScore?: number;
+}) {
+  const summaries = useMemo(
+    () => aggregateSubjectForecasts(records, subjects, targetScore),
+    [records, subjects, targetScore],
+  );
   const [subject, setSubject] = useState<Subject>(subjects[0] ?? 'math');
-  const detail = useMemo(() => forecastGrowth(records, subject), [records, subject]);
+  const detail = useMemo(() => forecastGrowth(records, subject, targetScore), [records, subject, targetScore]);
   const chart = useMemo(() => {
     const arr: Array<{ w: number; label: string; mastery: number }> = [];
     for (let i = 0; i <= 12; i++) {
@@ -159,7 +120,12 @@ function ForecastTab({ records, subjects, copy }: { records: TrainingRecord[]; s
           </select>
         </div>
         <div className="text-sm text-slate-600 mb-3">
-          当前掌握度 <b>{detail.currentMastery}%</b> · 周增长率 <b>{detail.weeklyGrowthRate}%</b> · 达到熟练需 {detail.weeksToTarget.proficient ?? '—'} 周 · 达到精通需 {detail.weeksToTarget.expert ?? '—'} 周
+          当前掌握度 <b>{detail.currentMastery}%</b> · 周增长率 <b>{detail.weeklyGrowthRate}%</b> ·{' '}
+          {detail.targetScore === null
+            ? '未设置目标分（报名记录未填 targetScore）'
+            : detail.weeksToTargetScore === null
+              ? `暂无法估算达到目标分 ${detail.targetScore}% 的周数`
+              : `达到目标分 ${detail.targetScore}% 需 ${detail.weeksToTargetScore} 周`}
         </div>
         <ResponsiveChart minHeight="15rem" maxHeight="17.5rem">
         <ResponsiveContainer width="100%" height="100%">
@@ -168,8 +134,14 @@ function ForecastTab({ records, subjects, copy }: { records: TrainingRecord[]; s
             <XAxis dataKey="label" tick={{ fontSize: 11 }} />
             <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} />
             <Tooltip />
-            <ReferenceLine y={85} stroke="#f59e0b" strokeDasharray="3 3" label={{ value: '熟练线', fontSize: 10 }} />
-            <ReferenceLine y={95} stroke="#10b981" strokeDasharray="3 3" label={{ value: '精通线', fontSize: 10 }} />
+            {targetScore !== undefined && (
+              <ReferenceLine
+                y={targetScore}
+                stroke="#f59e0b"
+                strokeDasharray="3 3"
+                label={{ value: `目标线 ${targetScore}%`, fontSize: 10 }}
+              />
+            )}
             <Line type="monotone" dataKey="mastery" stroke="#2563eb" strokeWidth={2} dot={{ r: 3 }} name="预测掌握度" />
           </LineChart>
         </ResponsiveContainer>
@@ -181,7 +153,15 @@ function ForecastTab({ records, subjects, copy }: { records: TrainingRecord[]; s
 
 // ============ What-if 模拟 ============
 
-function SimulationTab({ records, subjects }: { records: TrainingRecord[]; subjects: Subject[] }) {
+export function SimulationTab({
+  records,
+  subjects,
+  targetScore,
+}: {
+  records: TrainingRecord[];
+  subjects: Subject[];
+  targetScore?: number;
+}) {
   const [subject, setSubject] = useState<Subject>(subjects[0] ?? 'math');
   const [hoursPerWeek, setHoursPerWeek] = useState(6);
   const [weeks, setWeeks] = useState(8);
@@ -194,7 +174,7 @@ function SimulationTab({ records, subjects }: { records: TrainingRecord[]; subje
   const [result, setResult] = useState<SimulationResult | null>(null);
 
   const run = () => {
-    setResult(simulateStrategy(records, subject, { hoursPerWeek, weeks, focusRatio: ratios }));
+    setResult(simulateStrategy(records, subject, { hoursPerWeek, weeks, focusRatio: ratios }, targetScore));
   };
 
   return (
@@ -272,8 +252,9 @@ function SimulationTab({ records, subjects }: { records: TrainingRecord[]; subje
               <XAxis dataKey="week" tick={{ fontSize: 11 }} label={{ value: '周', position: 'bottom', offset: -5, fontSize: 11 }} />
               <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} />
               <Tooltip />
-              <ReferenceLine y={85} stroke="#f59e0b" strokeDasharray="3 3" />
-              <ReferenceLine y={95} stroke="#10b981" strokeDasharray="3 3" />
+              {targetScore !== undefined && (
+                <ReferenceLine y={targetScore} stroke="#f59e0b" strokeDasharray="3 3" label={{ value: '目标线', fontSize: 10 }} />
+              )}
               <Line type="monotone" dataKey="mastery" stroke="#2563eb" strokeWidth={2} dot={{ r: 2 }} />
             </LineChart>
           </ResponsiveContainer>
@@ -293,7 +274,7 @@ function SimulationTab({ records, subjects }: { records: TrainingRecord[]; subje
 
 // ============ 因果建模 ============
 
-function CausalTab({ records, gaps, copy }: { records: TrainingRecord[]; gaps: AbilityGap[]; copy: InsightsCopy }) {
+export function CausalTab({ records, gaps, copy }: { records: TrainingRecord[]; gaps: AbilityGap[]; copy: InsightsCopy }) {
   const graph: CausalGraph = useMemo(() => buildCausalGraph(records, gaps), [records, gaps]);
   if (graph.nodes.length === 0) {
     return <EmptyState icon={GitBranch} title={copy.causalEmptyTitle} />;
@@ -341,7 +322,7 @@ function ColumnBlock({ title, tone, items }: { title: string; tone: 'red' | 'ora
 
 // ============ 迁移杠杆 ============
 
-function LeverageTab({ gaps, copy }: { gaps: AbilityGap[]; copy: InsightsCopy }) {
+export function LeverageTab({ gaps, copy }: { gaps: AbilityGap[]; copy: InsightsCopy }) {
   const leverages = useMemo(() => findLeveragePoints(gaps), [gaps]);
   if (leverages.length === 0) {
     return <EmptyState icon={Cpu} title={copy.leverageEmptyTitle} description={copy.leverageEmptyDescription} />;

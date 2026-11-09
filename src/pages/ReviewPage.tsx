@@ -3,7 +3,7 @@ import { v4 as uuid } from 'uuid';
 import { CalendarClock, PlusCircle, Trash2, X, Sparkles } from 'lucide-react';
 import { useToast } from '@shared/core';
 import { useAppSession } from '../hooks/useAppSession';
-import { findReviews, findTrainingsInRange, putRecord, deleteRecord } from '../services/localDB';
+import { findReviews, findTrainingsByStudent, putRecord, deleteRecord } from '../services/localDB';
 import { PageHeader } from '../components/PageHeader';
 import { EmptyState } from '../components/EmptyState';
 import { prioritizeGaps } from '../services/analytics';
@@ -32,7 +32,11 @@ export function ReviewPage() {
   useEffect(() => {
     const from = new Date();
     from.setDate(from.getDate() - (level === 'day' ? 1 : level === 'week' ? 7 : 30));
-    void findTrainingsInRange(from.toISOString().slice(0, 10)).then(setTrainings);
+    const fromDate = from.toISOString().slice(0, 10);
+    // 按当前学员过滤（验收缺陷 #3 同类问题）：此前 findTrainingsInRange 不区分学员，多学员会混算
+    void findTrainingsByStudent(prefs.currentStudentId).then((list) =>
+      setTrainings(list.filter((t) => t.date >= fromDate)),
+    );
     void findGaps(prefs.currentStudentId, 'unresolved').then(setGaps);
   }, [level, prefs.currentStudentId]);
 

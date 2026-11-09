@@ -17,7 +17,7 @@ import type {
   TrainingType,
 } from '../domain/types';
 import { ERROR_CATEGORY_LABEL, SUBJECT_LABEL, TRAINING_TYPE_LABEL } from '../domain/types';
-import { analyzeTrainingROI, prioritizeGaps } from './analytics';
+import { analyzeTrainingROI, computeMasteryScore, prioritizeGaps, selectAggregationRecords } from './analytics';
 import { ALL_TRANSFERS, findStrongTransferSources, TRANSFER_STRENGTH_LABEL } from '../domain/abilityTransfer';
 
 // ============ 智能训练策略推荐 ============
@@ -104,43 +104,64 @@ export interface GrowthForecast {
   subject: Subject;
   currentMastery: number;
   weeklyGrowthRate: number;
-  weeksToTarget: Record<'proficient' | 'expert', number | null>;
+  /** 统一目标分：只读报名 targetScore，未设置时为 null（不再写死 85/95） */
+  targetScore: number | null;
+  weeksToTargetScore: number | null;
   forecast4Weeks: number;
   forecast12Weeks: number;
 }
 
-export function forecastGrowth(records: TrainingRecord[], subject: Subject): GrowthForecast {
-  const scoped = records.filter((r) => r.subject === subject).sort((a, b) => a.date.localeCompare(b.date));
+/**
+ * 收益预测（口径统一，验收缺陷 #4/#5）
+ * - 掌握度：与学科统计同一公式 0.7×陌生题正确率 + 0.3×整体正确率（无陌生题样本退化），
+ *   此前这里直接用「周正确率」，导致洞察页与能力中心数字不一致；
+ * - 目标：只读报名 targetScore，未设置时不给目标周数（不再写死 85/95 熟练/精通线）。
+ */
+export function forecastGrowth(records: TrainingRecord[], subject: Subject, targetScore?: number): GrowthForecast {
+  const target = typeof targetScore === 'number' && targetScore >= 0 && targetScore <= 100 ? targetScore : null;
+  const scoped = selectAggregationRecords(records)
+    .filter((r) => r.subject === subject)
+    .sort((a, b) => a.date.localeCompare(b.date));
   if (scoped.length < 2) {
     return {
       subject,
       currentMastery: 0,
       weeklyGrowthRate: 0,
-      weeksToTarget: { proficient: null, expert: null },
+      targetScore: target,
+      weeksToTargetScore: null,
       forecast4Weeks: 0,
       forecast12Weeks: 0,
     };
   }
 
-  // 按周聚合
-  const byWeek = new Map<string, { q: number; e: number }>();
+  // 按周聚合（每周用统一掌握度公式，而不是裸正确率）
+  const byWeek = new Map<string, TrainingRecord[]>();
   for (const r of scoped) {
     const w = weekKey(r.date);
-    const entry = byWeek.get(w) ?? { q: 0, e: 0 };
-    entry.q += r.totalQuestions;
-    entry.e += r.errorCount;
-    byWeek.set(w, entry);
+    const list = byWeek.get(w) ?? [];
+    list.push(r);
+    byWeek.set(w, list);
   }
   const weeks = Array.from(byWeek.entries())
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([, v]) => (v.q === 0 ? 0 : Math.round(((v.q - v.e) / v.q) * 100)));
+    .map(([, list]) => {
+      const q = list.reduce((s, r) => s + r.totalQuestions, 0);
+      const e = list.reduce((s, r) => s + r.errorCount, 0);
+      const unfamiliar = list.filter((r) => r.isUnfamiliar);
+      const uq = unfamiliar.reduce((s, r) => s + r.totalQuestions, 0);
+      const ue = unfamiliar.reduce((s, r) => s + r.errorCount, 0);
+      const correctRate = q === 0 ? 0 : (q - e) / q;
+      const unfamiliarRate = uq === 0 ? null : (uq - ue) / uq;
+      return computeMasteryScore(correctRate, unfamiliarRate);
+    });
 
   if (weeks.length < 2) {
     return {
       subject,
       currentMastery: weeks[0] ?? 0,
       weeklyGrowthRate: 0,
-      weeksToTarget: { proficient: null, expert: null },
+      targetScore: target,
+      weeksToTargetScore: null,
       forecast4Weeks: weeks[0] ?? 0,
       forecast12Weeks: weeks[0] ?? 0,
     };
@@ -155,20 +176,19 @@ export function forecastGrowth(records: TrainingRecord[], subject: Subject): Gro
   const slope = (n * sumXY - sumX * sumY) / Math.max(1, n * sumX2 - sumX * sumX);
   const current = weeks[weeks.length - 1];
 
-  const weeksToTarget = (target: number): number | null => {
-    if (current >= target) return 0;
+  const weeksToTargetScore = (targetValue: number | null): number | null => {
+    if (targetValue === null) return null;
+    if (current >= targetValue) return 0;
     if (slope <= 0) return null;
-    return Math.ceil((target - current) / slope);
+    return Math.ceil((targetValue - current) / slope);
   };
 
   return {
     subject,
     currentMastery: current,
     weeklyGrowthRate: +slope.toFixed(2),
-    weeksToTarget: {
-      proficient: weeksToTarget(85),
-      expert: weeksToTarget(95),
-    },
+    targetScore: target,
+    weeksToTargetScore: weeksToTargetScore(target),
     forecast4Weeks: Math.min(100, Math.max(0, Math.round(current + slope * 4))),
     forecast12Weeks: Math.min(100, Math.max(0, Math.round(current + slope * 12))),
   };
@@ -259,10 +279,15 @@ export interface SimulationResult {
   notes: string[];
 }
 
-/** 基于历史 ROI 推演 What-if 情景 */
-export function simulateStrategy(records: TrainingRecord[], subject: Subject, input: SimulationInput): SimulationResult {
+/** 基于历史 ROI 推演 What-if 情景；targetScore 统一来自报名目标分 */
+export function simulateStrategy(
+  records: TrainingRecord[],
+  subject: Subject,
+  input: SimulationInput,
+  targetScore?: number,
+): SimulationResult {
   const scoped = records.filter((r) => r.subject === subject);
-  const forecast = forecastGrowth(records, subject);
+  const forecast = forecastGrowth(records, subject, targetScore);
 
   const roi = analyzeTrainingROI(scoped);
   const perHour = (type: TrainingType): number => {
@@ -293,6 +318,9 @@ export function simulateStrategy(records: TrainingRecord[], subject: Subject, in
   if (weightedPerHour <= 0) notes.push('历史数据不足以支撑该模拟, 结果为默认基线值');
   if (input.hoursPerWeek < 3) notes.push('每周投入不足 3 小时, 边际收益偏低');
   if (m >= 95) notes.push('预计将进入精通区间, 建议调整重心到其他学科');
+  if (forecast.targetScore !== null && m >= forecast.targetScore) {
+    notes.push(`模拟结果已越过目标分 ${forecast.targetScore}%（目标分来自报名记录）`);
+  }
   if (m - forecast.currentMastery < 5 && input.weeks >= 8) notes.push('长期投入下增长仍缓慢, 可能触及能力天花板, 考虑改变训练结构');
 
   return {
@@ -345,9 +373,13 @@ export interface CrossSubjectSummary {
   weeklyRate: number;
 }
 
-export function aggregateSubjectForecasts(records: TrainingRecord[], subjects: Subject[]): CrossSubjectSummary[] {
+export function aggregateSubjectForecasts(
+  records: TrainingRecord[],
+  subjects: Subject[],
+  targetScore?: number,
+): CrossSubjectSummary[] {
   return subjects.map((s) => {
-    const f = forecastGrowth(records, s);
+    const f = forecastGrowth(records, s, targetScore);
     return {
       subject: s,
       label: SUBJECT_LABEL[s],

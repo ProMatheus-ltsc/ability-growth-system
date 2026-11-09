@@ -1,12 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
-import {
-  EmptyState as CoreEmptyState,
-  ResponsiveChart,
-  ResponsiveGrid,
-  StatCard,
-  TableScroll,
-} from '@shared/core';
+import { EmptyState as CoreEmptyState, ResponsiveChart, ResponsiveGrid, TableScroll } from '@shared/core';
 import { BarChart3, Radar as RadarIcon, TrendingUp, ChevronRight } from 'lucide-react';
 import { useAppSession } from '../hooks/useAppSession';
 import { findAbilities, findTrainingsByStudent, getAllRecords } from '../services/localDB';
@@ -16,12 +10,15 @@ import {
   buildModuleStats,
   buildRadarSlices,
   buildTimeAllocation,
-  buildWeeklyDelta,
-  computeTargetGap,
   resolveTargetScore,
-  selectAggregationRecords,
-  timedComplianceRate,
 } from '../services/analytics';
+import {
+  DEFAULT_TIME_WINDOW,
+  filterByWindow,
+  TIME_WINDOW_LABEL,
+  withWindowLabel,
+  type TimeWindow,
+} from '../services/timeWindow';
 import { PageHeader } from '../components/PageHeader';
 import { MasteryBar } from '../components/MasteryBar';
 import { EmptyState } from '../components/EmptyState';
@@ -32,28 +29,46 @@ import type { AbilitySnapshot, ExamRegistration, Subject, TrainingRecord } from 
 import { SUBJECT_LABEL } from '../domain/types';
 import { getAbilityCopy } from '../domain/abilityCopy';
 
+const WINDOW_OPTIONS: TimeWindow[] = ['7d', '30d', '90d', 'all'];
+
 export function AbilityCenterPage() {
   const { prefs } = useAppSession();
   const [trainings, setTrainings] = useState<TrainingRecord[]>([]);
   const [abilities, setAbilities] = useState<AbilitySnapshot[]>([]);
   const [registrations, setRegistrations] = useState<ExamRegistration[]>([]);
   const [subject, setSubject] = useState<Subject>(prefs.subjects[0] ?? 'math');
+  // 统一时间窗口（验收缺陷 #6）：全站同一套 TimeWindow，指标标题自动带窗口
+  const [windowKey, setWindowKey] = useState<TimeWindow>(DEFAULT_TIME_WINDOW);
 
   useEffect(() => {
     void findTrainingsByStudent(prefs.currentStudentId).then(setTrainings);
     void findAbilities(prefs.currentStudentId).then(setAbilities);
-    void getAllRecords('registrations').then(setRegistrations);
+    void getAllRecords('registrations').then((list) =>
+      setRegistrations(
+        prefs.currentStudentId ? list.filter((r) => r.studentId === prefs.currentStudentId) : list,
+      ),
+    );
   }, [prefs.currentStudentId]);
 
-  const radarSlices = useMemo(
-    () => buildRadarSlices(trainings, abilities, prefs.gradeLevel, subject),
-    [trainings, abilities, prefs.gradeLevel, subject],
+  const windowedTrainings = useMemo(() => filterByWindow(trainings, windowKey), [trainings, windowKey]);
+
+  // 目标分：全站唯一来源 —— 报名表 targetScore（验收缺陷 #5，不再写死 80/85/95）
+  const targetScore = useMemo(
+    () => resolveTargetScore(registrations, prefs.currentStudentId),
+    [registrations, prefs.currentStudentId],
   );
 
-  const growth = useMemo(() => buildGrowthSeries(trainings, subject), [trainings, subject]);
+  const radarSlices = useMemo(
+    () => buildRadarSlices(windowedTrainings, abilities, prefs.gradeLevel, subject, targetScore),
+    [windowedTrainings, abilities, prefs.gradeLevel, subject, targetScore],
+  );
 
-  const aggregationTrainings = useMemo(() => selectAggregationRecords(trainings), [trainings]);
-  const moduleStats = useMemo(() => buildModuleStats(trainings), [trainings]);
+  const growth = useMemo(
+    () => buildGrowthSeries(windowedTrainings, subject),
+    [windowedTrainings, subject],
+  );
+
+  const moduleStats = useMemo(() => buildModuleStats(windowedTrainings), [windowedTrainings]);
 
   // 无样本模块保留「暂无」，按一级模块合并统计结果
   const moduleMastery = useMemo(() => {
@@ -67,20 +82,9 @@ export function AbilityCenterPage() {
     });
   }, [moduleStats, prefs.gradeLevel, subject]);
 
-  const weeklyDelta = useMemo(() => buildWeeklyDelta(trainings, subject), [trainings, subject]);
-  const timed = useMemo(
-    () => timedComplianceRate(aggregationTrainings.filter((r) => r.subject === subject)),
-    [aggregationTrainings, subject],
-  );
   const timeAllocation = useMemo(
-    () => buildTimeAllocation(trainings.filter((r) => r.subject === subject)),
-    [trainings, subject],
-  );
-
-  // 目标分：优先取最近一场未来考试，其次取最近一次已设置目标的报名（仅当前学员）
-  const targetScore = useMemo(
-    () => resolveTargetScore(registrations, prefs.currentStudentId),
-    [registrations, prefs.currentStudentId],
+    () => buildTimeAllocation(windowedTrainings.filter((r) => r.subject === subject)),
+    [windowedTrainings, subject],
   );
 
   const abilityCards = useMemo(() => {
@@ -109,39 +113,59 @@ export function AbilityCenterPage() {
     });
   }, [prefs.gradeLevel, subject, abilities]);
 
-  const stats = aggregateBySubject(trainings);
+  const stats = aggregateBySubject(windowedTrainings);
   const subjectStats = stats.find((s) => s.subject === subject);
-  const targetGap = computeTargetGap(stats, targetScore);
 
   const copy = getAbilityCopy(prefs.gradeLevel);
   return (
     <div className="space-y-5">
-      <PageHeader
-        title={copy.pageTitle}
-        description={copy.pageDescription}
-      />
+      <PageHeader title={copy.pageTitle} description={copy.pageDescription} />
 
-      <div className="flex flex-wrap items-center gap-2">
-        {prefs.subjects.map((s) => (
-          <button
-            key={s}
-            className={`px-3 py-1.5 rounded-lg text-sm ${
-              subject === s
-                ? 'bg-blue-600 text-white'
-                : 'bg-white border border-slate-200 text-slate-600 hover:border-slate-300'
-            }`}
-            onClick={() => setSubject(s)}
-          >
-            {SUBJECT_LABEL[s]}
-          </button>
-        ))}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {prefs.subjects.map((s) => (
+            <button
+              key={s}
+              className={`px-3 py-1.5 rounded-lg text-sm ${
+                subject === s
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-white border border-slate-200 text-slate-600 hover:border-slate-300'
+              }`}
+              onClick={() => setSubject(s)}
+            >
+              {SUBJECT_LABEL[s]}
+            </button>
+          ))}
+        </div>
+        <div className="flex items-center gap-1 text-xs">
+          <span className="text-slate-400">时间窗口</span>
+          {WINDOW_OPTIONS.map((w) => (
+            <button
+              key={w}
+              className={`px-2 py-1 rounded-md ${
+                windowKey === w ? 'bg-slate-800 text-white' : 'bg-white border border-slate-200 text-slate-600'
+              }`}
+              onClick={() => setWindowKey(w)}
+            >
+              {TIME_WINDOW_LABEL[w]}
+            </button>
+          ))}
+        </div>
       </div>
 
       {subjectStats && (
         <ResponsiveGrid minItemWidth="160px" gap="0.75rem">
-          <StatBlock label="综合掌握度" value={`${subjectStats.masteryScore}%`} tone="blue" />
           <StatBlock
-            label={subjectStats.unfamiliarCorrectRate === null ? '陌生题正确率(无样本)' : '陌生题正确率'}
+            label={withWindowLabel('综合掌握度', windowKey)}
+            value={`${subjectStats.masteryScore}%`}
+            tone="blue"
+          />
+          <StatBlock
+            label={
+              subjectStats.unfamiliarCorrectRate === null
+                ? withWindowLabel('陌生题正确率(无样本)', windowKey)
+                : withWindowLabel('陌生题正确率', windowKey)
+            }
             value={
               subjectStats.unfamiliarCorrectRate === null
                 ? '—'
@@ -149,61 +173,22 @@ export function AbilityCenterPage() {
             }
             tone="emerald"
           />
-          <StatBlock label="累计题量" value={subjectStats.totalQuestions} tone="slate" />
-          <StatBlock label="累计错题" value={subjectStats.totalErrors} tone="orange" />
+          <StatBlock label={withWindowLabel('累计题量', windowKey)} value={subjectStats.totalQuestions} tone="slate" />
+          <StatBlock label={withWindowLabel('累计错题', windowKey)} value={subjectStats.totalErrors} tone="orange" />
         </ResponsiveGrid>
       )}
 
-      <ResponsiveGrid minItemWidth="220px" gap="0.75rem">
-        <StatCard
-          label="本周 vs 上周"
-          value={
-            weeklyDelta?.deltaCorrectRate == null
-              ? '—'
-              : `${weeklyDelta.deltaCorrectRate > 0 ? '+' : ''}${weeklyDelta.deltaCorrectRate}pt`
-          }
-          hint={
-            weeklyDelta === null
-              ? '本周暂无训练数据'
-              : weeklyDelta.previousWeek === null
-                ? '暂无上周对比'
-                : `本周正确率 ${weeklyDelta.currentAcc}% · 上周 ${weeklyDelta.previousAcc}% · 题量 ${(weeklyDelta.deltaQuestions ?? 0) >= 0 ? '+' : ''}${weeklyDelta.deltaQuestions ?? 0}`
-          }
-          accentClassName={
-            weeklyDelta?.deltaCorrectRate == null
-              ? 'text-slate-600'
-              : weeklyDelta.deltaCorrectRate > 0
-                ? 'text-emerald-600'
-                : weeklyDelta.deltaCorrectRate < 0
-                  ? 'text-red-500'
-                  : 'text-slate-600'
-          }
-        />
-        <StatCard
-          label="限时达标率"
-          value={timed.rate === null ? '—' : `${timed.rate}%`}
-          hint={timed.rate === null ? '暂无时间基准' : `${timed.sampleSize} 条可判定记录（单题用时 ≤ 标准用时）`}
-          accentClassName={timed.rate === null ? 'text-slate-600' : 'text-blue-600'}
-        />
-        <StatCard
-          label="目标分差"
-          value={targetGap === null ? '—' : targetGap.reached ? '已达标' : `差 ${targetGap.gap} 分`}
-          hint={
-            targetGap === null
-              ? '未设置目标'
-              : `当前 ${targetGap.current}% · 目标 ${targetGap.target}%（掌握度口径，非卷面分）`
-          }
-          accentClassName={
-            targetGap === null ? 'text-slate-600' : targetGap.reached ? 'text-emerald-600' : 'text-orange-600'
-          }
-        />
-      </ResponsiveGrid>
+      <p className="text-xs text-slate-400">
+        掌握度口径：0.7 × 陌生题正确率 + 0.3 × 整体正确率（无陌生题样本时退化为整体正确率）；目标分只读报名记录，未设置则不画目标线。
+        本周进步 / 限时达标 / 目标分差等结论卡统一在「分析中心 · 概览」。
+      </p>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         <div className="card p-5">
           <div className="flex items-center gap-2 mb-3">
             <RadarIcon size={16} className="text-blue-600" />
-            <h2 className="font-semibold text-slate-900">能力雷达图</h2>
+            <h2 className="font-semibold text-slate-900">{withWindowLabel('能力雷达图', windowKey)}</h2>
+            {targetScore === undefined && <span className="text-xs text-slate-400">未设置目标分</span>}
           </div>
           {radarSlices.length === 0 ? (
             <EmptyState icon={RadarIcon} title={copy.radarEmptyTitle} description={copy.radarEmptyDescription} />
@@ -215,7 +200,7 @@ export function AbilityCenterPage() {
         <div className="card p-5">
           <div className="flex items-center gap-2 mb-3">
             <TrendingUp size={16} className="text-emerald-600" />
-            <h2 className="font-semibold text-slate-900">能力增长曲线</h2>
+            <h2 className="font-semibold text-slate-900">{withWindowLabel('能力增长曲线', windowKey)}</h2>
             {growth.some((p) => p.emergence) && (
               <span className="badge bg-purple-50 text-purple-700 text-[10px] ml-auto">
                 ✨ 涌现点 {growth.filter((p) => p.emergence).length} 个
@@ -223,11 +208,7 @@ export function AbilityCenterPage() {
             )}
           </div>
           {growth.length === 0 ? (
-            <EmptyState
-              icon={TrendingUp}
-              title={copy.growthEmptyTitle}
-              description={copy.growthEmptyDescription}
-            />
+            <EmptyState icon={TrendingUp} title={copy.growthEmptyTitle} description={copy.growthEmptyDescription} />
           ) : growth.length < 2 ? (
             <EmptyState
               icon={TrendingUp}
@@ -237,34 +218,34 @@ export function AbilityCenterPage() {
           ) : (
             <>
               <ResponsiveChart minHeight="15rem" maxHeight="17.5rem">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={growth}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                  <XAxis dataKey="week" tick={{ fontSize: 11 }} />
-                  <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} />
-                  <Tooltip />
-                  <Line
-                    type="monotone"
-                    dataKey="score"
-                    stroke="#2563eb"
-                    strokeWidth={2}
-                    dot={(props: { cx?: number; cy?: number; payload?: { emergence?: boolean } }) => {
-                      const { cx = 0, cy = 0, payload } = props;
-                      if (payload?.emergence) {
-                        return (
-                          <g key={`em-${cx}-${cy}`}>
-                            <circle cx={cx} cy={cy} r={7} fill="#a855f7" stroke="#fff" strokeWidth={2} />
-                            <text x={cx} y={cy - 12} textAnchor="middle" fontSize={10} fill="#7e22ce" fontWeight={700}>
-                              ✨
-                            </text>
-                          </g>
-                        );
-                      }
-                      return <circle key={`d-${cx}-${cy}`} cx={cx} cy={cy} r={3} fill="#2563eb" />;
-                    }}
-                  />
-                </LineChart>
-              </ResponsiveContainer>
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={growth}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                    <XAxis dataKey="week" tick={{ fontSize: 11 }} />
+                    <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} />
+                    <Tooltip />
+                    <Line
+                      type="monotone"
+                      dataKey="score"
+                      stroke="#2563eb"
+                      strokeWidth={2}
+                      dot={(props: { cx?: number; cy?: number; payload?: { emergence?: boolean } }) => {
+                        const { cx = 0, cy = 0, payload } = props;
+                        if (payload?.emergence) {
+                          return (
+                            <g key={`em-${cx}-${cy}`}>
+                              <circle cx={cx} cy={cy} r={7} fill="#a855f7" stroke="#fff" strokeWidth={2} />
+                              <text x={cx} y={cy - 12} textAnchor="middle" fontSize={10} fill="#7e22ce" fontWeight={700}>
+                                ✨
+                              </text>
+                            </g>
+                          );
+                        }
+                        return <circle key={`d-${cx}-${cy}`} cx={cx} cy={cy} r={3} fill="#2563eb" />;
+                      }}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
               </ResponsiveChart>
               {growth.some((p) => p.emergence) && (
                 <div className="text-[10px] text-slate-500 mt-1 leading-relaxed">
@@ -279,7 +260,8 @@ export function AbilityCenterPage() {
       <div className="card p-5">
         <div className="flex items-center gap-2 mb-3">
           <BarChart3 size={16} className="text-purple-600" />
-          <h2 className="font-semibold text-slate-900">各模块掌握度</h2>
+          <h2 className="font-semibold text-slate-900">{withWindowLabel('各模块正确率', windowKey)}</h2>
+          <span className="text-xs text-slate-400">模块口径：纯正确率，不复用学科加权掌握度公式</span>
         </div>
         {moduleMastery.every((m) => m.score === null) ? (
           <EmptyState icon={BarChart3} title={copy.moduleEmptyTitle} description={copy.moduleEmptyDescription} />
@@ -303,7 +285,7 @@ export function AbilityCenterPage() {
       <div className="card p-5">
         <div className="flex items-center gap-2 mb-3">
           <BarChart3 size={16} className="text-blue-600" />
-          <h2 className="font-semibold text-slate-900">模块时间分配</h2>
+          <h2 className="font-semibold text-slate-900">{withWindowLabel('模块时间分配', windowKey)}</h2>
           <span className="text-xs text-slate-400">仅统计有有效用时的记录</span>
         </div>
         {timeAllocation.length === 0 ? (

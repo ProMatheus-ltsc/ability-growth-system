@@ -3,11 +3,12 @@ import { v4 as uuid } from 'uuid';
 import { FlaskConical, PlusCircle, Trash2, Wrench, X, Zap } from 'lucide-react';
 import { TableScroll, useToast } from '@shared/core';
 import { useAppSession } from '../hooks/useAppSession';
-import { findExams, findTrainingsByStudent, putRecord, deleteRecord } from '../services/localDB';
+import { findExams, findGaps, findTrainingsByStudent, putRecord, deleteRecord } from '../services/localDB';
 import { PageHeader } from '../components/PageHeader';
 import { EmptyState } from '../components/EmptyState';
 import { MasteryBar } from '../components/MasteryBar';
-import { getAbilityTags, getModules } from '../domain/abilityTags';
+import { getModules } from '../domain/abilityTags';
+import { deriveGapsFromTraining } from '../services/analytics';
 import { PAPER_TYPE_LABEL, scoreToLevel, SUBJECT_LABEL } from '../domain/types';
 import type {
   AbilityGap,
@@ -47,42 +48,63 @@ export function ExamDiagnosisPage() {
       showToast('本次模考没有明显薄弱模块 (掌握度 < 60%)', 'info');
       return;
     }
+    // 验收缺陷 #8：不再用 uuid() 直接新建 gap（连点两次会产生两条），
+    // 统一走 deriveGapsFromTraining，复用其去重（同 examId+module 的 sourceRecordId 不会重复计数）
+    // 与状态历史（已验证缺口再次出现会重开为 in-progress）。
+    const existingGaps = await findGaps(exam.studentId);
+    const known: AbilityGap[] = [...existingGaps];
+    const existingIds = new Set(existingGaps.map((g) => g.id));
     const generatedIds: string[] = [];
+
     for (const m of weakModules) {
-      const tags = getAbilityTags(prefs.gradeLevel, exam.subject).filter((t) => t.module === m.module);
-      const path = tags[0]?.path ?? `${exam.subject}/${m.module}/综合薄弱`;
-      const gapId = uuid();
-      const gap: AbilityGap = {
-        id: gapId,
+      // 用一条「模块级」合成训练记录作为派生来源，不写入 trainings 表，仅用于 gap 归集
+      const moduleRecord: TrainingRecord = {
+        id: `${exam.id}::${m.module}`,
         studentId: exam.studentId,
+        date: exam.date,
+        gradeLevel: prefs.gradeLevel,
         subject: exam.subject,
-        abilityPath: path,
-        errorCategory: 'not-know',
-        severity: m.score < 30 ? 'serious' : m.score < 45 ? 'medium' : 'light',
-        status: 'unresolved',
-        sourceRecordIds: [exam.id],
-        occurrenceCount: m.errors,
-        firstSeenAt: exam.date,
-        lastSeenAt: exam.date,
-        suggestion: `模考诊断: ${m.module} 掌握度 ${m.score}% (${m.level}), 建议做 20 题专项训练并订正`,
+        module: m.module,
+        trainingType: 'exam',
+        totalQuestions: m.total,
+        correctCount: Math.max(0, m.total - m.errors),
+        errorCount: m.errors,
+        errorCategories: ['not-know'],
         createdAt: now,
         updatedAt: now,
+        examId: exam.id,
+        scope: 'module',
       };
-      const task: FixTask = {
-        id: uuid(),
-        studentId: exam.studentId,
-        subject: exam.subject,
-        abilityPath: path,
-        relatedGapId: gapId,
-        type: 'fix',
-        status: 'pending',
-        suggestedAt: now,
-        createdAt: now,
-        updatedAt: now,
-      };
-      await putRecord('gaps', gap);
-      await putRecord('tasks', task);
-      generatedIds.push(task.id);
+      const derived = deriveGapsFromTraining(moduleRecord, known);
+      for (const gap of derived) {
+        await putRecord('gaps', gap);
+        const idx = known.findIndex((g) => g.id === gap.id);
+        if (idx >= 0) known[idx] = gap;
+        else known.push(gap);
+        // 只有本次新建的缺口才建任务；重复点击时 gap 已存在，不重复生成任务
+        if (!existingIds.has(gap.id)) {
+          const task: FixTask = {
+            id: uuid(),
+            studentId: exam.studentId,
+            subject: exam.subject,
+            abilityPath: gap.abilityPath,
+            relatedGapId: gap.id,
+            type: 'fix',
+            status: 'pending',
+            suggestedAt: now,
+            createdAt: now,
+            updatedAt: now,
+          };
+          await putRecord('tasks', task);
+          existingIds.add(gap.id);
+          generatedIds.push(task.id);
+        }
+      }
+    }
+
+    if (generatedIds.length === 0) {
+      showToast('薄弱模块已登记过缺口，未重复生成任务', 'info');
+      return;
     }
     const updated: ExamRecord = { ...exam, generatedTaskIds: [...(exam.generatedTaskIds ?? []), ...generatedIds], updatedAt: now };
     await putRecord('exams', updated);

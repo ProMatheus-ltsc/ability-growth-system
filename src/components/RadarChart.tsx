@@ -8,10 +8,12 @@ interface Props {
 }
 
 export function AbilityRadar({ slices, height = 320 }: Props) {
+  // 目标线只读报名 targetScore（验收缺陷 #5）：未设置目标时不画目标线，不再兜底 80
+  const hasTarget = slices.some((s) => s.targetScore !== undefined);
   const data = slices.map((s) => ({
     dimension: s.label,
     当前: s.score,
-    目标: s.targetScore ?? 80,
+    ...(s.targetScore !== undefined ? { 目标: s.targetScore } : {}),
   }));
   return (
     <ResponsiveChart minHeight={`${Math.max(200, height - 64)}px`} maxHeight={`${height}px`}>
@@ -21,7 +23,9 @@ export function AbilityRadar({ slices, height = 320 }: Props) {
           <PolarAngleAxis dataKey="dimension" tick={{ fill: '#334155', fontSize: 12 }} />
           <PolarRadiusAxis angle={30} domain={[0, 100]} tick={{ fill: '#94a3b8', fontSize: 10 }} />
           <Radar name="当前" dataKey="当前" stroke="#2563eb" fill="#2563eb" fillOpacity={0.35} />
-          <Radar name="目标" dataKey="目标" stroke="#f59e0b" fill="#f59e0b" fillOpacity={0.1} strokeDasharray="4 4" />
+          {hasTarget && (
+            <Radar name="目标" dataKey="目标" stroke="#f59e0b" fill="#f59e0b" fillOpacity={0.1} strokeDasharray="4 4" />
+          )}
         </ReRadarChart>
       </ResponsiveContainer>
     </ResponsiveChart>

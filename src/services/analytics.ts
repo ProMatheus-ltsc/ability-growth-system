@@ -26,6 +26,28 @@ import { scoreToLevel, TRAINING_TYPE_LABEL } from '../domain/types';
 import { getRadarDimensions } from '../domain/abilityTags';
 import { normalizeModule, pathBelongsToModule } from '../domain/moduleNormalize';
 
+/**
+ * ============ 口径统一（唯一来源，2026-11-09 用户验收缺陷 #4/#5/#6） ============
+ *
+ * 1) 掌握度：全站只有「学科掌握度」一套算法 ——
+ *    0.7 × 陌生题正确率 + 0.3 × 整体正确率；无陌生题样本时退化为整体正确率。
+ *    模块层记录没有稳定的陌生题样本，因此模块不复用该加权公式，UI 统一命名为「模块正确率」，
+ *    避免同叫「掌握度」却不同算法。
+ * 2) 目标分：全站只读报名表 `ExamRegistration.targetScore`（见 resolveTargetScore），
+ *    不再使用写死的 80 / 85 / 95 目标线。
+ * 3) 时间窗口：全站共用 `TimeWindow`（src/services/timeWindow.ts），指标标题自动带窗口。
+ */
+export function computeMasteryScore(
+  correctRate: number,
+  unfamiliarCorrectRate: number | null,
+): number {
+  return Math.round(
+    unfamiliarCorrectRate === null
+      ? correctRate * 100
+      : (unfamiliarCorrectRate * 0.7 + correctRate * 0.3) * 100,
+  );
+}
+
 export interface SubjectStats {
   subject: Subject;
   totalQuestions: number;
@@ -65,11 +87,7 @@ export function aggregateBySubject(rawRecords: TrainingRecord[]): SubjectStats[]
     const unfamiliarErr = unfamiliar.reduce((s, r) => s + r.errorCount, 0);
     const unfamiliarCorrectRate = unfamiliarQ === 0 ? null : (unfamiliarQ - unfamiliarErr) / unfamiliarQ;
     // 掌握度评分:陌生题占主导 (0.7),缺失时退化为整体正确率 (0.3 权重也归给整体)
-    const masteryScore = Math.round(
-      unfamiliarCorrectRate === null
-        ? correctRate * 100
-        : (unfamiliarCorrectRate * 0.7 + correctRate * 0.3) * 100,
-    );
+    const masteryScore = computeMasteryScore(correctRate, unfamiliarCorrectRate);
 
     const errorCounter = new Map<ErrorCategory, number>();
     for (const r of list) {
@@ -121,6 +139,22 @@ export function selectAggregationRecords(records: TrainingRecord[]): TrainingRec
 
 /** ============ F-04 / A2 模块统计与周环比 ============ */
 
+/**
+ * 模块级去重（F-03 模块口径）：
+ * 同一 examId 同时存在整卷行与模块行时排除整卷行，保留模块明细（否则模块时间/题量明细会消失）；
+ * 只有整卷行（未勾选双写）时保留整卷行，避免整卷数据整体丢失。
+ * 时间分配、模块统计、雷达的模块兜底统一使用本函数。
+ */
+export function selectModuleLevelRecords(records: TrainingRecord[]): TrainingRecord[] {
+  const examIdsWithModules = new Set<string>();
+  for (const r of records) {
+    if (r.examId && r.scope === 'module') examIdsWithModules.add(r.examId);
+  }
+  return records.filter(
+    (r) => !(r.examId && r.scope === 'full' && examIdsWithModules.has(r.examId)),
+  );
+}
+
 export interface ModuleStatsItem {
   subject: Subject;
   module: string;
@@ -139,9 +173,9 @@ export interface ModuleStatsItem {
  * 无题量样本时 correctRate / masteryScore / avgMinutesPerQuestion 为 null（不补 0）。
  */
 export function buildModuleStats(records: TrainingRecord[]): ModuleStatsItem[] {
-  // 模块级口径（PRD F-03）：排除整卷行、保留模块行与无 examId 记录，
+  // 模块级口径（PRD F-03）：整卷与模块并存时排除整卷行、保留模块明细，
   // 不套用学科级 A1 去重，否则有整卷行时模块明细会整体消失。
-  const moduleRecords = records.filter((r) => r.scope !== 'full');
+  const moduleRecords = selectModuleLevelRecords(records);
 
   const groups = new Map<string, { subject: Subject; module: string; list: TrainingRecord[] }>();
   for (const r of moduleRecords) {
@@ -351,11 +385,12 @@ export interface TimeAllocationItem {
 }
 
 /**
- * 仅统计有效用时（durationMinutes > 0），按 A1 口径去重、按一级模块归并；
- * share 以有效总时长为分母，空集合返回 []。
+ * 仅统计有效用时（durationMinutes > 0），按模块级口径去重（整卷与模块并存时保留模块明细）、
+ * 按一级模块归并；share 以有效总时长为分母，空集合返回 []。
+ * 注：此前后用了学科级去重，导致「有整卷行时模块时间明细消失」，已按验收缺陷 #7 修正。
  */
 export function buildTimeAllocation(records: TrainingRecord[]): TimeAllocationItem[] {
-  const timed = selectAggregationRecords(records).filter((r) => (r.durationMinutes ?? 0) > 0);
+  const timed = selectModuleLevelRecords(records).filter((r) => (r.durationMinutes ?? 0) > 0);
 
   const groups = new Map<string, { module: string; minutes: number; questions: number; sessions: number }>();
   for (const r of timed) {
@@ -442,11 +477,14 @@ export function buildRadarSlices(
   abilities: AbilitySnapshot[],
   gradeLevel: GradeLevel,
   subject: Subject,
+  targetScore?: number,
 ): AbilityRadarSlice[] {
   const dims = getRadarDimensions(gradeLevel, subject);
   if (dims.length === 0) return [];
 
-  const scoped = records.filter((r) => r.subject === subject);
+  // 去重口径（验收缺陷 #7）：模块兜底统计前先剔除与模块行重复的整卷行，
+  // 此前直接用原始记录导致整卷+模块被重复计入。
+  const scoped = selectModuleLevelRecords(records).filter((r) => r.subject === subject);
   const abilityByPath = new Map<string, AbilitySnapshot>();
   for (const a of abilities) {
     if (a.subject !== subject) continue;
@@ -478,13 +516,16 @@ export function buildRadarSlices(
       label: `${dim.label} · ${dim.weight}%`,
       weight: dim.weight,
       score,
-      targetScore: 80,
+      // 目标线统一读报名 targetScore；未设置时不画目标线（不再写死 80）
+      ...(targetScore !== undefined ? { targetScore } : {}),
     };
   });
 }
 
 export function buildGrowthSeries(records: TrainingRecord[], subject: Subject) {
-  const scoped = records.filter((r) => r.subject === subject);
+  // 去重口径（验收缺陷 #7）：增长曲线此前用原始记录，整卷+模块重复计入；
+  // 与学科统计统一走 A1 学科级去重。
+  const scoped = selectAggregationRecords(records).filter((r) => r.subject === subject);
   const buckets = new Map<string, TrainingRecord[]>();
   for (const r of scoped) {
     const week = weekKey(r.date);

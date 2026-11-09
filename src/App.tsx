@@ -47,7 +47,7 @@ import { TimelinePage } from './pages/TimelinePage';
 import { ExamDiagnosisPage } from './pages/ExamDiagnosisPage';
 import { SubjectiveAnswersPage } from './pages/SubjectiveAnswersPage';
 import { AnalyticsPage } from './pages/AnalyticsPage';
-import { InsightsPage } from './pages/InsightsPage';
+import { ReviewPage } from './pages/ReviewPage';
 
 // V5.8 新增模块
 import { PdcaPage } from './pages/PdcaPage';
@@ -80,6 +80,8 @@ type Visibility = (typeof MODULE_VISIBILITY)[keyof typeof MODULE_VISIBILITY];
 
 /** 构建学生视图分层导航 */
 function buildStudentGroups(v: Visibility): NavGroup[] {
+  // 阶段三（验收缺陷 #1/#13）：训练闭环内补齐「数据分析 / 学习时间线 / 今日复盘」，
+  // 原来的「数据分析」独立分组与「深度洞察」入口取消（Analytics 与 Insights 已合并为分析中心）。
   return [
     { key: 'home', label: '今日工作台', icon: Home, to: '/', end: true },
     {
@@ -92,6 +94,9 @@ function buildStudentGroups(v: Visibility): NavGroup[] {
         { to: '/problems', icon: AlertOctagon, label: '问题中心' },
         { to: '/exams', icon: FlaskConical, label: '测验诊断' },
         { to: '/subjective', icon: FileText, label: '申论作答' },
+        { to: '/review', icon: ClipboardList, label: '今日复盘' },
+        { to: '/timeline', icon: Timer, label: '学习时间线' },
+        { to: '/analytics', icon: BarChart3, label: '数据分析' },
       ],
     },
     {
@@ -115,16 +120,6 @@ function buildStudentGroups(v: Visibility): NavGroup[] {
         { to: '/career', icon: Compass, label: '职业选择', visible: v.career },
         { to: '/literacy', icon: GraduationCap, label: '学习素养', visible: v.literacy },
         { to: '/literacy-collab', icon: Users, label: '协作行为', visible: v.literacy },
-        { to: '/timeline', icon: Timer, label: '学习时间线' },
-      ],
-    },
-    {
-      key: 'analytics',
-      label: '数据分析',
-      icon: BarChart3,
-      children: [
-        { to: '/analytics', icon: BarChart3, label: '训练收益' },
-        { to: '/insights', icon: Compass, label: '深度洞察' },
       ],
     },
     {
@@ -175,6 +170,9 @@ function buildTeacherGroups(v: Visibility): NavGroup[] {
         { to: '/problems', icon: AlertOctagon, label: '问题中心' },
         { to: '/exams', icon: FlaskConical, label: '测验诊断' },
         { to: '/subjective', icon: FileText, label: '申论作答' },
+        { to: '/review', icon: ClipboardList, label: '今日复盘' },
+        { to: '/timeline', icon: Timer, label: '学习时间线' },
+        { to: '/analytics', icon: BarChart3, label: '数据分析' },
       ],
     },
     {
@@ -198,16 +196,6 @@ function buildTeacherGroups(v: Visibility): NavGroup[] {
         { to: '/career', icon: Compass, label: '职业选择', visible: v.career },
         { to: '/literacy', icon: GraduationCap, label: '学习素养', visible: v.literacy },
         { to: '/literacy-collab', icon: Users, label: '协作行为', visible: v.literacy },
-        { to: '/timeline', icon: Timer, label: '学习时间线' },
-      ],
-    },
-    {
-      key: 'analytics',
-      label: '数据分析',
-      icon: BarChart3,
-      children: [
-        { to: '/analytics', icon: BarChart3, label: '训练收益' },
-        { to: '/insights', icon: Compass, label: '深度洞察' },
       ],
     },
     {
@@ -317,7 +305,9 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         <Route path="/subjective" element={<SubjectiveAnswersPage />} />
         <Route path="/timeline" element={<TimelinePage />} />
         <Route path="/analytics" element={<AnalyticsPage />} />
-        <Route path="/insights" element={<InsightsPage />} />
+        {/* /insights 已并入分析中心；保留重定向避免旧书签 404（验收缺陷 #1 的同类死页面问题） */}
+        <Route path="/insights" element={<Navigate to="/analytics" replace />} />
+        <Route path="/review" element={<ReviewPage />} />
         <Route path="/storage" element={<StoragePage />} />
         <Route path="/settings" element={<SettingsPage />} />
 
