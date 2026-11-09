@@ -13,6 +13,7 @@ import type {
   ExamRegistration,
   GapStatusHistoryItem,
   GradeLevel,
+  LabelStat,
   MasteryLevel,
   StudentProfile,
   Subject,
@@ -216,6 +217,70 @@ export function buildModuleStats(records: TrainingRecord[]): ModuleStatsItem[] {
     });
   }
   return stats;
+}
+
+/** ============ 题型标签聚合（labelStats） ============ */
+
+export interface LabelStatNode {
+  /** 完整前缀路径，例如 ['资料分析', '综合分析'] */
+  path: string[];
+  depth: number;
+  /** 该前缀下全部叶子作答次数之和 */
+  questionCount: number;
+  correctCount: number;
+  /** 正确率 0–100，保留一位小数 */
+  rate: number;
+  /** 该前缀下并列最深标签的作答次数之和 */
+  multiLabelCount: number;
+  children: LabelStatNode[];
+}
+
+/**
+ * 把 `labelStats` 的叶子行按 `path` 前缀向上卷成树。
+ * 叶子之间互斥（每题只记最深一级主标签），因此父节点题量等于子节点之和，不会重复计数。
+ */
+export function buildLabelStats(leaves: LabelStat[]): LabelStatNode[] {
+  const keyOf = (path: string[]) => path.join(' > ');
+  const nodes = new Map<string, LabelStatNode>();
+  for (const leaf of leaves) {
+    if (!leaf.path || leaf.path.length === 0) continue;
+    for (let i = 1; i <= leaf.path.length; i += 1) {
+      const path = leaf.path.slice(0, i);
+      const key = keyOf(path);
+      let node = nodes.get(key);
+      if (!node) {
+        node = {
+          path,
+          depth: i,
+          questionCount: 0,
+          correctCount: 0,
+          rate: 0,
+          multiLabelCount: 0,
+          children: [],
+        };
+        nodes.set(key, node);
+      }
+      node.questionCount += leaf.questionCount;
+      node.correctCount += leaf.correctCount;
+      node.multiLabelCount += leaf.multiLabelCount;
+    }
+  }
+
+  for (const node of nodes.values()) {
+    node.rate =
+      node.questionCount === 0 ? 0 : Math.round((node.correctCount / node.questionCount) * 1000) / 10;
+    const parentKey = keyOf(node.path.slice(0, -1));
+    const parent = node.depth > 1 ? nodes.get(parentKey) : undefined;
+    if (parent) parent.children.push(node);
+  }
+
+  const sortTree = (list: LabelStatNode[]) => {
+    list.sort((a, b) => b.questionCount - a.questionCount);
+    for (const node of list) sortTree(node.children);
+  };
+  const roots = Array.from(nodes.values()).filter((n) => n.depth === 1);
+  sortTree(roots);
+  return roots;
 }
 
 export interface WeeklyDelta {

@@ -22,6 +22,7 @@ import type {
   ExamRegistration,
   FixTask,
   InterviewRecord,
+  LabelStat,
   PDCAProblem,
   PdcaArtifact,
   RetestReflection,
@@ -179,6 +180,11 @@ interface AGSchema extends DBSchema {
     key: string;
     value: RetestReflection;
     indexes: { studentId: string; assessmentId: string; createdAt: string };
+  };
+  labelStats: {
+    key: string;
+    value: LabelStat;
+    indexes: { subject: string; depth: number; updatedAt: string };
   };
   meta: {
     key: string;
