@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { EmptyState as CoreEmptyState, ResponsiveChart, ResponsiveGrid, TableScroll } from '@shared/core';
-import { BarChart3, Radar as RadarIcon, TrendingUp, ChevronRight } from 'lucide-react';
+import { BarChart3, Radar as RadarIcon, TrendingUp, ChevronRight, Tags } from 'lucide-react';
 import { useAppSession } from '../hooks/useAppSession';
 import { findAbilities, findTrainingsByStudent, getAllRecords } from '../services/localDB';
 import {
@@ -28,6 +28,7 @@ import { normalizeAbilityPath } from '../domain/moduleNormalize';
 import type { AbilitySnapshot, ExamRegistration, Subject, TrainingRecord } from '../domain/types';
 import { SUBJECT_LABEL } from '../domain/types';
 import { getAbilityCopy } from '../domain/abilityCopy';
+import { WeaknessPanels } from './WeaknessPage';
 
 const WINDOW_OPTIONS: TimeWindow[] = ['7d', '30d', '90d', 'all'];
 
@@ -354,6 +355,15 @@ export function AbilityCenterPage() {
             ))}
           </ResponsiveGrid>
         )}
+      </div>
+
+      <div className="card p-5">
+        <div className="flex items-center gap-2 mb-3">
+          <Tags size={16} className="text-orange-500" />
+          <h2 className="font-semibold text-slate-900">薄弱点诊断</h2>
+          <span className="text-xs text-slate-400">模块级 / 考点级 / 能力缺口级</span>
+        </div>
+        <WeaknessPanels subject={subject} />
       </div>
     </div>
   );

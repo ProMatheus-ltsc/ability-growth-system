@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { v4 as uuid } from 'uuid';
+import { Link } from 'react-router-dom';
 import { PlusCircle, Trash2, Zap, X, Filter } from 'lucide-react';
 import { useToast } from '@shared/core';
 import { useAppSession } from '../hooks/useAppSession';
@@ -253,8 +254,8 @@ function TrainingForm({ quick, defaults, studentId, gradeLevel, availableSubject
   // 二级考点（可选）：选了就写进 module，形成 `模块/考点` 两级路径，与导入数据同粒度
   const [pointName, setPointName] = useState<string>('');
   const [trainingType, setTrainingType] = useState<TrainingType>(defaults?.trainingType ?? 'topic');
-  const [total, setTotal] = useState<number>(defaults?.totalQuestions ?? 15);
-  const [errors, setErrors] = useState<number>(0);
+  const [total, setTotal] = useState<string>('');
+  const [errors, setErrors] = useState<string>('');
   const [duration, setDuration] = useState<number>(defaults?.durationMinutes ?? 30);
   const [categories, setCategories] = useState<ErrorCategory[]>([]);
   const [isUnfamiliar, setIsUnfamiliar] = useState(false);
@@ -311,6 +312,17 @@ function TrainingForm({ quick, defaults, studentId, gradeLevel, availableSubject
     }
     const questionTypeValue = questionType.trim();
     if (questionTypeValue.length > 20) validation.push('题型须为 1-20 字');
+    // 题数与错误数不再静默预填：留空即视为未填写，避免把 15 题 / 0 错当成真实数据
+    const totalValue = total.trim() === '' ? null : Number(total);
+    if (totalValue === null || !Number.isInteger(totalValue) || totalValue <= 0) {
+      validation.push('请填写题目数量（正整数，不能留空）');
+    }
+    const errorValue = errors.trim() === '' ? null : Number(errors);
+    if (errorValue === null || !Number.isInteger(errorValue) || errorValue < 0) {
+      validation.push('请填写错误数量（0 也表示已核对过）');
+    } else if (totalValue !== null && errorValue > totalValue) {
+      validation.push('错误数量不得大于题目数量');
+    }
     if (validation.length > 0) {
       setFormErrors(validation);
       return;
@@ -326,9 +338,9 @@ function TrainingForm({ quick, defaults, studentId, gradeLevel, availableSubject
       subject,
       module: effectiveModule,
       trainingType,
-      totalQuestions: total,
-      correctCount: total - errors,
-      errorCount: errors,
+      totalQuestions: totalValue ?? 0,
+      correctCount: (totalValue ?? 0) - (errorValue ?? 0),
+      errorCount: errorValue ?? 0,
       durationMinutes: duration,
       errorCategories: categories,
       isUnfamiliar,
@@ -365,6 +377,13 @@ function TrainingForm({ quick, defaults, studentId, gradeLevel, availableSubject
           <div className="mt-3 rounded-lg bg-blue-50 px-3 py-2 text-xs text-blue-700 leading-relaxed">
             申论练习只需要在「学科专项 → 申论作答」录入（内容、时长、四维评分），分析中心的申论掌握度会直接读那里的四维评分，不必在这里重复录一遍。
             已存在的申论训练记录仍然有效，会作为没有维度评分时的回退口径。
+          </div>
+        )}
+
+        {subject === 'xingce' && trainingType === 'exam' && (
+          <div className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800 leading-relaxed">
+            行测整卷（模考）请只在「测验诊断」录入：那里会同时生成整卷权威行与模块明细，在这里再录一次会造成同一次考试重复统计。
+            <Link to="/exams" className="underline ml-1">去测验诊断 →</Link>
           </div>
         )}
 
@@ -433,29 +452,29 @@ function TrainingForm({ quick, defaults, studentId, gradeLevel, availableSubject
             </select>
           </div>
 
+          <div>
+            <label className="label">题目数量 ★</label>
+            <input
+              className="input"
+              type="number"
+              min={0}
+              value={total}
+              onChange={(e) => setTotal(e.target.value)}
+              placeholder="必填，如 20"
+            />
+          </div>
+
           {!quick && (
-            <>
-              <div>
-                <label className="label">题目数量 ★</label>
-                <input
-                  className="input"
-                  type="number"
-                  min={0}
-                  value={total}
-                  onChange={(e) => setTotal(Math.max(0, Number(e.target.value) || 0))}
-                />
-              </div>
-              <div>
-                <label className="label">用时(分钟)</label>
-                <input
-                  className="input"
-                  type="number"
-                  min={0}
-                  value={duration}
-                  onChange={(e) => setDuration(Math.max(0, Number(e.target.value) || 0))}
-                />
-              </div>
-            </>
+            <div>
+              <label className="label">用时(分钟)</label>
+              <input
+                className="input"
+                type="number"
+                min={0}
+                value={duration}
+                onChange={(e) => setDuration(Math.max(0, Number(e.target.value) || 0))}
+              />
+            </div>
           )}
 
           <div>
@@ -464,12 +483,17 @@ function TrainingForm({ quick, defaults, studentId, gradeLevel, availableSubject
               className="input"
               type="number"
               min={0}
-              max={total}
+              max={total.trim() === '' ? undefined : Number(total)}
               value={errors}
-              onChange={(e) => setErrors(Math.max(0, Math.min(total, Number(e.target.value) || 0)))}
+              onChange={(e) => setErrors(e.target.value)}
+              placeholder="必填，没错就填 0"
             />
             <div className="text-xs text-slate-400 mt-1">
-              正确数量 = {Math.max(0, total - errors)} (自动计算)
+              正确数量 ={' '}
+              {total.trim() === ''
+                ? '—'
+                : Math.max(0, Number(total) - (errors.trim() === '' ? 0 : Number(errors)))}{' '}
+              (自动计算)
             </div>
           </div>
 

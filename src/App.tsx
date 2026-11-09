@@ -26,7 +26,6 @@ import {
   CalendarRange,
   Briefcase,
   Mic,
-  Target,
 } from 'lucide-react';
 
 import { useAuth } from './hooks/useAuth';
@@ -50,7 +49,6 @@ import { TimelinePage } from './pages/TimelinePage';
 import { ExamDiagnosisPage } from './pages/ExamDiagnosisPage';
 import { SubjectiveAnswersPage } from './pages/SubjectiveAnswersPage';
 import { AnalyticsPage } from './pages/AnalyticsPage';
-import { WeaknessPage } from './pages/WeaknessPage';
 import { InterviewRecordPage } from './pages/InterviewRecordPage';
 import { ExamRegistrationPage } from './pages/ExamRegistrationPage';
 
@@ -96,7 +94,6 @@ function buildStudentGroups(v: Visibility): NavGroup[] {
       icon: BookOpen,
       children: [
         { to: '/trainings', icon: BookOpen, label: '训练记录' },
-        { to: '/abilities', icon: Activity, label: '能力中心' },
         { to: '/problems', icon: AlertOctagon, label: '问题中心' },
         { to: '/exams', icon: FlaskConical, label: '测验诊断' },
         { to: '/timeline', icon: Timer, label: '学习时间线' },
@@ -109,7 +106,7 @@ function buildStudentGroups(v: Visibility): NavGroup[] {
       icon: BarChart3,
       children: [
         { to: '/analytics', icon: BarChart3, label: '数据分析' },
-        { to: '/weakness', icon: Target, label: '薄弱点' },
+        { to: '/abilities', icon: Activity, label: '能力中心' },
       ],
     },
     {
@@ -190,7 +187,6 @@ function buildTeacherGroups(v: Visibility): NavGroup[] {
       icon: BookOpen,
       children: [
         { to: '/trainings', icon: BookOpen, label: '训练记录' },
-        { to: '/abilities', icon: Activity, label: '能力中心' },
         { to: '/problems', icon: AlertOctagon, label: '问题中心' },
         { to: '/exams', icon: FlaskConical, label: '测验诊断' },
         { to: '/timeline', icon: Timer, label: '学习时间线' },
@@ -203,7 +199,7 @@ function buildTeacherGroups(v: Visibility): NavGroup[] {
       icon: BarChart3,
       children: [
         { to: '/analytics', icon: BarChart3, label: '数据分析' },
-        { to: '/weakness', icon: Target, label: '薄弱点' },
+        { to: '/abilities', icon: Activity, label: '能力中心' },
       ],
     },
     {
@@ -347,8 +343,8 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         <Route path="/subjective" element={<SubjectiveAnswersPage />} />
         <Route path="/timeline" element={<TimelinePage />} />
         <Route path="/analytics" element={<AnalyticsPage />} />
-        <Route path="/weakness" element={<WeaknessPage />} />
-        <Route path="/label-ranking" element={<Navigate to="/weakness" replace />} />
+        <Route path="/weakness" element={<Navigate to="/abilities" replace />} />
+        <Route path="/label-ranking" element={<Navigate to="/abilities" replace />} />
         <Route path="/interview" element={<InterviewRecordPage />} />
         <Route path="/interview-records" element={<Navigate to="/interview" replace />} />
         <Route path="/registrations" element={<ExamRegistrationPage />} />

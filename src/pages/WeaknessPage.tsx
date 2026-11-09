@@ -1,16 +1,16 @@
 /**
- * 薄弱点视图（阶段三）：把原先分散在三个页面的「哪里弱」合并到一处，内部分三档。
+ * 薄弱点区段（并入能力中心）：三档 Tab
  *
  * - 模块级：训练记录按知识模块汇总，分母 = 训练记录题数
  * - 考点级：labelStats 的考点路径排名，分母 = 题目作答次数（与模块级不同，页面明确标注）
  * - 能力缺口级：由训练记录派生的 gaps（未解决优先）
  *
- * 只读页面：不写入任何 store，不改动已有统计口径。
+ * 只读：不写入任何 store，不改动已有统计口径。由 AbilityCenterPage 作为区段渲染；
+ * 传入 subject 时跟随宿主页的学科切换，不额外渲染学科 chip。
  */
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { AlertOctagon, BarChart3, Layers, Tags } from 'lucide-react';
-import { PageHeader } from '../components/PageHeader';
 import { EmptyState } from '../components/EmptyState';
 import { useAppSession } from '../hooks/useAppSession';
 import { findGaps, findTrainingsByStudent } from '../services/localDB';
@@ -38,7 +38,7 @@ const SEVERITY_CLASS: Record<AbilityGap['severity'], string> = {
   serious: 'bg-red-50 text-red-700',
 };
 
-export function WeaknessPage() {
+export function WeaknessPanels({ subject: subjectProp }: { subject?: Subject | null }) {
   const { prefs } = useAppSession();
   const [trainings, setTrainings] = useState<TrainingRecord[]>([]);
   const [gaps, setGaps] = useState<AbilityGap[]>([]);
@@ -54,7 +54,13 @@ export function WeaknessPage() {
     [trainings],
   );
   const [subject, setSubject] = useState<Subject | null>(null);
-  const activeSubject = subject && subjectsInData.includes(subject) ? subject : (subjectsInData[0] ?? null);
+  // 宿主页传入 subject 时以宿主为准（学科 chip 由宿主渲染），否则自己兜底选第一个有数据的学科
+  const activeSubject =
+    subjectProp !== undefined
+      ? subjectProp
+      : subject && subjectsInData.includes(subject)
+        ? subject
+        : (subjectsInData[0] ?? null);
 
   const moduleStats = useMemo(() => {
     const list = activeSubject ? trainings.filter((t) => t.subject === activeSubject) : trainings;
@@ -72,19 +78,14 @@ export function WeaknessPage() {
   }, [gaps, activeSubject]);
 
   return (
-    <div className="space-y-5">
-      <PageHeader
-        title="薄弱点"
-        description="三档口径统一入口：模块级 / 考点级 / 能力缺口级，均按薄弱程度从高到低排列"
-      />
-
-      <div className="card p-3 text-xs text-slate-500 leading-relaxed">
+    <div className="space-y-4">
+      <div className="rounded-lg bg-slate-50 p-3 text-xs text-slate-500 leading-relaxed">
         三档分母不同，不要横向比较百分比：<b className="text-slate-700">模块级</b>按训练记录题数、
         <b className="text-slate-700">考点级</b>按题目作答次数（云端 labelStats 聚合）、
         <b className="text-slate-700">能力缺口级</b>是按错误类型累计的出现次数。
       </div>
 
-      {subjectsInData.length > 1 && (
+      {subjectProp === undefined && subjectsInData.length > 1 && (
         <div className="flex flex-wrap items-center gap-2">
           {subjectsInData.map((s) => (
             <button

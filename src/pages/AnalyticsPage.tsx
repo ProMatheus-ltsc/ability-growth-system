@@ -19,7 +19,7 @@ import {
   StatCard,
   TableScroll,
 } from '@shared/core';
-import { BarChart3, TrendingUp, Wallet, AlertTriangle, Zap, Route, Target, Clock, Layers, FileText } from 'lucide-react';
+import { BarChart3, TrendingUp, Wallet, AlertTriangle, Zap, Route, Target, Clock, FileText } from 'lucide-react';
 import { PageHeader } from '../components/PageHeader';
 import { EmptyState } from '../components/EmptyState';
 import { MasteryBar } from '../components/MasteryBar';
@@ -66,7 +66,7 @@ import { getInsightsCopy } from '../domain/insightsCopy';
  * - 目标分：只读报名表 targetScore；
  * - 时间窗口：TimeWindow（默认近 30 天），指标标题自动带窗口。
  */
-type Tab = 'overview' | 'modules' | 'roi' | 'strategy';
+type Tab = 'overview' | 'time' | 'roi' | 'strategy';
 
 const WINDOW_OPTIONS: TimeWindow[] = ['7d', '30d', '90d', 'all'];
 
@@ -225,7 +225,7 @@ export function AnalyticsPage() {
         {(
           [
             { k: 'overview', label: '概览' },
-            { k: 'modules', label: '模块与时间' },
+            { k: 'time', label: '时间分配' },
             { k: 'roi', label: '收益与预测' },
             { k: 'strategy', label: '策略与错因' },
           ] as Array<{ k: Tab; label: string }>
@@ -462,50 +462,8 @@ export function AnalyticsPage() {
         </>
       )}
 
-      {tab === 'modules' && (
+      {tab === 'time' && (
         <>
-          <div className="card p-5">
-            <div className="flex items-center gap-2 mb-3">
-              <Layers size={16} className="text-purple-600" />
-              <h2 className="font-semibold text-slate-900">{withWindowLabel(`模块正确率 · ${SUBJECT_LABEL[subject]}`, windowKey)}</h2>
-              <span className="text-xs text-slate-400">模块口径：纯正确率，不做陌生题加权</span>
-            </div>
-            {moduleStats.filter((m) => m.subject === subject).length === 0 ? (
-              <EmptyState icon={Layers} title="暂无模块数据" description="录入训练后可查看各模块正确率" />
-            ) : (
-              <TableScroll label="模块正确率">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="text-left text-xs text-slate-500 border-b border-slate-100">
-                      <th className="py-2">模块</th>
-                      <th className="py-2 text-right">模块正确率</th>
-                      <th className="py-2 text-right">题量</th>
-                      <th className="py-2 text-right">错题</th>
-                      <th className="py-2 text-right">每题均时</th>
-                      <th className="py-2 text-right">最近训练</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {moduleStats
-                      .filter((m) => m.subject === subject)
-                      .map((m) => (
-                        <tr key={m.module} className="border-b border-slate-50">
-                          <td className="py-2 text-slate-700">{m.module}</td>
-                          <td className="py-2 text-right text-slate-600">{m.masteryScore === null ? '暂无' : `${m.masteryScore}%`}</td>
-                          <td className="py-2 text-right text-slate-600">{m.totalQuestions}</td>
-                          <td className="py-2 text-right text-slate-600">{m.totalErrors}</td>
-                          <td className="py-2 text-right text-slate-600">
-                            {m.avgMinutesPerQuestion === null ? '—' : `${m.avgMinutesPerQuestion} 分`}
-                          </td>
-                          <td className="py-2 text-right text-slate-400 text-xs">{m.lastSeenAt?.slice(0, 10) ?? '—'}</td>
-                        </tr>
-                      ))}
-                  </tbody>
-                </table>
-              </TableScroll>
-            )}
-          </div>
-
           <div className="card p-5">
             <div className="flex items-center gap-2 mb-3">
               <Clock size={16} className="text-blue-600" />
