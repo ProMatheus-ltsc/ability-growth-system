@@ -381,7 +381,8 @@ export interface AbilityTag {
 export interface AbilityRadarSlice {
   key: string;
   label: string;
-  weight: number;
+  /** 维度权重：仅部分数据源（素养维度）自带，缺失时不在图上标注百分比 */
+  weight?: number;
   score: number;
   targetScore?: number;
 }

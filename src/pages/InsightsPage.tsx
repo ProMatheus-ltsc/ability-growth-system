@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine } from 'recharts';
 import { ResponsiveChart } from '@shared/core';
-import { Lightbulb, Compass, Cpu, GitBranch, Play } from 'lucide-react';
+import { Lightbulb, Compass, Cpu, GitBranch } from 'lucide-react';
 import { EmptyState } from '../components/EmptyState';
 import { MasteryBar } from '../components/MasteryBar';
 import {
@@ -10,10 +10,7 @@ import {
   findLeveragePoints,
   forecastGrowth,
   recommendStrategies,
-  simulateStrategy,
   type CausalGraph,
-  type SimulationInput,
-  type SimulationResult,
   type StrategyRecommendation,
 } from '../services/insights';
 import type { AbilityGap, Subject, TrainingRecord } from '../domain/types';
@@ -151,128 +148,7 @@ export function ForecastTab({
   );
 }
 
-// ============ What-if 模拟 ============
-
-export function SimulationTab({
-  records,
-  subjects,
-  targetScore,
-}: {
-  records: TrainingRecord[];
-  subjects: Subject[];
-  targetScore?: number;
-}) {
-  const [subject, setSubject] = useState<Subject>(subjects[0] ?? 'math');
-  const [hoursPerWeek, setHoursPerWeek] = useState(6);
-  const [weeks, setWeeks] = useState(8);
-  const [ratios, setRatios] = useState<SimulationInput['focusRatio']>({
-    topic: 30,
-    review: 40,
-    unfamiliar: 20,
-    timed: 10,
-  });
-  const [result, setResult] = useState<SimulationResult | null>(null);
-
-  const run = () => {
-    setResult(simulateStrategy(records, subject, { hoursPerWeek, weeks, focusRatio: ratios }, targetScore));
-  };
-
-  return (
-    <div className="space-y-4">
-      <div className="card p-5 space-y-3 cq">
-        <h2 className="font-semibold flex items-center gap-2">
-          <Play size={16} className="text-blue-600" /> 个性化训练策略模拟 (What-if)
-        </h2>
-        <p className="text-sm text-slate-500">
-          假设每周投入 X 小时,按特定训练结构分配,N 周后能力将达到什么水平?
-        </p>
-
-        <div className="cq-grid cq-cols-4 gap-3">
-          <div>
-            <label className="label">学科</label>
-            <select className="input" value={subject} onChange={(e) => setSubject(e.target.value as Subject)}>
-              {subjects.map((s) => (
-                <option key={s} value={s}>
-                  {SUBJECT_LABEL[s]}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="label">每周投入(小时)</label>
-            <input className="input" type="number" min={1} max={40} value={hoursPerWeek} onChange={(e) => setHoursPerWeek(+e.target.value || 0)} />
-          </div>
-          <div>
-            <label className="label">模拟周期(周)</label>
-            <input className="input" type="number" min={1} max={52} value={weeks} onChange={(e) => setWeeks(+e.target.value || 0)} />
-          </div>
-        </div>
-
-        <div>
-          <div className="label">训练结构分配(比例, 自动归一化)</div>
-          <div className="cq-grid cq-cols-4 gap-3">
-            {(['topic', 'review', 'unfamiliar', 'timed'] as const).map((k) => (
-              <div key={k}>
-                <label className="label text-xs">
-                  {k === 'topic' && '专项训练'}
-                  {k === 'review' && '错题复习'}
-                  {k === 'unfamiliar' && '陌生题'}
-                  {k === 'timed' && '限时训练'}
-                </label>
-                <input
-                  className="input"
-                  type="number"
-                  min={0}
-                  max={100}
-                  value={ratios[k]}
-                  onChange={(e) => setRatios({ ...ratios, [k]: +e.target.value || 0 })}
-                />
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <button className="btn-primary" onClick={run}>
-          <Play size={14} /> 运行模拟
-        </button>
-      </div>
-
-      {result && (
-        <div className="card p-5">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="font-semibold">模拟结果</h2>
-            <span className="text-sm text-slate-500">
-              初始 {result.currentMastery}% → {weeks} 周后 <b>{result.finalMastery}%</b>
-            </span>
-          </div>
-          <ResponsiveChart minHeight="14rem" maxHeight="16.25rem">
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={[{ week: 0, mastery: result.currentMastery }, ...result.trajectory]}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-              <XAxis dataKey="week" tick={{ fontSize: 11 }} label={{ value: '周', position: 'bottom', offset: -5, fontSize: 11 }} />
-              <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} />
-              <Tooltip />
-              {targetScore !== undefined && (
-                <ReferenceLine y={targetScore} stroke="#f59e0b" strokeDasharray="3 3" label={{ value: '目标线', fontSize: 10 }} />
-              )}
-              <Line type="monotone" dataKey="mastery" stroke="#2563eb" strokeWidth={2} dot={{ r: 2 }} />
-            </LineChart>
-          </ResponsiveContainer>
-          </ResponsiveChart>
-          {result.notes.length > 0 && (
-            <div className="mt-3 text-sm text-slate-600 space-y-1">
-              {result.notes.map((n) => (
-                <div key={n}>💡 {n}</div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ============ 因果建模 ============
+// ============ 错因关联（原「因果建模」）============
 
 export function CausalTab({ records, gaps, copy }: { records: TrainingRecord[]; gaps: AbilityGap[]; copy: InsightsCopy }) {
   const graph: CausalGraph = useMemo(() => buildCausalGraph(records, gaps), [records, gaps]);
@@ -287,17 +163,20 @@ export function CausalTab({ records, gaps, copy }: { records: TrainingRecord[]; 
   return (
     <div className="card p-5 cq">
       <h2 className="font-semibold flex items-center gap-2 mb-3">
-        <GitBranch size={16} className="text-purple-600" /> 错误 → 能力缺口 → 训练方式 因果链
+        <GitBranch size={16} className="text-purple-600" /> 错误 → 能力缺口 → 训练方式 关联链
       </h2>
       <p className="text-sm text-slate-500 mb-4">
         将过去的错误类型映射到能力短板, 再匹配到最适合的训练方式。 这是系统动力学的浓缩视图。
+      </p>
+      <p className="text-xs text-amber-600 mb-4">
+        说明：这里展示的是错因共现关联（同一批训练里同时出现），反映相关性而非因果推断。
       </p>
       <div className="cq-grid cq-cols-3 gap-3">
         <ColumnBlock title="错误类型" tone="red" items={errors.map((n) => n.label)} />
         <ColumnBlock title="能力短板" tone="orange" items={abilities.map((n) => n.label)} />
         <ColumnBlock title="建议训练" tone="emerald" items={Array.from(new Set(trainings.map((n) => n.label)))} />
       </div>
-      <div className="mt-4 text-xs text-slate-500">共 {graph.edges.length} 条因果边; 权重反映错误历史发生频次</div>
+      <div className="mt-4 text-xs text-slate-500">共 {graph.edges.length} 条关联边; 权重反映错误历史发生频次</div>
     </div>
   );
 }

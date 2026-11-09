@@ -50,7 +50,7 @@ import {
   windowStartDate,
   type TimeWindow,
 } from '../services/timeWindow';
-import { CausalTab, ForecastTab, LeverageTab, SimulationTab, StrategyTab } from './InsightsPage';
+import { CausalTab, ForecastTab, LeverageTab, StrategyTab } from './InsightsPage';
 import { ALL_TRANSFERS, TRANSFER_STRENGTH_LABEL } from '../domain/abilityTransfer';
 import { ERROR_CATEGORY_LABEL, SUBJECT_LABEL } from '../domain/types';
 import type { AbilityGap, ExamRegistration, Subject, SubjectiveAnswer, TrainingRecord } from '../domain/types';
@@ -59,7 +59,7 @@ import { getInsightsCopy } from '../domain/insightsCopy';
 
 /**
  * 分析中心（阶段三）：原「训练收益」页与「深度洞察」页合并。
- * Tab 划分：概览 / 模块与时间 / 收益与预测 / 策略与因果。
+ * Tab 划分：概览 / 模块与时间 / 收益与预测 / 策略与错因。
  * 页面头部统一提供「学科选择器 + 时间窗口」，四个 Tab 共用同一份口径：
  * - 掌握度：0.7 × 陌生题正确率 + 0.3 × 整体正确率（模块层只叫「模块正确率」）；
  * - 目标分：只读报名表 targetScore；
@@ -210,7 +210,7 @@ export function AnalyticsPage() {
             { k: 'overview', label: '概览' },
             { k: 'modules', label: '模块与时间' },
             { k: 'roi', label: '收益与预测' },
-            { k: 'strategy', label: '策略与因果' },
+            { k: 'strategy', label: '策略与错因' },
           ] as Array<{ k: Tab; label: string }>
         ).map((it) => (
           <button
@@ -612,7 +612,6 @@ export function AnalyticsPage() {
           </div>
 
           <ForecastTab records={windowedTrainings} subjects={prefs.subjects} copy={insightsCopy} targetScore={targetScore} />
-          <SimulationTab records={windowedTrainings} subjects={prefs.subjects} targetScore={targetScore} />
         </>
       )}
 

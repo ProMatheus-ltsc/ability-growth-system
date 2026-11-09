@@ -35,14 +35,13 @@ export function LiteracyPage() {
     })();
   }, [prefs.currentStudentId, prefs.gradeLevel]);
 
+  // 素养维度没有对应的报名目标分，不画目标线、也不再用 20% 这种写死权重
   const radarSlices = useMemo(
     () =>
       profile.map((p) => ({
         key: p.dimension,
         label: LITERACY_DIMENSION_LABEL[p.dimension],
-        weight: 20,
         score: p.score,
-        targetScore: 75,
       })),
     [profile],
   );
