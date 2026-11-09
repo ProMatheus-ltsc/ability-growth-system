@@ -19,6 +19,7 @@ import type {
 import { ERROR_CATEGORY_LABEL, SUBJECT_LABEL, TRAINING_TYPE_LABEL } from '../domain/types';
 import { analyzeTrainingROI, computeMasteryScore, prioritizeGaps, selectAggregationRecords } from './analytics';
 import { ALL_TRANSFERS, findStrongTransferSources, TRANSFER_STRENGTH_LABEL } from '../domain/abilityTransfer';
+import { INFO_INSUFFICIENT } from '../domain/missingInfo';
 
 // ============ 智能训练策略推荐 ============
 
@@ -53,7 +54,7 @@ export function recommendStrategies(records: TrainingRecord[], gaps: AbilityGap[
       strategy: 'break-loop',
       label: `攻克严重短板: ${point}`,
       weight: 95,
-      reason: `复现 ${seriousGap.occurrenceCount} 次且状态为严重, 属于影响整体能力的关键瓶颈`,
+      reason: `复现 ${seriousGap.occurrenceCount ?? INFO_INSUFFICIENT} 次且状态为严重, 属于影响整体能力的关键瓶颈`,
       actionable: `采用错题修复 + 陌生题验证组合, 3 天内做完 10 道相关题目并复盘`,
     });
   }

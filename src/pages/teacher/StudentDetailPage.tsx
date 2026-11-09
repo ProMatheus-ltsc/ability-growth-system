@@ -8,7 +8,7 @@ import { AbilityRadar } from '../../components/RadarChart';
 import { getAllRecords, findGaps, findAbilities, findExams, findTrainingsByStudent, findCorrections } from '../../services/localDB';
 import { aggregateBySubject, buildRadarSlices, prioritizeGaps } from '../../services/analytics';
 import { GRADE_LEVEL_LABEL, SUBJECT_LABEL, type AbilityGap, type AbilitySnapshot, type Correction, type ExamRecord, type StudentProfile, type Subject, type TrainingRecord } from '../../domain/types';
-import { abilityPointText } from '../../domain/missingInfo';
+import { abilityPointText, INFO_INSUFFICIENT } from '../../domain/missingInfo';
 
 export function StudentDetailPage() {
   const [params] = useSearchParams();
@@ -114,7 +114,7 @@ export function StudentDetailPage() {
                 <div className="flex items-center gap-2">
                   <span className="font-medium">{abilityPointText(g.abilityPath)}</span>
                   <span className="badge bg-slate-100 text-slate-600">{SUBJECT_LABEL[g.subject]}</span>
-                  <span className="badge bg-red-50 text-red-600">复现 {g.occurrenceCount} 次</span>
+                  <span className="badge bg-red-50 text-red-600">复现 {g.occurrenceCount ?? INFO_INSUFFICIENT} 次</span>
                 </div>
                 {g.suggestion && <div className="text-xs text-slate-600 mt-1">💡 {g.suggestion}</div>}
               </div>

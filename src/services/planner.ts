@@ -14,6 +14,7 @@ import type {
   TrainingRecord,
 } from '../domain/types';
 import { prioritizeGaps } from './analytics';
+import { INFO_INSUFFICIENT } from '../domain/missingInfo';
 
 export const SPACED_INTERVALS: Record<GradeLevel, number[]> = {
   primary: [1, 2, 4, 7],
@@ -97,7 +98,7 @@ export function generateTodayRecommendations(
       kind: 'fix',
       subject: g.subject,
       abilityPath: g.abilityPath,
-      reason: `复现 ${g.occurrenceCount} 次 · ${g.severity === 'serious' ? '严重' : g.severity === 'medium' ? '中等' : '轻微'}`,
+      reason: `复现 ${g.occurrenceCount ?? INFO_INSUFFICIENT} 次 · ${g.severity === 'serious' ? '严重' : g.severity === 'medium' ? '中等' : '轻微'}`,
       urgency: g.severity === 'serious' ? 'high' : 'medium',
     });
   }

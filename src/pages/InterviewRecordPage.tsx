@@ -321,7 +321,16 @@ function RecordCard({
               {record.questionType?.trim() || UNCLASSIFIED_INTERVIEW_TYPE}
             </span>
             <span className="text-xs text-slate-500">{formatTime(interviewAnsweredAt(record))}</span>
-            <span className="text-xs text-slate-500">思考 {record.thinkingSec}s · 答题 {record.answerSec}s</span>
+            {(record.thinkingSec != null || record.answerSec != null) && (
+              <span className="text-xs text-slate-500">
+                {[
+                  record.thinkingSec != null ? `思考 ${record.thinkingSec}s` : null,
+                  record.answerSec != null ? `答题 ${record.answerSec}s` : null,
+                ]
+                  .filter(Boolean)
+                  .join(' · ')}
+              </span>
+            )}
             {score !== null && <span className="text-xs text-slate-600">综合 {score}%</span>}
             {!record.questionKey && <span className="badge bg-amber-50 text-amber-700">信息不足：缺来源/题号</span>}
           </div>

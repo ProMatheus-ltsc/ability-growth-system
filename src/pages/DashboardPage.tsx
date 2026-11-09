@@ -12,7 +12,7 @@ import { MasteryBar } from '../components/MasteryBar';
 import { EmptyState } from '../components/EmptyState';
 import { PdcaCalendarBoard } from '../components/PdcaCalendarBoard';
 import { GRADE_LEVEL_LABEL, MODULE_VISIBILITY, PLAN_STAGE_LABEL, SUBJECT_LABEL } from '../domain/types';
-import { abilityPointText } from '../domain/missingInfo';
+import { abilityPointText, INFO_INSUFFICIENT } from '../domain/missingInfo';
 import type { AbilityGap, GradeLevel, TrainingRecord, AbilitySnapshot, FixTask, ExamRegistration, StagePlan } from '../domain/types';
 
 /** V5.11 §7 · 学段差异化文案(小学游戏化 / 公考直白 / K12 中性) */
@@ -420,13 +420,14 @@ function TodayFocusCard({
         <ol className="space-y-3">
           {gaps.slice(0, 3).map((g, i) => (
             <li key={g.id} className="flex items-start gap-2 text-sm">
-              <span className="text-blue-600 font-bold w-5">①{i > 0 && ''}</span>
+              <span className="text-blue-600 font-bold w-5">{['①', '②', '③'][i] ?? `${i + 1}.`}</span>
               <div className="flex-1">
                 <div className="text-slate-800">
                   {tone.focusPrefix}: {abilityPointText(g.abilityPath)}
                 </div>
                 <div className="text-xs text-slate-500 mt-0.5">
-                  {SUBJECT_LABEL[g.subject]} · 复现 {g.occurrenceCount} 次
+                  {SUBJECT_LABEL[g.subject] ?? INFO_INSUFFICIENT} · 复现{' '}
+                  {g.occurrenceCount ?? INFO_INSUFFICIENT} 次
                 </div>
               </div>
             </li>
