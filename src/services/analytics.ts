@@ -25,6 +25,7 @@ import type {
 import { scoreToLevel, TRAINING_TYPE_LABEL } from '../domain/types';
 import { getRadarDimensions } from '../domain/abilityTags';
 import { normalizeModule, pathBelongsToModule } from '../domain/moduleNormalize';
+import { isStandardMinutesInferred } from '../domain/paperStructure';
 
 /**
  * ============ 口径统一（唯一来源，2026-11-09 用户验收缺陷 #4/#5/#6） ============
@@ -297,11 +298,12 @@ export function buildWeeklyDelta(records: TrainingRecord[], subject: Subject): W
 /** ============ F-05 / A3 限时达标 ============ */
 
 /**
- * 数据契约（与数据侧对齐）：推断出来的 standardMinutes 会在 note 中显式标注「推断」。
+ * 推断标记判定统一委托给数据契约模块（src/domain/paperStructure.ts）：
+ * 优先读结构化 `standardMinutesInferred`，历史记录缺该字段时回退 note 文本含「推断」。
  * 推断值不与真实用时混算，限时达标率只统计真实基准记录，推断记录单独计数。
  */
 export function isInferredStandardMinutes(record: TrainingRecord): boolean {
-  return typeof record.note === 'string' && record.note.includes('推断');
+  return isStandardMinutesInferred(record);
 }
 
 export function isTimedMet(record: TrainingRecord): boolean | null {

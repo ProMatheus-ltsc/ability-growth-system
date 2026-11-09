@@ -9,7 +9,7 @@ import { EmptyState } from '../components/EmptyState';
 import { MasteryBar } from '../components/MasteryBar';
 import { getModules } from '../domain/abilityTags';
 import { deriveGapsFromTraining } from '../services/analytics';
-import { PAPER_TYPE_LABEL, scoreToLevel, SUBJECT_LABEL } from '../domain/types';
+import { PAPER_TYPE_LABEL, PAPER_TYPE_OPTIONS, scoreToLevel, SUBJECT_LABEL } from '../domain/types';
 import type {
   AbilityGap,
   ExamRecord,
@@ -492,7 +492,7 @@ function ExamForm({
             <label className="label">卷型</label>
             <select className="input" value={paperType} onChange={(e) => setPaperType(e.target.value as PaperType | '')}>
               <option value="">未标注</option>
-              {(Object.keys(PAPER_TYPE_LABEL) as PaperType[]).map((p) => (
+              {PAPER_TYPE_OPTIONS.map((p) => (
                 <option key={p} value={p}>
                   {PAPER_TYPE_LABEL[p]}
                 </option>

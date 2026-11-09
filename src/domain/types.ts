@@ -163,15 +163,30 @@ export const ERROR_CATEGORY_LABEL: Record<ErrorCategory, string> = {
   wordcount: '字数控制问题',
 };
 
-/** 卷型（公考卷面结构） */
+/**
+ * 卷型（公考卷面结构）
+ * `PaperType` 是规范值（表单只能选这 4 个）；
+ * 记录层可存 `PaperTypeRecord`，其中 `unknown` 表示「有值但写法无法识别」，界面显示「未标注」。
+ * 归一化入口统一走 `src/domain/paperStructure.ts` 的 `normalizePaperType`。
+ */
 export type PaperType = 'national' | 'provincial' | 'public-institution' | 'military-transfer';
+export type PaperTypeRecord = PaperType | 'unknown';
 
-export const PAPER_TYPE_LABEL: Record<PaperType, string> = {
+export const PAPER_TYPE_LABEL: Record<PaperTypeRecord, string> = {
   national: '国考',
   provincial: '省考',
   'public-institution': '事业单位',
   'military-transfer': '军转',
+  unknown: '未标注',
 };
+
+/** 表单可选项（不包含 unknown，避免用户手工写入「未标注」这个非规范值） */
+export const PAPER_TYPE_OPTIONS: readonly PaperType[] = [
+  'national',
+  'provincial',
+  'public-institution',
+  'military-transfer',
+];
 
 /** 训练记录粒度：整卷 / 模块 / 单条 */
 export type TrainingScope = 'full' | 'module' | 'single';
@@ -206,14 +221,19 @@ export interface TrainingRecord {
   createdAt: string;
   updatedAt: string;
   /** 以下为可选卷面结构字段，老记录保持 undefined */
-  paperType?: PaperType;
+  paperType?: PaperTypeRecord;
   paperYear?: number;
   fullMark?: number;
   score?: number;
   standardMinutes?: number;
+  /** 标准用时为推断值（如按考纲推算）；缺省时回退 note 文本判定，见 paperStructure.ts */
+  standardMinutesInferred?: boolean;
   questionType?: string;
   examId?: string;
   scope?: TrainingScope;
+  /** 外部题库/练习的精确关联键（禁止按卷名模糊匹配） */
+  sourceId?: string;
+  exerciseId?: string;
 }
 
 /** 能力缺口/问题 */
@@ -400,11 +420,16 @@ export interface ExamRecord {
   createdAt: string;
   updatedAt: string;
   /** 可选卷面结构字段 */
-  paperType?: PaperType;
+  paperType?: PaperTypeRecord;
   paperYear?: number;
   fullMark?: number;
   totalScore?: number;
   standardMinutes?: number;
+  /** 标准用时为推断值；缺省时回退 note 文本判定 */
+  standardMinutesInferred?: boolean;
+  /** 外部题库/练习的精确关联键 */
+  sourceId?: string;
+  exerciseId?: string;
 }
 
 /** 批改记录(教师端 - 主观题/理科解答/面试) */

@@ -13,6 +13,7 @@ import {
   TRAINING_TYPE_LABEL,
   ERROR_CATEGORY_LABEL,
   PAPER_TYPE_LABEL,
+  PAPER_TYPE_OPTIONS,
   type ErrorCategory,
   type PaperType,
   type Subject,
@@ -484,7 +485,7 @@ function TrainingForm({ quick, defaults, studentId, gradeLevel, availableSubject
                 <label className="label">卷型</label>
                 <select className="input" value={paperType} onChange={(e) => setPaperType(e.target.value as PaperType | '')}>
                   <option value="">未标注</option>
-                  {(Object.keys(PAPER_TYPE_LABEL) as PaperType[]).map((p) => (
+                  {PAPER_TYPE_OPTIONS.map((p) => (
                     <option key={p} value={p}>
                       {PAPER_TYPE_LABEL[p]}
                     </option>
