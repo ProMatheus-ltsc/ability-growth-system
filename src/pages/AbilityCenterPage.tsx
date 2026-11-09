@@ -228,11 +228,18 @@ export function AbilityCenterPage() {
           {growth.length === 0 ? (
             <EmptyState icon={TrendingUp} title={copy.growthEmptyTitle} description={copy.growthEmptyDescription} />
           ) : growth.length < 2 ? (
-            <EmptyState
-              icon={TrendingUp}
-              title={copy.growthShortTitle}
-              description={copy.growthShortHint(growth.length)}
-            />
+            <>
+              <EmptyState
+                icon={TrendingUp}
+                title={copy.growthShortTitle}
+                description={copy.growthShortHint(growth.length)}
+              />
+              {windowKey !== 'all' && (
+                <div className="text-xs text-slate-500 text-center mt-2">
+                  当前只看{TIME_WINDOW_LABEL[windowKey]}，切换到「全部时间」可查看更早的历史曲线
+                </div>
+              )}
+            </>
           ) : (
             <>
               <ResponsiveChart minHeight="15rem" maxHeight="17.5rem">

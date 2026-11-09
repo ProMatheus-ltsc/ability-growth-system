@@ -501,6 +501,48 @@ export function AnalyticsPage() {
             不并入本页申论口径。
           </div>
 
+          <div className="card p-5">
+            <div className="flex items-center gap-2 mb-1">
+              <TrendingUp size={16} className="text-emerald-600" />
+              <h2 className="font-semibold text-slate-900">
+                {withWindowLabel(`历史分数曲线 · ${SUBJECT_LABEL[subject]}`, windowKey)}
+              </h2>
+              {growthSeries.some((p) => p.emergence) && (
+                <span className="badge bg-purple-50 text-purple-700 text-[10px]">
+                  ✨ 涌现点 {growthSeries.filter((p) => p.emergence).length} 个
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-slate-500 mb-3">
+              按周汇总真实训练记录的正确率，虚线为陌生题正确率；只统计已录入的数据，不含推算值。
+            </p>
+            {growthSeries.length === 0 ? (
+              <EmptyState
+                icon={TrendingUp}
+                title="当前时间窗口内暂无分数数据"
+                description={
+                  windowKey === 'all'
+                    ? '完成两周以上训练后可查看历史分数曲线'
+                    : `当前只统计${TIME_WINDOW_LABEL[windowKey]}；更早的历史记录请切换到「全部时间」查看`
+                }
+              />
+            ) : (
+              <ResponsiveChart minHeight="13rem" maxHeight="15rem">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={growthSeries}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                    <XAxis dataKey="week" tick={{ fontSize: 10 }} />
+                    <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} />
+                    <Tooltip />
+                    <Legend />
+                    <Line type="monotone" dataKey="score" stroke="#2563eb" name="整体正确率" dot={{ r: 3 }} />
+                    <Line type="monotone" dataKey="unfamiliar" stroke="#f59e0b" name="陌生题正确率" strokeDasharray="4 4" />
+                  </LineChart>
+                </ResponsiveContainer>
+              </ResponsiveChart>
+            )}
+          </div>
+
           <div className="card p-5 space-y-4">
             <div className="flex items-center gap-2">
               <BarChart3 size={16} className="text-blue-600" />
@@ -596,35 +638,6 @@ export function AnalyticsPage() {
                   </tbody>
                 </table>
               </TableScroll>
-            )}
-          </div>
-
-          <div className="card p-5">
-            <div className="flex items-center gap-2 mb-3">
-              <TrendingUp size={16} className="text-emerald-600" />
-              <h2 className="font-semibold text-slate-900">{withWindowLabel(`增长曲线 · ${SUBJECT_LABEL[subject]}`, windowKey)}</h2>
-              {growthSeries.some((p) => p.emergence) && (
-                <span className="badge bg-purple-50 text-purple-700 text-[10px]">
-                  ✨ 涌现点 {growthSeries.filter((p) => p.emergence).length} 个
-                </span>
-              )}
-            </div>
-            {growthSeries.length === 0 ? (
-              <EmptyState icon={TrendingUp} title="暂无增长数据" description="完成两周以上训练后可查看增长曲线" />
-            ) : (
-              <ResponsiveChart minHeight="13rem" maxHeight="15rem">
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={growthSeries}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                    <XAxis dataKey="week" tick={{ fontSize: 10 }} />
-                    <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} />
-                    <Tooltip />
-                    <Legend />
-                    <Line type="monotone" dataKey="score" stroke="#2563eb" name="整体正确率" dot={{ r: 3 }} />
-                    <Line type="monotone" dataKey="unfamiliar" stroke="#f59e0b" name="陌生题正确率" strokeDasharray="4 4" />
-                  </LineChart>
-                </ResponsiveContainer>
-              </ResponsiveChart>
             )}
           </div>
         </>
