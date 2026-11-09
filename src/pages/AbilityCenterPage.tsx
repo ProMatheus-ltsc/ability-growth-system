@@ -10,7 +10,7 @@ import {
   buildModuleStats,
   buildRadarSlices,
   buildTimeAllocation,
-  resolveTargetScore,
+  resolveTargetPlan,
 } from '../services/analytics';
 import {
   DEFAULT_TIME_WINDOW,
@@ -52,10 +52,10 @@ export function AbilityCenterPage() {
 
   const windowedTrainings = useMemo(() => filterByWindow(trainings, windowKey), [trainings, windowKey]);
 
-  // 目标分：全站唯一来源 —— 报名表 targetScore（验收缺陷 #5，不再写死 80/85/95）
+  // 目标分：报名表中当前学科的计划（老记录回退到未分科目标分）
   const targetScore = useMemo(
-    () => resolveTargetScore(registrations, prefs.currentStudentId),
-    [registrations, prefs.currentStudentId],
+    () => resolveTargetPlan(registrations, prefs.currentStudentId, subject)?.targetScore,
+    [registrations, prefs.currentStudentId, subject],
   );
 
   const radarSlices = useMemo(

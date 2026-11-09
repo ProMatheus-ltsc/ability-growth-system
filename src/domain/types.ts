@@ -509,7 +509,14 @@ export interface TeachingStrategy {
   updatedAt: string;
 }
 
-/** 公考报考信息 */
+/** 单个考试科目的目标分与考试时间 */
+export interface SubjectExamPlan {
+  /** 目标分（0-100，掌握度口径，非真实卷面分） */
+  targetScore?: number;
+  /** 该科目考试时间（YYYY-MM-DD） */
+  examDate?: string;
+}
+
 export interface ExamRegistration {
   id: string;
   studentId?: string;
@@ -526,8 +533,10 @@ export interface ExamRegistration {
   note?: string;
   createdAt: string;
   updatedAt: string;
-  /** 目标分（0-100，掌握度口径，非真实卷面分） */
+  /** 老数据：未分科的历史目标分（0-100，掌握度口径，非真实卷面分） */
   targetScore?: number;
+  /** 新数据：按科目拆分的目标分与考试时间；缺省时回退到顶层 targetScore / examDate */
+  subjectPlans?: Partial<Record<Subject, SubjectExamPlan>>;
 }
 
 /** 备考/学期阶段规划 */

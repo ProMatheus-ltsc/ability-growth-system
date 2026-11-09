@@ -37,7 +37,7 @@ import {
   computeTargetGap,
   detectFeedbackLoops,
   prioritizeGaps,
-  resolveTargetScore,
+  resolveTargetPlan,
   selectAggregationRecords,
   timedComplianceRate,
 } from '../services/analytics';
@@ -92,10 +92,12 @@ export function AnalyticsPage() {
   // A1 口径：整卷+模块不重复计入（用于学科级指标）
   const aggregationTrainings = useMemo(() => selectAggregationRecords(windowedTrainings), [windowedTrainings]);
 
-  const targetScore = useMemo(
-    () => resolveTargetScore(registrations, prefs.currentStudentId),
-    [registrations, prefs.currentStudentId],
+  // 目标分按当前选中学科取该科目的计划，不跨科目回退
+  const targetPlan = useMemo(
+    () => resolveTargetPlan(registrations, prefs.currentStudentId, subject),
+    [registrations, prefs.currentStudentId, subject],
   );
+  const targetScore = targetPlan?.targetScore;
   const stats = aggregateBySubject(windowedTrainings);
   const subjectStats = stats.find((s) => s.subject === subject);
 
@@ -255,8 +257,8 @@ export function AnalyticsPage() {
                 }
                 hint={
                   targetGap.current === null
-                    ? `目标 ${targetGap.target}% · 有效样本 0 题（缺失不当 0 分）`
-                    : `有效样本 ${targetGap.sampleQuestions} 题 · 当前 ${targetGap.current}% · 目标 ${targetGap.target}%（掌握度口径，非卷面分）`
+                    ? `目标 ${targetGap.target}%${targetPlan?.examDate ? ` · 考试 ${targetPlan.examDate}` : ''} · 有效样本 0 题（缺失不当 0 分）`
+                    : `有效样本 ${targetGap.sampleQuestions} 题 · 当前 ${targetGap.current}% · 目标 ${targetGap.target}%（掌握度口径，非卷面分）${targetPlan?.examDate ? ` · 考试 ${targetPlan.examDate}` : ''}`
                 }
                 accentClassName={targetGap.reached ? 'text-emerald-600' : 'text-orange-600'}
               />

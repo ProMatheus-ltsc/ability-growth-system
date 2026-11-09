@@ -35,8 +35,8 @@ import { isStandardMinutesInferred } from '../domain/paperStructure';
  *    0.7 × 陌生题正确率 + 0.3 × 整体正确率；无陌生题样本时退化为整体正确率。
  *    模块层记录没有稳定的陌生题样本，因此模块不复用该加权公式，UI 统一命名为「模块正确率」，
  *    避免同叫「掌握度」却不同算法。
- * 2) 目标分：全站只读报名表 `ExamRegistration.targetScore`（见 resolveTargetScore），
- *    不再使用写死的 80 / 85 / 95 目标线。
+ * 2) 目标分：全站只读报名表的目标分（见 resolveTargetPlan），优先按科目取
+ *    `subjectPlans[subject]`，老记录回退到顶层 `targetScore`；不再使用写死的 80 / 85 / 95 目标线。
  * 3) 时间窗口：全站共用 `TimeWindow`（src/services/timeWindow.ts），指标标题自动带窗口。
  */
 export function computeMasteryScore(
@@ -527,29 +527,45 @@ export function computeTargetGap(stats: SubjectStats[], targetScore?: number): T
   return { target: targetScore, current, gap, reached: gap <= 0, sampleQuestions: totalQuestions };
 }
 
+export interface TargetPlan {
+  targetScore: number;
+  examDate?: string;
+}
+
+function isValidTarget(value: number | undefined): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 100;
+}
+
 /**
- * 从考试报名中解析目标分（0-100，掌握度口径）：
- * 优先取最近一场未来考试的目标分，其次取最近一次已设置目标的报名；
+ * 从考试报名中解析指定科目的目标分与考试时间（0-100，掌握度口径）：
+ * 1) 有 `subjectPlans` 的新记录只认该科目，绝不跨科目回退；
+ * 2) 无 `subjectPlans` 的老记录，顶层 `targetScore` 作为该科目的历史目标；
+ * 优先取最近一场未来考试，其次取最近一次已设置目标的报名；
  * 只取当前学员的记录，避免多学员串号；无有效目标返回 undefined。
  */
-export function resolveTargetScore(
+export function resolveTargetPlan(
   registrations: ExamRegistration[],
-  studentId?: string,
+  studentId: string | undefined,
+  subject: Subject,
   today = new Date().toISOString().slice(0, 10),
-): number | undefined {
-  const scoped = registrations.filter(
-    (r) =>
-      (studentId === undefined || r.studentId === studentId) &&
-      typeof r.targetScore === 'number' &&
-      Number.isFinite(r.targetScore) &&
-      r.targetScore >= 0 &&
-      r.targetScore <= 100,
-  );
-  if (scoped.length === 0) return undefined;
-  const upcoming = scoped.filter((r) => r.examDate >= today).sort((a, b) => a.examDate.localeCompare(b.examDate));
-  if (upcoming.length > 0) return upcoming[0].targetScore;
-  const fallback = [...scoped].sort((a, b) => b.examDate.localeCompare(a.examDate));
-  return fallback[0].targetScore;
+): TargetPlan | undefined {
+  const candidates: TargetPlan[] = [];
+  for (const r of registrations) {
+    if (studentId !== undefined && r.studentId !== studentId) continue;
+    if (r.subjectPlans) {
+      const plan = r.subjectPlans[subject];
+      // 已分科记录：该科目没填目标分就不参与，避免用行测目标分去算申论
+      if (!plan || !isValidTarget(plan.targetScore)) continue;
+      candidates.push({ targetScore: plan.targetScore, examDate: plan.examDate ?? r.examDate });
+    } else if (isValidTarget(r.targetScore)) {
+      candidates.push({ targetScore: r.targetScore, examDate: r.examDate });
+    }
+  }
+  if (candidates.length === 0) return undefined;
+  const dateOf = (c: TargetPlan) => c.examDate ?? '';
+  const upcoming = candidates.filter((c) => dateOf(c) >= today).sort((a, b) => dateOf(a).localeCompare(dateOf(b)));
+  if (upcoming.length > 0) return upcoming[0];
+  return [...candidates].sort((a, b) => dateOf(b).localeCompare(dateOf(a)))[0];
 }
 
 /** ============ F-09 / V1 时间分配 ============ */
