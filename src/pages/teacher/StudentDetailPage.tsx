@@ -8,6 +8,7 @@ import { AbilityRadar } from '../../components/RadarChart';
 import { getAllRecords, findGaps, findAbilities, findExams, findTrainingsByStudent, findCorrections } from '../../services/localDB';
 import { aggregateBySubject, buildRadarSlices, prioritizeGaps } from '../../services/analytics';
 import { GRADE_LEVEL_LABEL, SUBJECT_LABEL, type AbilityGap, type AbilitySnapshot, type Correction, type ExamRecord, type StudentProfile, type Subject, type TrainingRecord } from '../../domain/types';
+import { abilityPointText } from '../../domain/missingInfo';
 
 export function StudentDetailPage() {
   const [params] = useSearchParams();
@@ -111,7 +112,7 @@ export function StudentDetailPage() {
             {priorityGaps.slice(0, 5).map((g) => (
               <div key={g.id} className="border border-slate-100 rounded-lg p-3 text-sm">
                 <div className="flex items-center gap-2">
-                  <span className="font-medium">{g.abilityPath.split('/').slice(-1)[0]}</span>
+                  <span className="font-medium">{abilityPointText(g.abilityPath)}</span>
                   <span className="badge bg-slate-100 text-slate-600">{SUBJECT_LABEL[g.subject]}</span>
                   <span className="badge bg-red-50 text-red-600">复现 {g.occurrenceCount} 次</span>
                 </div>

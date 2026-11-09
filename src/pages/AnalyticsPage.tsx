@@ -60,6 +60,7 @@ import { ERROR_CATEGORY_LABEL, MODULE_VISIBILITY, SUBJECT_LABEL } from '../domai
 import type { AbilityGap, ExamRegistration, Subject, SubjectiveAnswer, TrainingRecord } from '../domain/types';
 import { getAnalyticsCopy } from '../domain/analyticsCopy';
 import { getInsightsCopy } from '../domain/insightsCopy';
+import { abilityPointText } from '../domain/missingInfo';
 
 /**
  * 分析中心（阶段三）：原「训练收益」页与「深度洞察」页合并。
@@ -749,7 +750,7 @@ export function AnalyticsPage() {
             ) : (
               <div className="space-y-2 max-h-96 overflow-y-auto">
                 {priorityGaps.slice(0, 5).map((g) => {
-                  const point = g.abilityPath.split('/').slice(-1)[0];
+                  const point = abilityPointText(g.abilityPath);
                   const related = ALL_TRANSFERS.filter((e) => e.to.includes(point) || e.from.includes(point)).slice(0, 3);
                   return (
                     <div key={g.id} className="border border-slate-100 rounded-lg p-3">

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { v4 as uuid } from 'uuid';
 import { AlertOctagon, CheckCircle2, PlusCircle, Trash2, X, ListTodo } from 'lucide-react';
 import { Timeline, useToast, type TimelineItem } from '@shared/core';
@@ -8,6 +9,7 @@ import { calcErrorRecurrence, prioritizeGaps } from '../services/analytics';
 import { PageHeader } from '../components/PageHeader';
 import { EmptyState } from '../components/EmptyState';
 import { getAbilityTags } from '../domain/abilityTags';
+import { INFO_INSUFFICIENT, errorCategoryText, parseAbilityPath } from '../domain/missingInfo';
 import {
   ERROR_CATEGORY_LABEL,
   SUBJECT_LABEL,
@@ -204,7 +206,7 @@ export function ProblemCenterPage() {
   );
 }
 
-function GapCard({
+export function GapCard({
   gap,
   recurrence,
   onUpdate,
@@ -217,8 +219,11 @@ function GapCard({
   onDelete: () => void;
   onCreateTask: () => void;
 }) {
-  const point = gap.abilityPath.split('/').slice(-1)[0];
-  const module = gap.abilityPath.split('/').slice(-2)[0];
+  // 历史数据可能缺 abilityPath 或只有一段，直接 split 会在界面上渲染空白/undefined，甚至抛异常
+  const path = parseAbilityPath(gap.abilityPath);
+  const point = path.point ?? INFO_INSUFFICIENT;
+  const moduleText = path.module ?? INFO_INSUFFICIENT;
+  const recurrencePct = Number.isFinite(recurrence) ? Math.round(recurrence * 100) : null;
   const severityColor: Record<AbilityGap['severity'], string> = {
     light: 'bg-yellow-50 text-yellow-700',
     medium: 'bg-orange-50 text-orange-700',
@@ -229,6 +234,9 @@ function GapCard({
     medium: '中等',
     serious: '严重',
   };
+  const severityColorClass = severityColor[gap.severity] ?? 'bg-slate-100 text-slate-600';
+  const severityText = severityLabel[gap.severity] ?? INFO_INSUFFICIENT;
+  const sourceCount = (gap.sourceRecordIds ?? []).length;
   return (
     <div className="card p-4">
       <div className="flex items-start justify-between gap-3">
@@ -236,18 +244,26 @@ function GapCard({
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-base font-semibold text-slate-900">{point}</span>
             <span className="badge bg-slate-100 text-slate-600">
-              {SUBJECT_LABEL[gap.subject]} · {module}
+              {SUBJECT_LABEL[gap.subject] ?? INFO_INSUFFICIENT} · {moduleText}
             </span>
-            <span className={`badge ${severityColor[gap.severity]}`}>{severityLabel[gap.severity]}</span>
+            <span className={`badge ${severityColorClass}`}>{severityText}</span>
             <span className="badge bg-blue-50 text-blue-700">
-              复现 {gap.occurrenceCount} 次
+              复现 {gap.occurrenceCount ?? INFO_INSUFFICIENT} 次
             </span>
           </div>
+          {path.missing && (
+            <Link
+              to="/trainings"
+              className="inline-block text-xs text-blue-600 hover:underline mt-2"
+            >
+              {INFO_INSUFFICIENT}：去关联一次训练记录，补全模块与能力点 →
+            </Link>
+          )}
           <div className="text-sm text-slate-600 mt-2">
-            <span className="text-slate-500">错误类型:</span> {ERROR_CATEGORY_LABEL[gap.errorCategory]}
+            <span className="text-slate-500">错误类型:</span> {errorCategoryText(gap.errorCategory)}
             <span className="mx-2 text-slate-300">·</span>
             <span className="text-slate-500">最近错误复现率:</span>{' '}
-            <b>{Math.round(recurrence * 100)}%</b>
+            <b>{recurrencePct === null ? INFO_INSUFFICIENT : `${recurrencePct}%`}</b>
           </div>
           {gap.suggestion && (
             <div className="mt-2 text-sm text-slate-600 bg-blue-50 p-2 rounded">
@@ -259,7 +275,9 @@ function GapCard({
             {gap.statusHistory && gap.statusHistory.length > 0 ? (
               <Timeline items={buildHistoryItems(gap.statusHistory)} />
             ) : (
-              <p className="text-sm text-slate-400">当前状态（历史缺失）：{GAP_STATUS_LABEL[gap.status]}</p>
+              <p className="text-sm text-slate-400">
+                当前状态（历史缺失）：{GAP_STATUS_LABEL[gap.status] ?? INFO_INSUFFICIENT}
+              </p>
             )}
           </div>
           {/* V5.11 Bug #029 修复:四角度证据链 · 来源 · 复现率 · 趋势 · 掌握度 */}
@@ -267,14 +285,14 @@ function GapCard({
             <div className="rounded bg-slate-50 p-2">
               <div className="text-slate-400">来源</div>
               <div className="text-slate-700 mt-0.5">
-                {gap.sourceRecordIds.length > 0
-                  ? `${gap.sourceRecordIds.length} 次训练`
-                  : '手动标记'}
+                {sourceCount > 0 ? `${sourceCount} 次训练` : '手动标记'}
               </div>
             </div>
             <div className="rounded bg-slate-50 p-2">
               <div className="text-slate-400">复现率</div>
-              <div className="text-slate-700 mt-0.5">{Math.round(recurrence * 100)}%</div>
+              <div className="text-slate-700 mt-0.5">
+                {recurrencePct === null ? INFO_INSUFFICIENT : `${recurrencePct}%`}
+              </div>
             </div>
             <div className="rounded bg-slate-50 p-2">
               <div className="text-slate-400">趋势</div>
@@ -290,7 +308,7 @@ function GapCard({
             </div>
           </div>
           <div className="text-xs text-slate-400 mt-2">
-            首次: {gap.firstSeenAt.slice(0, 10)} · 最近: {gap.lastSeenAt.slice(0, 10)}
+            首次: {formatDay(gap.firstSeenAt)} · 最近: {formatDay(gap.lastSeenAt)}
           </div>
         </div>
 
@@ -318,17 +336,29 @@ function GapCard({
   );
 }
 
+/** 只取日期部分；缺失或格式异常时统一显示「信息不足」 */
+function formatDay(value?: string): string {
+  return typeof value === 'string' && value.length >= 10 ? value.slice(0, 10) : INFO_INSUFFICIENT;
+}
+
+/** 只取到分钟；缺失或格式异常时统一显示「信息不足」 */
+function formatMinute(value?: string): string {
+  return typeof value === 'string' && value.length >= 16
+    ? value.slice(0, 16).replace('T', ' ')
+    : INFO_INSUFFICIENT;
+}
+
 /** 状态历史 → 受控时间线 items（倒序：最新在上） */
 function buildHistoryItems(history: GapStatusHistoryItem[]): TimelineItem[] {
   return [...history]
     .reverse()
     .map((h, index) => ({
       id: `${h.at}-${h.reason}-${index}`,
-      time: h.at.slice(0, 16).replace('T', ' '),
-      title: GAP_STATUS_LABEL[h.status],
-      description: `${h.source === 'manual' ? '手动' : '自动'} · ${HISTORY_REASON_LABEL[h.reason]}${
-        h.from ? ` · 由「${GAP_STATUS_LABEL[h.from]}」` : ''
-      }`,
+      time: formatMinute(h.at),
+      title: GAP_STATUS_LABEL[h.status] ?? INFO_INSUFFICIENT,
+      description: `${h.source === 'manual' ? '手动' : '自动'} · ${
+        HISTORY_REASON_LABEL[h.reason] ?? INFO_INSUFFICIENT
+      }${h.from ? ` · 由「${GAP_STATUS_LABEL[h.from] ?? INFO_INSUFFICIENT}」` : ''}`,
       tone:
         h.status === 'verified'
           ? ('success' as const)

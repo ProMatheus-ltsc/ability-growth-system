@@ -10,6 +10,7 @@ import { advanceSpacedReview, createSpacedReview, generateDefaultStagePlan, SPAC
 import { getAbilityTags } from '../domain/abilityTags';
 import type { SpacedReviewItem, StagePlan, Subject } from '../domain/types';
 import { GRADE_LEVEL_LABEL, SUBJECT_LABEL } from '../domain/types';
+import { abilityPointText } from '../domain/missingInfo';
 
 export function TimelinePage() {
   const { prefs } = useAppSession();
@@ -161,7 +162,7 @@ export function TimelinePage() {
               {dueItems.map((it) => (
                 <div key={it.id} className="flex items-center justify-between text-sm">
                   <span>
-                    {SUBJECT_LABEL[it.subject]} · {it.abilityPath.split('/').slice(-1)[0]}
+                    {SUBJECT_LABEL[it.subject]} · {abilityPointText(it.abilityPath)}
                     <span className="text-xs text-slate-500 ml-2">
                       第 {it.currentIndex + 1} 次复习
                     </span>
@@ -185,7 +186,7 @@ export function TimelinePage() {
                 <div key={it.id} className="flex items-center justify-between text-sm py-1.5 border-b border-slate-50">
                   <div>
                     <span className="text-slate-700">
-                      {SUBJECT_LABEL[it.subject]} · {it.abilityPath.split('/').slice(-1)[0]}
+                      {SUBJECT_LABEL[it.subject]} · {abilityPointText(it.abilityPath)}
                     </span>
                     <span
                       className={`badge ml-2 ${

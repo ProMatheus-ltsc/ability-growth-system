@@ -1283,7 +1283,8 @@ export function calcErrorRecurrence(
 ): number {
   const recent = records.slice(0, window);
   if (recent.length === 0) return 0;
-  const hits = recent.filter((r) => r.errorCategories.includes(category)).length;
+  // 历史训练记录可能没有 errorCategories（早于错因字段），缺失按「无错因」计，避免整页抛异常
+  const hits = recent.filter((r) => (r.errorCategories ?? []).includes(category)).length;
   return hits / recent.length;
 }
 

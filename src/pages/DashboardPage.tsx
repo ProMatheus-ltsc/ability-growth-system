@@ -12,6 +12,7 @@ import { MasteryBar } from '../components/MasteryBar';
 import { EmptyState } from '../components/EmptyState';
 import { PdcaCalendarBoard } from '../components/PdcaCalendarBoard';
 import { GRADE_LEVEL_LABEL, MODULE_VISIBILITY, PLAN_STAGE_LABEL, SUBJECT_LABEL } from '../domain/types';
+import { abilityPointText } from '../domain/missingInfo';
 import type { AbilityGap, GradeLevel, TrainingRecord, AbilitySnapshot, FixTask, ExamRegistration, StagePlan } from '../domain/types';
 
 /** V5.11 §7 · 学段差异化文案(小学游戏化 / 公考直白 / K12 中性) */
@@ -400,7 +401,7 @@ function TodayFocusCard({
               <span className="text-blue-600 font-bold w-5">①{i > 0 && ''}</span>
               <div className="flex-1">
                 <div className="text-slate-800">
-                  {tone.focusPrefix}: {g.abilityPath.split('/').slice(-1)[0]}
+                  {tone.focusPrefix}: {abilityPointText(g.abilityPath)}
                 </div>
                 <div className="text-xs text-slate-500 mt-0.5">
                   {SUBJECT_LABEL[g.subject]} · 复现 {g.occurrenceCount} 次
@@ -413,7 +414,7 @@ function TodayFocusCard({
               <span className="text-emerald-600 font-bold w-5"><CheckCircle2 size={14} /></span>
               <div className="flex-1">
                 <div className="text-slate-800">
-                  {t.type === 'verify' ? '验证' : tone.focusPrefix}: {t.abilityPath.split('/').slice(-1)[0]}
+                  {t.type === 'verify' ? '验证' : tone.focusPrefix}: {abilityPointText(t.abilityPath)}
                 </div>
                 <div className="text-xs text-slate-500 mt-0.5">
                   {SUBJECT_LABEL[t.subject]}
