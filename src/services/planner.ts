@@ -7,12 +7,14 @@
 import { v4 as uuid } from 'uuid';
 import type {
   AbilityGap,
+  ExamRegistration,
   GradeLevel,
   SpacedReviewItem,
   StagePlan,
   Subject,
   TrainingRecord,
 } from '../domain/types';
+import { SUBJECT_LABEL } from '../domain/types';
 import { prioritizeGaps } from './analytics';
 import { INFO_INSUFFICIENT } from '../domain/missingInfo';
 
@@ -212,4 +214,38 @@ export function describeStagePlan(examDate: string, today: string = new Date().t
   const tier =
     days <= 21 ? '剩余 ≤21 天，只保留冲刺 1 段' : days <= 45 ? '剩余 22–45 天，保留 2 段' : days <= 90 ? '剩余 46–90 天，保留 3 段' : '剩余 >90 天，保留 4 段';
   return `距考试 ${days} 天 → ${tier}（共 ${count} 段）；边界按剩余天数等分，每段至少 5 天，全部从今天起算、最后一段止于考试日。`;
+}
+
+/** 考试节点（时间线页与日历共用同一份 registrations 口径） */
+export interface ExamTarget {
+  date: string;
+  label: string;
+}
+
+/**
+ * 从报考信息中收集考试日期节点，按日期升序。
+ * - 有分科计划时按 subjectPlans[*].examDate 取，标签带科目
+ * - 无分科计划时回退到顶层 examDate
+ * - 同一天只保留第一条标签，避免重复标记
+ * - from 传今天时用于“当前规划目标”（时间线页）；不传则返回全部（日历按月份浏览）
+ */
+export function collectExamTargets(registrations: ExamRegistration[], from?: string): ExamTarget[] {
+  const byDate = new Map<string, string>();
+  for (const r of registrations) {
+    const entries = Object.entries(r.subjectPlans ?? {}).filter(([, p]) => Boolean(p?.examDate)) as [
+      Subject,
+      { examDate: string },
+    ][];
+    if (entries.length === 0) {
+      if (r.examDate && !byDate.has(r.examDate)) byDate.set(r.examDate, r.postName ?? '报考信息');
+      continue;
+    }
+    for (const [sub, plan] of entries) {
+      if (!byDate.has(plan.examDate)) byDate.set(plan.examDate, `${r.postName ?? '报考信息'} · ${SUBJECT_LABEL[sub]}`);
+    }
+  }
+  return [...byDate.entries()]
+    .filter(([date]) => (from ? date >= from : true))
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([date, label]) => ({ date, label }));
 }

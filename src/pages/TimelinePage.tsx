@@ -6,7 +6,7 @@ import { useAppSession } from '../hooks/useAppSession';
 import { PageHeader } from '../components/PageHeader';
 import { EmptyState } from '../components/EmptyState';
 import { getAllRecords, putRecord, deleteRecord, findDueSpacedReviews } from '../services/localDB';
-import { advanceSpacedReview, createSpacedReview, describeStagePlan, generateDefaultStagePlan, SPACED_INTERVALS } from '../services/planner';
+import { advanceSpacedReview, collectExamTargets, createSpacedReview, describeStagePlan, generateDefaultStagePlan, SPACED_INTERVALS } from '../services/planner';
 import { getAbilityTags } from '../domain/abilityTags';
 import type { ExamRegistration, SpacedReviewItem, StagePlan, Subject } from '../domain/types';
 import { GRADE_LEVEL_LABEL, PLAN_STAGE_LABEL, SUBJECT_LABEL } from '../domain/types';
@@ -44,23 +44,7 @@ export function TimelinePage() {
   }, [refresh]);
 
   // 从报考信息推导未来的考试节点（按日期升序），第一条为当前规划目标，第二条起为接力
-  const examTargets = useMemo(() => {
-    const byDate = new Map<string, string>();
-    for (const r of registrations) {
-      const entries = Object.entries(r.subjectPlans ?? {}).filter(([, p]) => Boolean(p?.examDate)) as [Subject, { examDate: string }][];
-      if (entries.length === 0) {
-        if (r.examDate) byDate.set(r.examDate, r.postName ?? '报考信息');
-        continue;
-      }
-      for (const [sub, plan] of entries) {
-        if (!byDate.has(plan.examDate)) byDate.set(plan.examDate, `${r.postName ?? '报考信息'} · ${SUBJECT_LABEL[sub]}`);
-      }
-    }
-    return [...byDate.entries()]
-      .filter(([date]) => date >= today)
-      .sort((a, b) => a[0].localeCompare(b[0]))
-      .map(([date, label]) => ({ date, label }));
-  }, [registrations, today]);
+  const examTargets = useMemo(() => collectExamTargets(registrations, today), [registrations, today]);
 
   const autoExamDate = examTargets[0]?.date;
   const nextExam = examTargets[1];
