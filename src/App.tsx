@@ -97,10 +97,26 @@ function buildStudentGroups(v: Visibility): NavGroup[] {
         { to: '/abilities', icon: Activity, label: '能力中心' },
         { to: '/problems', icon: AlertOctagon, label: '问题中心' },
         { to: '/exams', icon: FlaskConical, label: '测验诊断' },
-        { to: '/subjective', icon: FileText, label: '申论作答' },
         { to: '/timeline', icon: Timer, label: '学习时间线' },
+      ],
+    },
+    {
+      // 分析与诊断类入口单独成组：不混入训练录入/执行
+      key: 'analysis',
+      label: '分析与诊断',
+      icon: BarChart3,
+      children: [
         { to: '/analytics', icon: BarChart3, label: '数据分析' },
         { to: '/label-ranking', icon: Tags, label: '题型排名' },
+      ],
+    },
+    {
+      // 申论/面试是学科专有的版本链功能，与通识训练分开
+      key: 'subject',
+      label: '学科专项',
+      icon: FileText,
+      children: [
+        { to: '/subjective', icon: FileText, label: '申论作答' },
       ],
     },
     {
@@ -174,10 +190,26 @@ function buildTeacherGroups(v: Visibility): NavGroup[] {
         { to: '/abilities', icon: Activity, label: '能力中心' },
         { to: '/problems', icon: AlertOctagon, label: '问题中心' },
         { to: '/exams', icon: FlaskConical, label: '测验诊断' },
-        { to: '/subjective', icon: FileText, label: '申论作答' },
         { to: '/timeline', icon: Timer, label: '学习时间线' },
+      ],
+    },
+    {
+      // 分析与诊断类入口单独成组：不混入训练录入/执行
+      key: 'analysis',
+      label: '分析与诊断',
+      icon: BarChart3,
+      children: [
         { to: '/analytics', icon: BarChart3, label: '数据分析' },
         { to: '/label-ranking', icon: Tags, label: '题型排名' },
+      ],
+    },
+    {
+      // 申论/面试是学科专有的版本链功能，与通识训练分开
+      key: 'subject',
+      label: '学科专项',
+      icon: FileText,
+      children: [
+        { to: '/subjective', icon: FileText, label: '申论作答' },
       ],
     },
     {

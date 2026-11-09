@@ -19,7 +19,7 @@ import {
   StatCard,
   TableScroll,
 } from '@shared/core';
-import { BarChart3, TrendingUp, Wallet, AlertTriangle, Zap, Route, Target, Clock, Layers } from 'lucide-react';
+import { BarChart3, TrendingUp, Wallet, AlertTriangle, Zap, Route, Target, Clock, Layers, FileText } from 'lucide-react';
 import { PageHeader } from '../components/PageHeader';
 import { EmptyState } from '../components/EmptyState';
 import { MasteryBar } from '../components/MasteryBar';
@@ -32,6 +32,7 @@ import {
   buildGrowthSeries,
   buildModuleStats,
   buildStageReport,
+  buildSubjectiveDimensions,
   buildTimeAllocation,
   buildWeeklyDelta,
   computeTargetGap,
@@ -52,7 +53,7 @@ import {
 import { CausalTab, ForecastTab, LeverageTab, SimulationTab, StrategyTab } from './InsightsPage';
 import { ALL_TRANSFERS, TRANSFER_STRENGTH_LABEL } from '../domain/abilityTransfer';
 import { ERROR_CATEGORY_LABEL, SUBJECT_LABEL } from '../domain/types';
-import type { AbilityGap, ExamRegistration, Subject, TrainingRecord } from '../domain/types';
+import type { AbilityGap, ExamRegistration, Subject, SubjectiveAnswer, TrainingRecord } from '../domain/types';
 import { getAnalyticsCopy } from '../domain/analyticsCopy';
 import { getInsightsCopy } from '../domain/insightsCopy';
 
@@ -68,12 +69,21 @@ type Tab = 'overview' | 'modules' | 'roi' | 'strategy';
 
 const WINDOW_OPTIONS: TimeWindow[] = ['7d', '30d', '90d', 'all'];
 
+/** 申论四维评分展示顺序与文案 */
+const SUBJECTIVE_DIM_LABEL: Array<{ key: 'points' | 'structure' | 'language' | 'logic'; label: string }> = [
+  { key: 'points', label: '要点' },
+  { key: 'structure', label: '结构' },
+  { key: 'language', label: '语言' },
+  { key: 'logic', label: '逻辑' },
+];
+
 export function AnalyticsPage() {
   const { prefs } = useAppSession();
   const [tab, setTab] = useState<Tab>('overview');
   const [trainings, setTrainings] = useState<TrainingRecord[]>([]);
   const [gaps, setGaps] = useState<AbilityGap[]>([]);
   const [registrations, setRegistrations] = useState<ExamRegistration[]>([]);
+  const [subjectiveAnswers, setSubjectiveAnswers] = useState<SubjectiveAnswer[]>([]);
   const [subject, setSubject] = useState<Subject>(prefs.subjects[0] ?? 'math');
   const [windowKey, setWindowKey] = useState<TimeWindow>(DEFAULT_TIME_WINDOW);
 
@@ -85,10 +95,31 @@ export function AnalyticsPage() {
         prefs.currentStudentId ? list.filter((r) => r.studentId === prefs.currentStudentId) : list,
       ),
     );
+    // 只读：申论作答版本链，按当前学员过滤，切换学生不串数据
+    void getAllRecords('subjectiveAnswers').then((list) =>
+      setSubjectiveAnswers(
+        prefs.currentStudentId ? list.filter((r) => r.studentId === prefs.currentStudentId) : list,
+      ),
+    );
   }, [prefs.currentStudentId]);
 
   // 统一时间窗口：所有 Tab 共用
   const windowedTrainings = useMemo(() => filterByWindow(trainings, windowKey), [trainings, windowKey]);
+  // 申论作答只读汇总：题量按版本链根去重，窗口内作答次数与四维评分仅统计当前学员的申论记录
+  const shenlunAnswers = useMemo(
+    () => subjectiveAnswers.filter((r) => r.subject === 'shenlun'),
+    [subjectiveAnswers],
+  );
+  const windowedShenlun = useMemo(() => filterByWindow(shenlunAnswers, windowKey), [shenlunAnswers, windowKey]);
+  const subjectiveSummary = useMemo(
+    () => ({
+      questionCount: new Set(shenlunAnswers.map((r) => r.parentId ?? r.id)).size,
+      answerCount: shenlunAnswers.length,
+      windowCount: windowedShenlun.length,
+      dims: buildSubjectiveDimensions(windowedShenlun),
+    }),
+    [shenlunAnswers, windowedShenlun],
+  );
   // A1 口径：整卷+模块不重复计入（用于学科级指标）
   const aggregationTrainings = useMemo(() => selectAggregationRecords(windowedTrainings), [windowedTrainings]);
 
@@ -275,10 +306,67 @@ export function AnalyticsPage() {
             />
           </ResponsiveGrid>
 
+          {subject === 'shenlun' && (
+            <div className="card p-5 space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <FileText size={16} className="text-blue-600" />
+                  <h2 className="font-semibold text-slate-900">申论作答 · 只读汇总</h2>
+                </div>
+                <Link to="/subjective" className="text-xs text-blue-600 hover:underline">查看版本链 →</Link>
+              </div>
+              <ResponsiveGrid minItemWidth="150px" gap="0.75rem">
+                <StatCard
+                  label="题量（去重题目）"
+                  value={String(subjectiveSummary.questionCount)}
+                  hint="同一题的多版本合并为 1 题"
+                />
+                <StatCard
+                  label="作答次数（累计）"
+                  value={String(subjectiveSummary.answerCount)}
+                  hint="每次保存的答案版本计 1 次"
+                />
+                <StatCard
+                  label={withWindowLabel('窗口内作答', windowKey)}
+                  value={String(subjectiveSummary.windowCount)}
+                  hint={`按作答日期过滤 · ${TIME_WINDOW_LABEL[windowKey]}`}
+                />
+                <StatCard
+                  label="四维评分样本"
+                  value={String(subjectiveSummary.dims.samples)}
+                  hint="仅统计填写了维度分的作答"
+                />
+              </ResponsiveGrid>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                {SUBJECTIVE_DIM_LABEL.map(({ key, label }) => {
+                  const value = subjectiveSummary.dims.avg[key];
+                  return (
+                    <div key={key} className="rounded-lg bg-slate-50 px-3 py-2">
+                      <div className="text-xs text-slate-500">{label}</div>
+                      <div className="mt-1 flex items-center gap-2">
+                        {value === null ? (
+                          <span className="text-xs text-slate-400">暂无评分</span>
+                        ) : (
+                          <>
+                            <MasteryBar score={value} showLabel={false} className="flex-1" />
+                            <span className="text-xs text-slate-600">{value}</span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="text-xs text-slate-400 leading-relaxed">
+                只读自 subjectiveAnswers（当前学员 · 申论），不写入训练记录，不参与训练统计口径；缺失维度分不计入均值。
+              </div>
+            </div>
+          )}
+
           <div className="card p-4 text-xs text-slate-500 leading-relaxed">
             <b className="text-slate-700">口径说明</b>：掌握度 = 0.7 × 陌生题正确率 + 0.3 × 整体正确率（无陌生题样本退化为整体正确率）；
             模块层不套用该加权，统一称「模块正确率」；目标分只读报名记录 targetScore；时间窗口全站共用
-            {TIME_WINDOW_LABEL[windowKey]}。
+            {TIME_WINDOW_LABEL[windowKey]}。申论作答汇总只读自 subjectiveAnswers，不参与上述掌握度计算。
           </div>
 
           <div className="card p-5 space-y-4">
