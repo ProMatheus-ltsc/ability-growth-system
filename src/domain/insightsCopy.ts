@@ -59,7 +59,7 @@ const SENIOR: InsightsCopy = {
 
 const ADULT: InsightsCopy = {
   pageTitle: '深度洞察 · P2',
-  pageDescription: '智能训练策略推荐 · 收益预测 · 因果建模 · What-if 模拟 · 迁移杠杆点。基于历史数据的系统动力学分析。',
+  pageDescription: '智能训练策略推荐 · 收益预测 · 错因关联 · 迁移杠杆点。基于历史训练数据的分析。',
   strategyEmptyTitle: '数据不足以生成策略推荐',
   strategyEmptyDescription: '记录几次训练后系统将自动生成个性化训练策略',
   forecastEmptyTitle: '数据不足',
