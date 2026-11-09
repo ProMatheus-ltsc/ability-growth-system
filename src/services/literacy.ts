@@ -18,6 +18,7 @@ import type {
   LiteracyMeasurement,
   TrainingRecord,
 } from '../domain/types';
+import { selectValidRecords } from './analytics';
 
 export interface LiteracyDimensionSummary {
   dimension: LiteracyDimension;
@@ -32,12 +33,15 @@ export function deriveLiteracyProfile(
   trainings: TrainingRecord[],
   gaps: AbilityGap[],
 ): LiteracyDimensionSummary[] {
+  // 口径：素养指标大量按「训练次数/题量」统计，重复导入行与跨日期聚合行会让次数虚高，
+  // 因此统一先剔除 duplicate / derived（模块明细与整卷行不在此处理，按次数统计无需二选一）。
+  const countable = selectValidRecords(trainings);
   return [
-    deriveMetacognition(gradeLevel, trainings, gaps),
-    deriveTimeManagement(gradeLevel, trainings),
-    deriveInfoProcessing(gradeLevel, trainings, gaps),
-    deriveCriticalThinking(gradeLevel, trainings, gaps),
-    deriveCollaboration(gradeLevel, trainings),
+    deriveMetacognition(gradeLevel, countable, gaps),
+    deriveTimeManagement(gradeLevel, countable),
+    deriveInfoProcessing(gradeLevel, countable, gaps),
+    deriveCriticalThinking(gradeLevel, countable, gaps),
+    deriveCollaboration(gradeLevel, countable),
   ];
 }
 

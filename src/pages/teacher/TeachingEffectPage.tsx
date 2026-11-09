@@ -5,7 +5,7 @@ import { useToast } from '@shared/core';
 import { PageHeader } from '../../components/PageHeader';
 import { EmptyState } from '../../components/EmptyState';
 import { findTrainingsByStudent, getAllRecords, putRecord, deleteRecord } from '../../services/localDB';
-import { aggregateBySubject } from '../../services/analytics';
+import { aggregateBySubject, selectAggregationRecords } from '../../services/analytics';
 import type { StudentProfile, TeachingStrategy, TrainingRecord } from '../../domain/types';
 
 export function TeachingEffectPage() {
@@ -30,11 +30,12 @@ export function TeachingEffectPage() {
     const after = trainings.filter((t) => t.date >= s.startDate && (!s.endDate || t.date <= s.endDate));
 
     const compute = (arr: TrainingRecord[]) => {
-      if (arr.length === 0) return { avgMastery: 0, unfamiliarCorrectRate: 0 };
-      const stats = aggregateBySubject(arr);
+      const countable = selectAggregationRecords(arr);
+      if (countable.length === 0) return { avgMastery: 0, unfamiliarCorrectRate: 0 };
+      const stats = aggregateBySubject(countable);
       const avgMastery = stats.length === 0 ? 0 : Math.round(stats.reduce((a, b) => a + b.masteryScore, 0) / stats.length);
-      const uq = arr.filter((r) => r.isUnfamiliar).reduce((s, r) => s + r.totalQuestions, 0);
-      const ue = arr.filter((r) => r.isUnfamiliar).reduce((s, r) => s + r.errorCount, 0);
+      const uq = countable.filter((r) => r.isUnfamiliar).reduce((s, r) => s + r.totalQuestions, 0);
+      const ue = countable.filter((r) => r.isUnfamiliar).reduce((s, r) => s + r.errorCount, 0);
       return { avgMastery, unfamiliarCorrectRate: uq === 0 ? 0 : +((uq - ue) / uq).toFixed(2) };
     };
 

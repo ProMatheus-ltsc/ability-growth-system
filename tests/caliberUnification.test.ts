@@ -75,3 +75,59 @@ describe('口径统一 · 掌握度 / 目标 / 时间窗口', () => {
     expect(selectAggregationRecords(fullAndModuleTrainings)).toHaveLength(1);
   });
 });
+
+/**
+ * 2026-11-09 双算修复：duplicate / derived / full_paper 三级过滤。
+ * - duplicate（重复导入）与 derived（跨日期聚合）不进入任何聚合；
+ * - 同日期同科目优先取 full_paper，压制 module_detail；
+ * - 历史记录缺 aggregationRole 时按 scope 兼容映射，两者都缺失按独立记录保留。
+ */
+describe('双算过滤 · duplicate / derived / full_paper', () => {
+  const base = fullAndModuleTrainings[0];
+
+  it('duplicate 行不参与学科级与模块级聚合', () => {
+    const records = [
+      { ...base, id: 'dup-1', validity: 'duplicate' as const, totalQuestions: 79, errorCount: 10 },
+      { ...base, id: 'real-1', totalQuestions: 20, errorCount: 4 },
+    ];
+    const subjectLevel = selectAggregationRecords(records);
+    const moduleLevel = selectModuleLevelRecords(records);
+    expect(subjectLevel.map((r) => r.id)).toEqual(['real-1']);
+    expect(moduleLevel.map((r) => r.id)).toEqual(['real-1']);
+    expect(buildTimeAllocation(records).reduce((s, g) => s + g.totalMinutes, 0)).toBe(
+      (base.durationMinutes ?? 0) === 0 ? 0 : base.durationMinutes,
+    );
+  });
+
+  it('derived 聚合行不参与聚合与增长曲线（1,813 题的聚合行不能与原始行双算）', () => {
+    const records = [
+      { ...base, id: 'derived-1', aggregationRole: 'derived' as const, totalQuestions: 1813, correctCount: 0, errorCount: 1813 },
+      { ...base, id: 'real-1', totalQuestions: 100, correctCount: 50, errorCount: 50 },
+    ];
+    expect(selectAggregationRecords(records)).toHaveLength(1);
+    expect(selectModuleLevelRecords(records)).toHaveLength(1);
+    const series = buildGrowthSeries(records, base.subject);
+    expect(series).toHaveLength(1);
+    expect(series[0].score).toBe(50);
+  });
+
+  it('同日期同科目优先取 full_paper：无 examId 的整卷也压制同日同科目模块行', () => {
+    const records = [
+      { ...base, id: 'full-1', aggregationRole: 'full_paper' as const, totalQuestions: 100, correctCount: 50, errorCount: 50 },
+      { ...base, id: 'm-1', aggregationRole: 'module_detail' as const, totalQuestions: 20, correctCount: 18, errorCount: 2 },
+    ];
+    expect(selectAggregationRecords(records).map((r) => r.id)).toEqual(['full-1']);
+    // 模块口径反选：保留模块明细、排除整卷
+    expect(selectModuleLevelRecords(records).map((r) => r.id)).toEqual(['m-1']);
+  });
+
+  it('缺 aggregationRole 的历史记录按 scope 兼容映射，两者都缺时按独立记录保留', () => {
+    const legacyFull = { ...base, id: 'legacy-full', scope: 'full' as const, totalQuestions: 100, errorCount: 50 };
+    const legacyModule = { ...base, id: 'legacy-module', scope: 'module' as const, module: '资料分析', totalQuestions: 20, errorCount: 2 };
+    const standalone = { ...base, id: 'standalone', scope: 'single' as const, module: '言语理解', totalQuestions: 10, errorCount: 1 };
+
+    const records = [legacyFull, legacyModule, standalone];
+    expect(selectAggregationRecords(records).map((r) => r.id)).toEqual(['legacy-full', 'standalone']);
+    expect(selectModuleLevelRecords(records).map((r) => r.id)).toEqual(['legacy-module', 'standalone']);
+  });
+});

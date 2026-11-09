@@ -200,7 +200,7 @@ export function AnalyticsPage() {
               }
               hint={
                 weeklyDelta === null
-                  ? '暂无可对比的训练数据'
+                  ? '该周暂无整卷记录'
                   : weeklyDelta.previousWeek === null
                     ? '暂无上周对比'
                     : `本周正确率 ${weeklyDelta.currentAcc}% · 上周 ${weeklyDelta.previousAcc}%`

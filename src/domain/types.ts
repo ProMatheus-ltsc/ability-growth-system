@@ -191,6 +191,15 @@ export const PAPER_TYPE_OPTIONS: readonly PaperType[] = [
 /** 训练记录粒度：整卷 / 模块 / 单条 */
 export type TrainingScope = 'full' | 'module' | 'single';
 
+/**
+ * 聚合角色（数据侧写入的显式标记）：
+ * - `full_paper`：整卷权威行；
+ * - `module_detail`：同一份卷的模块明细行；
+ * - `derived`：跨日期 topic 聚合行，不参与任何求和/计数。
+ * 历史记录可能没有该字段，由 analytics 的 `resolveAggregationRole` 按 `scope` 兼容映射。
+ */
+export type TrainingAggregationRole = 'full_paper' | 'module_detail' | 'derived';
+
 /** 能力缺口状态流转历史 */
 export interface GapStatusHistoryItem {
   status: 'unresolved' | 'in-progress' | 'verified';
@@ -234,6 +243,13 @@ export interface TrainingRecord {
   /** 外部题库/练习的精确关联键（禁止按卷名模糊匹配） */
   sourceId?: string;
   exerciseId?: string;
+  /**
+   * 数据有效性：`duplicate` 表示重复导入行，任何统计、计数、用时求和都应排除；
+   * 缺省视为正常记录（历史记录不会因为没打标记而被丢掉）。
+   */
+  validity?: 'valid' | 'duplicate';
+  /** 聚合角色，缺省时按 `scope` 兼容映射，见 TrainingAggregationRole */
+  aggregationRole?: TrainingAggregationRole;
 }
 
 /** 题型标签聚合（labelStats）

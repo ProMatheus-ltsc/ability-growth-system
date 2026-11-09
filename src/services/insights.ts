@@ -286,7 +286,7 @@ export function simulateStrategy(
   input: SimulationInput,
   targetScore?: number,
 ): SimulationResult {
-  const scoped = records.filter((r) => r.subject === subject);
+  const scoped = selectAggregationRecords(records).filter((r) => r.subject === subject);
   const forecast = forecastGrowth(records, subject, targetScore);
 
   const roi = analyzeTrainingROI(scoped);

@@ -121,21 +121,65 @@ export function aggregateBySubject(rawRecords: TrainingRecord[]): SubjectStats[]
 /** ============ F-03 / A1 整卷与模块不重复聚合 ============ */
 
 /**
+ * 记录级「有效性与聚合角色」的唯一判定入口（2026-11-09 双算修复）。
+ *
+ * 三级过滤规则：
+ * 1. `validity === 'duplicate'`：重复导入行，任何统计/计数/用时求和都排除；
+ *    缺省时视为正常记录（历史数据没打标记不代表重复）。
+ * 2. `aggregationRole === 'derived'`：跨日期 topic 聚合行，不参与任何聚合，
+ *    否则会与原始行双算（该批 43 行带 1,813 题）。
+ * 3. 同日期同科目优先取整卷：`full_paper` 压制同日同科目的 `module_detail`。
+ */
+export type ResolvedAggregationRole = 'full_paper' | 'module_detail' | 'derived' | 'standalone';
+
+/**
+ * 解析聚合角色。
+ * 优先读显式 `aggregationRole`；历史记录缺该字段时按已有 `scope` 兼容映射
+ * （full→full_paper、module→module_detail）；两者都缺失视为 `standalone`。
+ *
+ * 缺失字段的处理理由：既不默认整卷（会误压同日的模块明细），也不默认排除
+ * （历史记录占多数且是真实训练，排除会凭空丢数据），而是作为独立记录原样参与聚合。
+ */
+export function resolveAggregationRole(record: TrainingRecord): ResolvedAggregationRole {
+  if (record.aggregationRole === 'derived') return 'derived';
+  if (record.aggregationRole === 'full_paper') return 'full_paper';
+  if (record.aggregationRole === 'module_detail') return 'module_detail';
+  if (record.scope === 'full') return 'full_paper';
+  if (record.scope === 'module') return 'module_detail';
+  return 'standalone';
+}
+
+/** 仅保留可参与统计的记录：排除重复导入行与跨日期聚合行 */
+export function selectValidRecords(records: TrainingRecord[]): TrainingRecord[] {
+  return records.filter(
+    (r) => r.validity !== 'duplicate' && resolveAggregationRole(r) !== 'derived',
+  );
+}
+
+const dateSubjectKey = (r: TrainingRecord) => `${r.date}::${r.subject}`;
+
+/**
  * 学科级聚合去重：
- * - 无 examId 的记录原样保留（老数据）；
- * - 同一 examId 存在 scope='full' 时排除该 examId 下全部模块行，只保留整卷行；
- * - 同一 examId 无整卷行时保留模块行累加；
- * - scope 缺失但有 examId 视为 module；scope='full' 但无 examId 的按无 examId 处理。
+ * - 先剔除 `duplicate` 与 `derived`；
+ * - 同日期同科目存在整卷行时，该日期该科目的模块行全部排除，只保留整卷行；
+ *   有 examId 时同样保证同一份卷的整卷压制模块；
+ * - 无整卷的模块行照常保留累加（不能因为没勾选双写就丢模块数据）；
+ * - 缺 aggregationRole 且缺 scope 的老记录按独立记录保留。
  */
 export function selectAggregationRecords(records: TrainingRecord[]): TrainingRecord[] {
+  const valid = selectValidRecords(records);
   const fullByExam = new Set<string>();
-  for (const r of records) {
-    if (r.examId && r.scope === 'full') fullByExam.add(r.examId);
+  const fullByDateSubject = new Set<string>();
+  for (const r of valid) {
+    if (resolveAggregationRole(r) !== 'full_paper') continue;
+    if (r.examId) fullByExam.add(r.examId);
+    fullByDateSubject.add(dateSubjectKey(r));
   }
-  return records.filter((r) => {
-    if (!r.examId) return true;
-    if (r.scope === 'full') return true;
-    return !fullByExam.has(r.examId);
+  return valid.filter((r) => {
+    const role = resolveAggregationRole(r);
+    if (role !== 'module_detail') return true;
+    if (r.examId && fullByExam.has(r.examId)) return false;
+    return !fullByDateSubject.has(dateSubjectKey(r));
   });
 }
 
@@ -143,18 +187,26 @@ export function selectAggregationRecords(records: TrainingRecord[]): TrainingRec
 
 /**
  * 模块级去重（F-03 模块口径）：
- * 同一 examId 同时存在整卷行与模块行时排除整卷行，保留模块明细（否则模块时间/题量明细会消失）；
- * 只有整卷行（未勾选双写）时保留整卷行，避免整卷数据整体丢失。
+ * - 先剔除 `duplicate` 与 `derived`；
+ * - 同日期同科目（或同一 examId）存在模块明细时排除整卷行，保留模块明细，
+ *   否则模块时间/题量明细会消失；
+ * - 只有整卷行（未勾选双写）时保留整卷行，避免整卷数据整体丢失。
  * 时间分配、模块统计、雷达的模块兜底统一使用本函数。
  */
 export function selectModuleLevelRecords(records: TrainingRecord[]): TrainingRecord[] {
-  const examIdsWithModules = new Set<string>();
-  for (const r of records) {
-    if (r.examId && r.scope === 'module') examIdsWithModules.add(r.examId);
+  const valid = selectValidRecords(records);
+  const modulesByExam = new Set<string>();
+  const modulesByDateSubject = new Set<string>();
+  for (const r of valid) {
+    if (resolveAggregationRole(r) !== 'module_detail') continue;
+    if (r.examId) modulesByExam.add(r.examId);
+    modulesByDateSubject.add(dateSubjectKey(r));
   }
-  return records.filter(
-    (r) => !(r.examId && r.scope === 'full' && examIdsWithModules.has(r.examId)),
-  );
+  return valid.filter((r) => {
+    if (resolveAggregationRole(r) !== 'full_paper') return true;
+    if (r.examId && modulesByExam.has(r.examId)) return false;
+    return !modulesByDateSubject.has(dateSubjectKey(r));
+  });
 }
 
 export interface ModuleStatsItem {
