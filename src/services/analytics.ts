@@ -50,6 +50,21 @@ export function computeMasteryScore(
   );
 }
 
+/**
+ * 一组记录的统一掌握度（0-100）。
+ * 与 `aggregateBySubject` 完全同一公式：先汇总题数/错误/陌生题样本，再套 `computeMasteryScore`。
+ * 供 ROI、退步检测等「按时间段比较」的场景使用，避免与学科掌握度出现两套口径。
+ */
+export function pooledMasteryScore(records: TrainingRecord[]): number {
+  const q = records.reduce((s, r) => s + r.totalQuestions, 0);
+  const err = records.reduce((s, r) => s + r.errorCount, 0);
+  const correctRate = q === 0 ? 0 : (q - err) / q;
+  const unfamiliar = records.filter((r) => r.isUnfamiliar);
+  const uq = unfamiliar.reduce((s, r) => s + r.totalQuestions, 0);
+  const uerr = unfamiliar.reduce((s, r) => s + r.errorCount, 0);
+  return computeMasteryScore(correctRate, uq === 0 ? null : (uq - uerr) / uq);
+}
+
 export interface SubjectStats {
   subject: Subject;
   totalQuestions: number;
@@ -654,6 +669,52 @@ export function buildSubjectiveDimensions(records: SubjectiveAnswer[]): Subjecti
   return { samples: scoped.length, avg, weakest: ranked[0] ?? null };
 }
 
+export interface SubjectiveMastery {
+  /** 0-100 掌握度 */
+  score: number | null;
+  /** rating: 四维评分均值；training: 无任何维度分时退回训练记录；none: 两处都没有样本 */
+  source: 'rating' | 'training' | 'none';
+  /** 有维度分的作答数 */
+  ratedCount: number;
+  /** 该次作答没有维度分、退回训练记录的作答数（仅用于提示） */
+  unratedCount: number;
+  dims: SubjectiveDimensionSummary;
+}
+
+/**
+ * 申论掌握度口径（2026-11-09 统一）：
+ * 1. 优先用 `subjectiveAnswers` 的四维评分：取各维均值的平均数（有分的维度才参与）；
+ * 2. 完全没有维度分时，退回该学科训练记录的掌握度（`aggregateBySubject` 同口径）；
+ * 3. 两处都无样本时返回 null，由页面显示空态，不伪造数字。
+ *
+ * 注意：这里只读两个 store，不写入、不生成副本，也不改变训练记录统计。
+ */
+export function buildSubjectiveMastery(
+  answers: SubjectiveAnswer[],
+  trainings: TrainingRecord[],
+): SubjectiveMastery {
+  const dims = buildSubjectiveDimensions(answers);
+  if (dims.samples > 0) {
+    const values = DIMENSION_KEYS.map((k) => dims.avg[k]).filter((v): v is number => v !== null);
+    const avg = values.length === 0 ? null : values.reduce((s, v) => s + v, 0) / values.length;
+    return {
+      score: avg === null ? null : Math.round(avg * 10) / 10,
+      source: 'rating',
+      ratedCount: dims.samples,
+      unratedCount: answers.length - dims.samples,
+      dims,
+    };
+  }
+  const stats = aggregateBySubject(trainings).find((s) => s.subject === 'shenlun');
+  return {
+    score: stats ? stats.masteryScore : null,
+    source: stats ? 'training' : 'none',
+    ratedCount: 0,
+    unratedCount: answers.length,
+    dims,
+  };
+}
+
 export function calcErrorRecurrence(
   records: TrainingRecord[],
   category: ErrorCategory,
@@ -794,13 +855,9 @@ export function analyzeTrainingROI(records: TrainingRecord[]): TrainingROI[] {
     const half = Math.floor(sorted.length / 2);
     const early = sorted.slice(0, half);
     const late = sorted.slice(half);
-    const rate = (arr: TrainingRecord[]) => {
-      const q = arr.reduce((s, r) => s + r.totalQuestions, 0);
-      const err = arr.reduce((s, r) => s + r.errorCount, 0);
-      return q === 0 ? 0 : ((q - err) / q) * 100;
-    };
+    // 口径统一：早期/晚期都用统一掌握度（含陌生题加权），不再用原始正确率
     const hours = list.reduce((s, r) => s + (r.durationMinutes ?? 0), 0) / 60;
-    const delta = rate(late) - rate(early);
+    const delta = pooledMasteryScore(late) - pooledMasteryScore(early);
     rois.push({
       trainingType: type,
       label: TRAINING_TYPE_LABEL[type],
@@ -924,18 +981,13 @@ export function computeWarnings(
       reason += ` · 累计 ${unresolved.length} 个未修复能力缺口`;
     }
 
-    // 能力退步检测: 近半月正确率 vs 之前半月
+    // 能力退步检测: 近半月 vs 之前半月的统一掌握度（与学科掌握度同口径，阈值 5 分）
     const twoWeeksAgo = new Date();
     twoWeeksAgo.setDate(twoWeeksAgo.getDate() - 14);
     const recent = scoped.filter((r) => new Date(r.date) >= twoWeeksAgo);
     const earlier = scoped.filter((r) => new Date(r.date) < twoWeeksAgo);
     if (recent.length > 3 && earlier.length > 3) {
-      const rate = (arr: TrainingRecord[]) => {
-        const q = arr.reduce((s, r) => s + r.totalQuestions, 0);
-        const e = arr.reduce((s, r) => s + r.errorCount, 0);
-        return q === 0 ? 0 : (q - e) / q;
-      };
-      if (rate(recent) - rate(earlier) < -0.05) {
+      if (pooledMasteryScore(recent) - pooledMasteryScore(earlier) < -5) {
         level = 'high';
         reason = '近两周能力有退步趋势';
       }

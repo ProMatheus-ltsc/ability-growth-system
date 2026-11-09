@@ -33,6 +33,7 @@ import {
   buildModuleStats,
   buildStageReport,
   buildSubjectiveDimensions,
+  buildSubjectiveMastery,
   buildTimeAllocation,
   buildWeeklyDelta,
   computeTargetGap,
@@ -134,11 +135,27 @@ export function AnalyticsPage() {
 
   const weeklyDelta = useMemo(() => buildWeeklyDelta(aggregationTrainings, subject), [aggregationTrainings, subject]);
   const timed = useMemo(() => timedComplianceRate(aggregationTrainings), [aggregationTrainings]);
-  // 目标分差只按当前选中学科统计（与页头学科切换保持一致）
-  const targetGap = useMemo(
-    () => computeTargetGap(subjectStats ? [subjectStats] : [], targetScore),
-    [subjectStats, targetScore],
+  // 申论掌握度：优先四维评分均值，完全没有维度分时才退回训练记录正确率
+  const shenlunMastery = useMemo(
+    () => buildSubjectiveMastery(windowedShenlun, windowedTrainings),
+    [windowedShenlun, windowedTrainings],
   );
+  // 目标分差只按当前选中学科统计（与页头学科切换保持一致）
+  // 申论若已有四维评分，用四维均值作为「当前」，与申论掌握度口径保持一致
+  const targetGap = useMemo(() => {
+    const base = computeTargetGap(subjectStats ? [subjectStats] : [], targetScore);
+    if (
+      subject !== 'shenlun' ||
+      base === null ||
+      shenlunMastery.source !== 'rating' ||
+      shenlunMastery.score === null
+    ) {
+      return base;
+    }
+    const current = Math.round(shenlunMastery.score);
+    const gap = +(base.target - current).toFixed(1);
+    return { ...base, current, gap, reached: gap <= 0, sampleQuestions: shenlunMastery.ratedCount };
+  }, [subject, subjectStats, targetScore, shenlunMastery]);
   const moduleStats = useMemo(() => buildModuleStats(windowedTrainings), [windowedTrainings]);
   const weakestModule = useMemo(() => {
     const list = moduleStats
@@ -289,7 +306,11 @@ export function AnalyticsPage() {
                 hint={
                   targetGap.current === null
                     ? `目标 ${targetGap.target}%${targetPlan?.examDate ? ` · 考试 ${targetPlan.examDate}` : ''} · 有效样本 0 题（缺失不当 0 分）`
-                    : `有效样本 ${targetGap.sampleQuestions} 题 · 当前 ${targetGap.current}% · 目标 ${targetGap.target}%（掌握度口径，非卷面分）${targetPlan?.examDate ? ` · 考试 ${targetPlan.examDate}` : ''}`
+                    : `有效样本 ${targetGap.sampleQuestions} ${subject === 'shenlun' && shenlunMastery.source === 'rating' ? '份评分' : '题'} · 当前 ${targetGap.current}% · 目标 ${targetGap.target}%${
+                        subject === 'shenlun' && shenlunMastery.source === 'rating'
+                          ? '（申论口径：四维评分均值）'
+                          : '（掌握度口径，非卷面分）'
+                      }${targetPlan?.examDate ? ` · 考试 ${targetPlan.examDate}` : ''}`
                 }
                 accentClassName={targetGap.reached ? 'text-emerald-600' : 'text-orange-600'}
               />
@@ -316,6 +337,18 @@ export function AnalyticsPage() {
                 <Link to="/subjective" className="text-xs text-blue-600 hover:underline">查看版本链 →</Link>
               </div>
               <ResponsiveGrid minItemWidth="150px" gap="0.75rem">
+                <StatCard
+                  label="申论掌握度"
+                  value={shenlunMastery.score === null ? '暂无样本' : `${shenlunMastery.score}%`}
+                  hint={
+                    shenlunMastery.source === 'rating'
+                      ? `四维评分均值 · ${shenlunMastery.ratedCount} 份评分${shenlunMastery.unratedCount > 0 ? ` · 另有 ${shenlunMastery.unratedCount} 份无维度分` : ''}`
+                      : shenlunMastery.source === 'training'
+                        ? '无维度评分，退回训练记录正确率'
+                        : '尚无申论作答或训练记录'
+                  }
+                  accentClassName="text-blue-600"
+                />
                 <StatCard
                   label="题量（去重题目）"
                   value={String(subjectiveSummary.questionCount)}
@@ -365,8 +398,10 @@ export function AnalyticsPage() {
 
           <div className="card p-4 text-xs text-slate-500 leading-relaxed">
             <b className="text-slate-700">口径说明</b>：掌握度 = 0.7 × 陌生题正确率 + 0.3 × 整体正确率（无陌生题样本退化为整体正确率）；
-            模块层不套用该加权，统一称「模块正确率」；目标分只读报名记录 targetScore；时间窗口全站共用
-            {TIME_WINDOW_LABEL[windowKey]}。申论作答汇总只读自 subjectiveAnswers，不参与上述掌握度计算。
+            训练 ROI 与退步检测已统一使用该掌握度（不再使用原始正确率）；模块层不套用该加权，统一称「模块正确率」；
+            目标分只读报名记录 targetScore；时间窗口全站共用{TIME_WINDOW_LABEL[windowKey]}。
+            申论掌握度优先取 subjectiveAnswers 的四维评分均值，完全没有维度分时才退回训练记录正确率，页面上会标明当前是哪种来源；
+            申论作答汇总只读，不写入训练记录，也不参与非申论学科的掌握度计算。
           </div>
 
           <div className="card p-5 space-y-4">
