@@ -1167,6 +1167,11 @@ export interface SubjectivePaperQuestion {
   questionKey?: string;
   /** 该题四维评分；缺省时继承整卷四维评分 */
   dimensionScores?: SubjectiveDimensionScores;
+  /**
+   * 该题失分原因（申论错因枚举，可空）。
+   * 题目级非空时优先于整卷级；老套卷没有该字段 → 记为「未记录错因」，不影响其他展示。
+   */
+  errorCategories?: ErrorCategory[];
 }
 
 /** 申论四维评分（0-100，可空） */
@@ -1188,6 +1193,19 @@ export const SHENLUN_QUESTION_TYPES = [
 ] as const;
 
 export type ShenlunQuestionType = (typeof SHENLUN_QUESTION_TYPES)[number];
+
+/** 申论错因枚举（复用训练记录申论学科的错因值，申论作答与历史训练记录共用同一套） */
+export const SHENLUN_ERROR_CATEGORIES = [
+  'point',
+  'accuracy',
+  'read',
+  'structure',
+  'argument',
+  'language',
+  'format',
+  'wordcount',
+  'time',
+] as const;
 
 /** 老记录/老套卷缺题型时的展示名，且不参与题型聚合 */
 export const UNCLASSIFIED_QUESTION_TYPE = '未分类';
@@ -1242,7 +1260,43 @@ export interface SubjectiveAnswer {
   answeredAt?: string;
   /** 申论/面试四维评分（0-100，可空） */
   dimensionScores?: SubjectiveDimensionScores;
+  /**
+   * 失分原因（申论错因枚举，可空）。
+   * 单题：本题失分原因；套卷：整卷统一失分原因，题目级非空时优先。
+   * 老记录没有该字段 → 「未记录错因」，不参与错因聚合但数据完整保留。
+   */
+  errorCategories?: ErrorCategory[];
 }
+
+/** 面试题型枚举（沿用仓库现有术语，并补充无领导小组 / 材料题 / 其他） */
+export const INTERVIEW_QUESTION_TYPES = [
+  '综合分析',
+  '计划组织',
+  '人际关系',
+  '应急应变',
+  '情境模拟',
+  '自我认知',
+  '无领导小组',
+  '材料题',
+  '其他',
+] as const;
+
+export type InterviewQuestionType = (typeof INTERVIEW_QUESTION_TYPES)[number];
+
+/** 面试专用失分原因枚举（不复用申论错因，存于 InterviewRecord.errorTags） */
+export const INTERVIEW_ERROR_CATEGORIES = [
+  '表达不清',
+  '逻辑断层',
+  '内容空洞',
+  '时间失控',
+  '礼仪问题',
+  '审题偏差',
+  '其他',
+] as const;
+
+export type InterviewErrorTag = (typeof INTERVIEW_ERROR_CATEGORIES)[number];
+
+export const UNCLASSIFIED_INTERVIEW_TYPE = '未分类';
 
 /** §15.1 面试专项训练记录 - 音视频与思考/答题时间 */
 export interface InterviewRecord {
@@ -1267,7 +1321,22 @@ export interface InterviewRecord {
   };
   audioDataUrl?: string;
   videoDataUrl?: string;
+  /** 历史通用错因标签（保留兼容，新面试记录不再写入，改用 errorTags） */
   problemTags: ErrorCategory[];
+  /**
+   * 以下为 2026-11-09 面试结构化整合新增的可选字段，老记录没有也照常可读可编辑。
+   * 题目身份：试卷/题目来源 + 年份 + 题号 → questionKey，用于自动版本链。
+   */
+  answeredAt?: string;
+  paperSource?: string;
+  paperYear?: string;
+  questionNo?: string;
+  questionKey?: string;
+  /** 面试专用失分原因（INTERVIEW_ERROR_CATEGORIES） */
+  errorTags?: string[];
+  /** 自动版本链：由同 questionKey 的历史记录推导，无需手动指定 */
+  parentId?: string;
+  version?: number;
   createdAt: string;
   updatedAt: string;
 }

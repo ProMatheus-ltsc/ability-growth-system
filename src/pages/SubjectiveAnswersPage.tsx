@@ -10,23 +10,28 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { v4 as uuid } from 'uuid';
-import { FileText, PlusCircle, Trash2, X, ArrowRight, History, Layers } from 'lucide-react';
+import { FileText, PlusCircle, Trash2, X, ArrowRight, History, Layers, AlertCircle } from 'lucide-react';
 import { EmptyState as CoreEmptyState, ResponsiveGrid, StatCard, useToast } from '@shared/core';
 import { PageHeader } from '../components/PageHeader';
 import { EmptyState } from '../components/EmptyState';
 import { useAppSession } from '../hooks/useAppSession';
-import { getAllRecords, putRecord, deleteRecord } from '../services/localDB';
+import { getAllRecords, putRecord, deleteRecord, findTrainingsByStudent } from '../services/localDB';
 import {
   buildSubjectiveByType,
   buildSubjectiveComposition,
   buildSubjectiveDimensions,
+  buildSubjectiveErrorStats,
   buildSubjectiveQuestionHistory,
 } from '../services/analytics';
 import {
+  ERROR_CATEGORY_LABEL,
+  SHENLUN_ERROR_CATEGORIES,
   SHENLUN_QUESTION_TYPES,
+  type ErrorCategory,
   type SubjectiveAnswer,
   type SubjectiveDimensionScores,
   type SubjectivePaperQuestion,
+  type TrainingRecord,
 } from '../domain/types';
 import {
   displayQuestionType,
@@ -35,7 +40,6 @@ import {
   toAnsweredAtIso,
 } from '../domain/subjectiveQuestion';
 
-type ShenlunOrMianshi = 'shenlun' | 'mianshi';
 type AnswerMode = 'single' | 'paper';
 type ModeFilter = 'all' | AnswerMode;
 type View = 'records' | 'questions';
@@ -60,6 +64,7 @@ export function SubjectiveAnswersPage() {
   const { prefs } = useAppSession();
   const { showToast } = useToast();
   const [list, setList] = useState<SubjectiveAnswer[]>([]);
+  const [trainings, setTrainings] = useState<TrainingRecord[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [parent, setParent] = useState<SubjectiveAnswer | null>(null);
   const [modeFilter, setModeFilter] = useState<ModeFilter>('all');
@@ -73,6 +78,10 @@ export function SubjectiveAnswersPage() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    void findTrainingsByStudent(prefs.currentStudentId).then(setTrainings);
+  }, [prefs.currentStudentId]);
 
   const grouped = useMemo(() => {
     // 按 rootId 分组, 每组按 version 排序（兼容老数据的手动版本链）
@@ -95,15 +104,22 @@ export function SubjectiveAnswersPage() {
     return Array.from(rootMap.values()).map((chain) => chain.sort((a, b) => a.version - b.version));
   }, [list]);
 
-  const composition = useMemo(() => buildSubjectiveComposition(list), [list]);
-  const dimensionSummary = useMemo(() => buildSubjectiveDimensions(list), [list]);
-  const typeStats = useMemo(() => buildSubjectiveByType(list), [list]);
-  const questionHistory = useMemo(() => buildSubjectiveQuestionHistory(list), [list]);
+  // 统计只算申论作答；历史「面试」subject 记录仅在列表中原样展示，不混入申论口径
+  const shenlunList = useMemo(() => list.filter((r) => r.subject === 'shenlun'), [list]);
+  const composition = useMemo(() => buildSubjectiveComposition(shenlunList), [shenlunList]);
+  const dimensionSummary = useMemo(() => buildSubjectiveDimensions(shenlunList), [shenlunList]);
+  const typeStats = useMemo(() => buildSubjectiveByType(shenlunList), [shenlunList]);
+  const questionHistory = useMemo(() => buildSubjectiveQuestionHistory(shenlunList), [shenlunList]);
+  // 错因：新作答 + 历史申论训练记录只读合并（不迁移、不回写）
+  const errorStats = useMemo(
+    () => buildSubjectiveErrorStats(shenlunList, trainings),
+    [shenlunList, trainings],
+  );
   const unclassifiedCount = useMemo(
-    () => list.filter((r) => r.mode === 'paper'
+    () => shenlunList.filter((r) => r.mode === 'paper'
       ? (r.paperQuestions ?? []).some((q) => !q.questionType?.trim())
       : !r.questionType?.trim()).length,
-    [list],
+    [shenlunList],
   );
 
   const visibleChains = useMemo(
@@ -216,6 +232,84 @@ export function SubjectiveAnswersPage() {
         </div>
       </div>
 
+      <div className="card p-4">
+        <div className="flex flex-wrap items-center gap-2 mb-3">
+          <AlertCircle size={16} className="text-red-500" />
+          <h2 className="font-semibold text-slate-900">错因分析（申论）</h2>
+          <span className="text-xs text-slate-400">
+            错因选择 {errorStats.selections} 次 · 新作答 {errorStats.answerSelections} 次 / 历史训练记录{' '}
+            {errorStats.trainingSelections} 次
+          </span>
+        </div>
+        {errorStats.selections === 0 ? (
+          <div className="text-sm text-slate-500">
+            暂无错因记录。申论单题与套卷分题都可以选「失分原因」，历史申论训练记录里的错因会自动并入这里（只读，不修改原记录）。
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div>
+              <div className="text-xs font-medium text-slate-700 mb-2">按错因（含历史训练记录）</div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="text-left text-slate-500 border-b border-slate-100">
+                      <th className="py-1.5">错因</th>
+                      <th className="py-1.5 text-right">次数</th>
+                      <th className="py-1.5 text-right">占比</th>
+                      <th className="py-1.5 text-right">新作答</th>
+                      <th className="py-1.5 text-right">历史训练</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {errorStats.rows.map((r) => (
+                      <tr key={r.category} className="border-b border-slate-50">
+                        <td className="py-1.5 text-slate-700">{ERROR_CATEGORY_LABEL[r.category]}</td>
+                        <td className="py-1.5 text-right">{r.count}</td>
+                        <td className="py-1.5 text-right text-slate-500">{r.share}%</td>
+                        <td className="py-1.5 text-right">{r.answerCount}</td>
+                        <td className="py-1.5 text-right text-slate-500">{r.trainingCount}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div>
+              <div className="text-xs font-medium text-slate-700 mb-2">题型 × 错因（主要失分原因）</div>
+              {errorStats.byType.length === 0 ? (
+                <div className="text-xs text-slate-500">还没有同时记录「题型 + 错因」的数据。</div>
+              ) : (
+                <div className="space-y-2">
+                  {errorStats.byType.map((t) => (
+                    <div key={t.questionType} className="border border-slate-100 rounded p-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-medium text-slate-700">{t.questionType}</span>
+                        <span className="text-xs text-slate-400">有错因 {t.attempts} 次</span>
+                      </div>
+                      <div className="flex flex-wrap gap-1 mt-1">
+                        {t.counts.slice(0, 4).map((c) => (
+                          <span key={c.category} className="badge bg-red-50 text-red-600">
+                            {ERROR_CATEGORY_LABEL[c.category]} ×{c.count}
+                          </span>
+                        ))}
+                        {t.counts.length > 4 && (
+                          <span className="text-xs text-slate-400">+{t.counts.length - 4} 种</span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+        <div className="text-xs text-slate-400 mt-2 leading-relaxed">
+          统计口径：新作答按题目计次（套卷整卷级错因会摊到每道分题，题目级错因优先）；历史申论训练记录的「错因」在读取时合并，
+          不迁移、不回写、不修改原记录；未记录错因 {errorStats.untaggedEntries} 条（含继承整卷错因 {errorStats.inheritedEntries} 条）
+          不影响其他展示；历史训练记录只有题型命中申论枚举时才参与「题型 × 错因」右侧交叉。
+        </div>
+      </div>
+
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-2">
           {([
@@ -275,7 +369,7 @@ export function SubjectiveAnswersPage() {
                         {isPaper ? '套卷' : '单题'}
                       </span>
                       <span className="font-medium truncate">
-                        {head.subject === 'shenlun' ? '申论' : '面试'} ·{' '}
+                        {head.subject === 'shenlun' ? '申论' : '面试（历史记录）'} ·{' '}
                         {isPaper ? head.paperSource || head.paperTitle || head.scenario : head.scenario}
                       </span>
                       {isPaper && head.paperQuestionCount ? (
@@ -290,15 +384,19 @@ export function SubjectiveAnswersPage() {
                         : ''}
                     </div>
                   </div>
-                  <button
-                    className="btn-secondary text-xs shrink-0"
-                    onClick={() => {
-                      setParent(chain[chain.length - 1]);
-                      setShowForm(true);
-                    }}
-                  >
-                    <ArrowRight size={12} /> 追加修订版
-                  </button>
+                  {head.subject === 'shenlun' ? (
+                    <button
+                      className="btn-secondary text-xs shrink-0"
+                      onClick={() => {
+                        setParent(chain[chain.length - 1]);
+                        setShowForm(true);
+                      }}
+                    >
+                      <ArrowRight size={12} /> 追加修订版
+                    </button>
+                  ) : (
+                    <span className="text-xs text-slate-400 shrink-0">面试已统一到「面试记录」页</span>
+                  )}
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   {chain.map((v) => (
@@ -359,6 +457,41 @@ export function SubjectiveAnswersPage() {
                           </span>
                         ))}
                       </div>
+                      {(() => {
+                        const recordCauses = v.errorCategories ?? [];
+                        const questionCauses = (v.paperQuestions ?? []).filter(
+                          (q) => (q.errorCategories?.length ?? 0) > 0,
+                        );
+                        if (recordCauses.length === 0 && questionCauses.length === 0) {
+                          return <div className="text-xs text-slate-400 mt-1">未记录错因</div>;
+                        }
+                        return (
+                          <div className="mt-1 space-y-1">
+                            {recordCauses.length > 0 && (
+                              <div className="flex flex-wrap items-center gap-1">
+                                <span className="text-xs text-slate-400">
+                                  {modeOf(v) === 'paper' ? '整卷统一错因：' : '错因：'}
+                                </span>
+                                {recordCauses.map((c) => (
+                                  <span key={c} className="badge bg-red-50 text-red-600">
+                                    {ERROR_CATEGORY_LABEL[c]}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                            {questionCauses.map((q) => (
+                              <div key={`cause-${q.no}`} className="flex flex-wrap items-center gap-1">
+                                <span className="text-xs text-slate-400">第 {q.no} 题：</span>
+                                {q.errorCategories?.map((c) => (
+                                  <span key={c} className="badge bg-red-50 text-red-600">
+                                    {ERROR_CATEGORY_LABEL[c]}
+                                  </span>
+                                ))}
+                              </div>
+                            ))}
+                          </div>
+                        );
+                      })()}
                       {v.teacherFeedback && (
                         <div className="text-xs text-emerald-700 mt-1"><b>教师评语:</b> {v.teacherFeedback}</div>
                       )}
@@ -446,6 +579,21 @@ function QuestionHistoryView({ history }: { history: ReturnType<typeof buildSubj
                   {e.content && (
                     <div className="text-slate-700 whitespace-pre-wrap mt-1 max-h-40 overflow-y-auto">{e.content}</div>
                   )}
+                  <div className="flex flex-wrap items-center gap-1 mt-1">
+                    {e.errorCategories.length === 0 ? (
+                      <span className="text-slate-400">未记录错因</span>
+                    ) : (
+                      <>
+                        <span className="text-slate-400">错因：</span>
+                        {e.errorCategories.map((c) => (
+                          <span key={c} className="badge bg-red-50 text-red-600">
+                            {ERROR_CATEGORY_LABEL[c]}
+                            {e.errorInherited ? '（整卷）' : ''}
+                          </span>
+                        ))}
+                      </>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
@@ -462,9 +610,51 @@ interface PaperQuestionDraft {
   content: string;
   score: string;
   fullMark: string;
+  errorCategories: ErrorCategory[];
 }
 
-const emptyQuestionDraft = (): PaperQuestionDraft => ({ no: '', questionType: '归纳概括', content: '', score: '', fullMark: '' });
+const emptyQuestionDraft = (): PaperQuestionDraft => ({
+  no: '',
+  questionType: '归纳概括',
+  content: '',
+  score: '',
+  fullMark: '',
+  errorCategories: [],
+});
+
+/** 申论错因多选（复用训练记录同一套枚举） */
+function CauseChips({
+  value,
+  onChange,
+  compact = false,
+}: {
+  value: ErrorCategory[];
+  onChange: (next: ErrorCategory[]) => void;
+  compact?: boolean;
+}) {
+  const toggle = (category: ErrorCategory) => {
+    onChange(value.includes(category) ? value.filter((c) => c !== category) : [...value, category]);
+  };
+  return (
+    <div className="flex flex-wrap gap-1">
+      {SHENLUN_ERROR_CATEGORIES.map((category) => {
+        const active = value.includes(category);
+        return (
+          <button
+            key={category}
+            type="button"
+            onClick={() => toggle(category)}
+            className={`${compact ? 'px-1.5 py-0.5 text-[11px]' : 'px-2 py-1 text-xs'} rounded border ${
+              active ? 'bg-red-50 border-red-300 text-red-700' : 'bg-white border-slate-200 text-slate-500'
+            }`}
+          >
+            {ERROR_CATEGORY_LABEL[category]}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
 function AnswerForm({
   onClose,
@@ -477,14 +667,14 @@ function AnswerForm({
   studentId?: string;
   parent: SubjectiveAnswer | null;
 }) {
-  const [subject, setSubject] = useState<ShenlunOrMianshi>(parent?.subject ?? 'shenlun');
+  const subject = 'shenlun' as const;
   const [mode, setMode] = useState<AnswerMode>(parent ? modeOf(parent) : 'single');
   const [questionType, setQuestionType] = useState<string>(parent?.questionType ?? '归纳概括');
   const [paperSource, setPaperSource] = useState(parent?.paperSource ?? parent?.paperTitle ?? '');
   const [questionNo, setQuestionNo] = useState(parent?.questionNo ?? '');
   const [answeredAt, setAnsweredAt] = useState(nowLocalInputValue());
-  const [scenario, setScenario] = useState(parent?.scenario ?? '');
   const [content, setContent] = useState('');
+  const [errorCategories, setErrorCategories] = useState<ErrorCategory[]>(parent?.errorCategories ?? []);
   const [duration, setDuration] = useState<string>(parent?.durationMinutes !== undefined ? String(parent.durationMinutes) : '');
   const [teacherFeedback, setTeacherFeedback] = useState('');
   const [paperYear, setPaperYear] = useState(parent?.paperYear ?? '');
@@ -500,6 +690,7 @@ function AnswerForm({
       content: q.content ?? '',
       score: q.score !== undefined ? String(q.score) : '',
       fullMark: q.fullMark !== undefined ? String(q.fullMark) : '',
+      errorCategories: q.errorCategories ?? [],
     })) ?? [],
   );
   const [dimPoints, setDimPoints] = useState('');
@@ -509,15 +700,9 @@ function AnswerForm({
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  const isPaper = subject === 'shenlun' && mode === 'paper';
-  const isShenlun = subject === 'shenlun';
+  const isPaper = mode === 'paper';
 
   const parseOptional = (raw: string): number | null => (raw.trim() === '' ? null : Number(raw));
-
-  const changeSubject = (next: ShenlunOrMianshi) => {
-    setSubject(next);
-    if (next !== 'shenlun') setMode('single');
-  };
 
   const updateQuestion = (index: number, patch: Partial<PaperQuestionDraft>) => {
     setPaperQuestions((prev) => prev.map((q, i) => (i === index ? { ...q, ...patch } : q)));
@@ -531,16 +716,16 @@ function AnswerForm({
       setFormError('请填写有效的作答时间');
       return;
     }
-    if (isShenlun && !questionType.trim()) {
+    if (!questionType.trim()) {
       setFormError('请选择题型');
       return;
     }
-    if (isShenlun && !paperSource.trim()) {
+    if (!paperSource.trim()) {
       setFormError('请填写试卷来源（如「2023 国考副省级」）；同来源 + 题号用于识别同一道题');
       return;
     }
     if (!isPaper && !content.trim()) return;
-    if (!isPaper && isShenlun && !questionNo.trim()) {
+    if (!isPaper && !questionNo.trim()) {
       setFormError('请填写题号；同来源 + 题号用于识别同一道题');
       return;
     }
@@ -622,6 +807,7 @@ function AnswerForm({
           ...(qScore !== null ? { score: qScore } : {}),
           ...(qFull !== null ? { fullMark: qFull } : {}),
           ...(key ? { questionKey: key } : {}),
+          ...(q.errorCategories.length > 0 ? { errorCategories: q.errorCategories } : {}),
         });
       }
     }
@@ -644,7 +830,7 @@ function AnswerForm({
 
     const now = new Date().toISOString();
     const trimmedContent = content.trim();
-    const key = isShenlun && !isPaper
+    const key = !isPaper
       ? makeQuestionKey({ subject, paperSource, paperYear, questionNo })
       : null;
     // 单题：同一 questionKey 下按作答时间自动形成版本链，不再依赖用户手动指定 parentId
@@ -663,7 +849,7 @@ function AnswerForm({
       id: uuid(),
       studentId,
       subject,
-      scenario: isPaper ? (paperSource.trim() || '套卷') : isShenlun ? questionType.trim() : scenario,
+      scenario: isPaper ? (paperSource.trim() || '套卷') : questionType.trim(),
       date: answeredAt.slice(0, 10),
       parentId,
       version,
@@ -675,16 +861,15 @@ function AnswerForm({
       ...(durationValue !== null ? { durationMinutes: durationValue } : {}),
       ...(teacherFeedback.trim() ? { teacherFeedback: teacherFeedback.trim() } : {}),
       ...(Object.keys(dims).length > 0 ? { dimensionScores: dims } : {}),
+      ...(errorCategories.length > 0 ? { errorCategories } : {}),
     };
-    if (isShenlun) {
-      record.mode = isPaper ? 'paper' : 'single';
-      record.paperSource = paperSource.trim();
-      if (!isPaper) {
-        record.questionType = questionType.trim();
-        if (questionNo.trim()) record.questionNo = questionNo.trim();
-      }
-      if (key) record.questionKey = key;
+    record.mode = isPaper ? 'paper' : 'single';
+    record.paperSource = paperSource.trim();
+    if (!isPaper) {
+      record.questionType = questionType.trim();
+      if (questionNo.trim()) record.questionNo = questionNo.trim();
     }
+    if (key) record.questionKey = key;
     if (isPaper) {
       record.mode = 'paper';
       record.paperTitle = paperSource.trim();
@@ -711,81 +896,61 @@ function AnswerForm({
           <button onClick={onClose}><X size={18} /></button>
         </div>
         <div className="space-y-3">
-          {isShenlun && (
-            <div className="flex gap-2">
-              {([
-                { k: 'single', label: '单题' },
-                { k: 'paper', label: '套卷' },
-              ] as Array<{ k: AnswerMode; label: string }>).map((it) => (
-                <button
-                  key={it.k}
-                  onClick={() => setMode(it.k)}
-                  className={`px-3 py-1.5 rounded-lg text-sm ${mode === it.k ? 'bg-slate-900 text-white' : 'bg-white border border-slate-200 text-slate-600'}`}
-                >
-                  {it.label}
-                </button>
-              ))}
-              <span className="text-xs text-slate-400 self-center">套卷逐题记题型，不拆成多条记录</span>
-            </div>
-          )}
-
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <label className="label">学科</label>
-              <select className="input" value={subject} onChange={(e) => changeSubject(e.target.value as ShenlunOrMianshi)}>
-                <option value="shenlun">申论</option>
-                <option value="mianshi">面试</option>
-              </select>
-            </div>
-            {isShenlun ? (
-              <div>
-                <label className="label">题型 ★</label>
-                <select className="input" value={questionType} onChange={(e) => setQuestionType(e.target.value)}>
-                  {SHENLUN_QUESTION_TYPES.map((t) => (
-                    <option key={t} value={t}>{t}</option>
-                  ))}
-                </select>
-              </div>
-            ) : (
-              <div>
-                <label className="label">场景 / 题型</label>
-                <input className="input" value={scenario} onChange={(e) => setScenario(e.target.value)} placeholder="例:综合分析" />
-              </div>
-            )}
+          <div className="flex gap-2">
+            {([
+              { k: 'single', label: '单题' },
+              { k: 'paper', label: '套卷' },
+            ] as Array<{ k: AnswerMode; label: string }>).map((it) => (
+              <button
+                key={it.k}
+                onClick={() => setMode(it.k)}
+                className={`px-3 py-1.5 rounded-lg text-sm ${mode === it.k ? 'bg-slate-900 text-white' : 'bg-white border border-slate-200 text-slate-600'}`}
+              >
+                {it.label}
+              </button>
+            ))}
+            <span className="text-xs text-slate-400 self-center">套卷逐题记题型，不拆成多条记录</span>
           </div>
 
-          {isShenlun && (
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-              <div className="col-span-2 sm:col-span-1">
-                <label className="label">试卷来源 ★</label>
-                <input
-                  className="input"
-                  value={paperSource}
-                  onChange={(e) => setPaperSource(e.target.value)}
-                  placeholder="如 2023 国考副省级"
-                />
-              </div>
-              <div>
-                <label className="label">年份 / 卷别</label>
-                <input className="input" value={paperYear} onChange={(e) => setPaperYear(e.target.value)} placeholder="如 2023 副省级" />
-              </div>
-              {!isPaper && (
-                <div>
-                  <label className="label">题号 ★</label>
-                  <input className="input" value={questionNo} onChange={(e) => setQuestionNo(e.target.value)} placeholder="如 1 / 第三题" />
-                </div>
-              )}
-              <div>
-                <label className="label">作答时间 ★</label>
-                <input
-                  className="input"
-                  type="datetime-local"
-                  value={answeredAt}
-                  onChange={(e) => setAnsweredAt(e.target.value)}
-                />
-              </div>
+          <div>
+            <label className="label">题型 ★</label>
+            <select className="input" value={questionType} onChange={(e) => setQuestionType(e.target.value)}>
+              {SHENLUN_QUESTION_TYPES.map((t) => (
+                <option key={t} value={t}>{t}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+            <div className="col-span-2 sm:col-span-1">
+              <label className="label">试卷来源 ★</label>
+              <input
+                className="input"
+                value={paperSource}
+                onChange={(e) => setPaperSource(e.target.value)}
+                placeholder="如 2023 国考副省级"
+              />
             </div>
-          )}
+            <div>
+              <label className="label">年份 / 卷别</label>
+              <input className="input" value={paperYear} onChange={(e) => setPaperYear(e.target.value)} placeholder="如 2023 副省级" />
+            </div>
+            {!isPaper && (
+              <div>
+                <label className="label">题号 ★</label>
+                <input className="input" value={questionNo} onChange={(e) => setQuestionNo(e.target.value)} placeholder="如 1 / 第三题" />
+              </div>
+            )}
+            <div>
+              <label className="label">作答时间 ★</label>
+              <input
+                className="input"
+                type="datetime-local"
+                value={answeredAt}
+                onChange={(e) => setAnsweredAt(e.target.value)}
+              />
+            </div>
+          </div>
 
           {isPaper && (
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -821,23 +986,33 @@ function AnswerForm({
               ) : (
                 <div className="space-y-2">
                   {paperQuestions.map((q, i) => (
-                    <div key={i} className="flex flex-wrap items-center gap-1.5">
-                      <input className="input w-16" value={q.no} onChange={(e) => updateQuestion(i, { no: e.target.value })} placeholder="题号" />
-                      <select
-                        className="input w-28"
-                        value={q.questionType}
-                        onChange={(e) => updateQuestion(i, { questionType: e.target.value })}
-                      >
-                        {SHENLUN_QUESTION_TYPES.map((t) => (
-                          <option key={t} value={t}>{t}</option>
-                        ))}
-                      </select>
-                      <input className="input flex-1 min-w-[120px]" value={q.content} onChange={(e) => updateQuestion(i, { content: e.target.value })} placeholder="作答 / 要点（可空）" />
-                      <input className="input w-16" type="number" min={0} value={q.score} onChange={(e) => updateQuestion(i, { score: e.target.value })} placeholder="得分" />
-                      <input className="input w-16" type="number" min={0} value={q.fullMark} onChange={(e) => updateQuestion(i, { fullMark: e.target.value })} placeholder="满分" />
-                      <button className="btn-ghost text-red-500 shrink-0" onClick={() => setPaperQuestions((prev) => prev.filter((_, idx) => idx !== i))}>
-                        <Trash2 size={14} />
-                      </button>
+                    <div key={i} className="border border-slate-100 rounded p-2 space-y-1.5">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <input className="input w-16" value={q.no} onChange={(e) => updateQuestion(i, { no: e.target.value })} placeholder="题号" />
+                        <select
+                          className="input w-28"
+                          value={q.questionType}
+                          onChange={(e) => updateQuestion(i, { questionType: e.target.value })}
+                        >
+                          {SHENLUN_QUESTION_TYPES.map((t) => (
+                            <option key={t} value={t}>{t}</option>
+                          ))}
+                        </select>
+                        <input className="input flex-1 min-w-[120px]" value={q.content} onChange={(e) => updateQuestion(i, { content: e.target.value })} placeholder="作答 / 要点（可空）" />
+                        <input className="input w-16" type="number" min={0} value={q.score} onChange={(e) => updateQuestion(i, { score: e.target.value })} placeholder="得分" />
+                        <input className="input w-16" type="number" min={0} value={q.fullMark} onChange={(e) => updateQuestion(i, { fullMark: e.target.value })} placeholder="满分" />
+                        <button className="btn-ghost text-red-500 shrink-0" onClick={() => setPaperQuestions((prev) => prev.filter((_, idx) => idx !== i))}>
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-1">
+                        <span className="text-[11px] text-slate-400 shrink-0">失分原因：</span>
+                        <CauseChips
+                          compact
+                          value={q.errorCategories}
+                          onChange={(next) => updateQuestion(i, { errorCategories: next })}
+                        />
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -857,6 +1032,14 @@ function AnswerForm({
               <input className="input" type="number" min={0} value={duration} onChange={(e) => setDuration(e.target.value)} placeholder="如 25" />
             </div>
           )}
+
+          <div>
+            <label className="label">
+              {isPaper ? '整卷统一失分原因（选填，分题未选时继承）' : '失分原因（可多选，选填）'}
+            </label>
+            <CauseChips value={errorCategories} onChange={setErrorCategories} />
+            <div className="text-xs text-slate-400 mt-1">不选不影响保存，但会影响错因分析与「题型 × 错因」交叉统计。</div>
+          </div>
 
           <div>
             <label className="label">

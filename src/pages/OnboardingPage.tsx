@@ -289,8 +289,8 @@ function BaselineForm({
   onSkipChange: (v: boolean) => void;
   onChange: (v: BaselineDraft | null) => void;
 }) {
-  // 申论不再从训练记录/基线录入，统一到「学科专项 → 申论作答」
-  const baselineSubjects = subjects.filter((s) => s !== 'shenlun');
+  // 申论 → 申论作答；面试 → 面试记录。基线只接收行测等客观题
+  const baselineSubjects = subjects.filter((s) => s !== 'shenlun' && s !== 'mianshi');
   const primarySubject = baselineSubjects[0];
   const moduleOptions = primarySubject ? getModules(gradeLevel, primarySubject) : [];
   const defaultModule = moduleOptions[0] ?? '基础模块';
@@ -339,7 +339,8 @@ function BaselineForm({
 
       {baselineSubjects.length === 0 && (
         <div className="p-3 rounded-lg bg-blue-50 text-sm text-blue-800">
-          申论不需要填写基线：请直接到「学科专项 → 申论作答」录入单题或套卷，四维评分会自动作为申论掌握度的口径。
+          申论 / 面试不需要填写基线：申论请到「学科专项 → 申论作答」录入单题或套卷，面试请到「学科专项 → 面试记录」录入；
+          评分与失分原因会在各自页面独立统计。
         </div>
       )}
 

@@ -35,6 +35,7 @@ import {
   buildSubjectiveByType,
   buildSubjectiveComposition,
   buildSubjectiveDimensions,
+  buildSubjectiveErrorStats,
   buildSubjectiveMastery,
   buildTimeAllocation,
   buildWeeklyDelta,
@@ -122,8 +123,9 @@ export function AnalyticsPage() {
       dims: buildSubjectiveDimensions(windowedShenlun),
       composition: buildSubjectiveComposition(windowedShenlun),
       byType: buildSubjectiveByType(windowedShenlun),
+      errorStats: buildSubjectiveErrorStats(windowedShenlun, windowedTrainings),
     }),
-    [shenlunAnswers, windowedShenlun],
+    [shenlunAnswers, windowedShenlun, windowedTrainings],
   );
   // A1 口径：整卷+模块不重复计入（用于学科级指标）
   const aggregationTrainings = useMemo(() => selectAggregationRecords(windowedTrainings), [windowedTrainings]);
@@ -440,9 +442,47 @@ export function AnalyticsPage() {
                   </TableScroll>
                 </div>
               )}
+              {subjectiveSummary.errorStats.selections > 0 && (
+                <div className="mt-3 rounded-lg border border-slate-100 p-3">
+                  <div className="text-xs font-medium text-slate-700 mb-2">
+                    错因（新作答 + 历史申论训练记录只读合并）
+                  </div>
+                  <TableScroll label="申论错因统计">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="text-left text-slate-500 border-b border-slate-100">
+                          <th className="py-1.5">错因</th>
+                          <th className="py-1.5 text-right">次数</th>
+                          <th className="py-1.5 text-right">占比</th>
+                          <th className="py-1.5 text-right">新作答</th>
+                          <th className="py-1.5 text-right">历史训练</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {subjectiveSummary.errorStats.rows.map((r) => (
+                          <tr key={r.category} className="border-b border-slate-50">
+                            <td className="py-1.5 text-slate-700">{ERROR_CATEGORY_LABEL[r.category]}</td>
+                            <td className="py-1.5 text-right">{r.count}</td>
+                            <td className="py-1.5 text-right text-slate-500">{r.share}%</td>
+                            <td className="py-1.5 text-right">{r.answerCount}</td>
+                            <td className="py-1.5 text-right text-slate-500">{r.trainingCount}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </TableScroll>
+                  <div className="text-[11px] text-slate-400 mt-1 leading-relaxed">
+                    来源构成：新作答 {subjectiveSummary.errorStats.answerSelections} 次 / 历史申论训练记录{' '}
+                    {subjectiveSummary.errorStats.trainingSelections} 次；未记录错因{' '}
+                    {subjectiveSummary.errorStats.untaggedEntries} 条。历史训练记录的错因只在读取时合并，不迁移、
+                    不回写、不修改原记录；套卷整卷级错因按题摊分，题目级优先。
+                  </div>
+                </div>
+              )}
               <div className="text-xs text-slate-400 leading-relaxed">
                 只读自 subjectiveAnswers（当前学员 · 申论），不写入训练记录，不参与训练统计口径；单题与套卷分开计数，套卷按「份」计不拆题；
-                按题型表把套卷逐题拆开统计（四维优先取题目级、缺省继承整卷），老记录缺题型计为「未分类」且不参与题型聚合。
+                按题型表把套卷逐题拆开统计（四维优先取题目级、缺省继承整卷），老记录缺题型计为「未分类」且不参与题型聚合；
+                错因统计包含历史申论训练记录的错因（来源构成见上），历史记录本身未被修改。
               </div>
             </div>
           )}
@@ -453,7 +493,9 @@ export function AnalyticsPage() {
             目标分只读报名记录 targetScore；时间窗口全站共用{TIME_WINDOW_LABEL[windowKey]}。
             申论掌握度优先取 subjectiveAnswers 的四维评分均值（单题与套卷同等参与），完全没有维度分时才用套卷得分率、再退回训练记录正确率，页面上会标明当前是哪种来源；
             同一份套卷同时有四维评分与卷面得分时，以四维评分为准；套卷的题型强弱按「每题」聚合（不是整卷均分），单题与套卷分开计数；
-            申论作答汇总只读，不写入训练记录，也不参与非申论学科的掌握度计算。
+            申论作答汇总只读，不写入训练记录，也不参与非申论学科的掌握度计算；
+            申论错因统计包含历史申论训练记录的错因（读取时合并，不改原记录）；面试的评分、题型与失分原因在「学科专项 → 面试记录」独立统计，
+            不并入本页申论口径。
           </div>
 
           <div className="card p-5 space-y-4">

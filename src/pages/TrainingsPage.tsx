@@ -129,10 +129,12 @@ export function TrainingsPage() {
 
       <div className="rounded-lg bg-blue-50 px-3 py-2 text-xs text-blue-700 leading-relaxed flex flex-wrap items-center gap-2">
         <span>
-          申论已统一到「学科专项 → 申论作答」录入（单题 / 套卷均可，套卷逐题记题型）。训练记录只用于行测等客观题，无法再新建申论训练记录；
-          历史申论训练记录仍然有效，继续参与统计并作为无四维评分时的回退口径。
+          申论已统一到「学科专项 → 申论作答」录入（单题 / 套卷均可，套卷逐题记题型）；面试已统一到「学科专项 → 面试记录」。
+          训练记录只用于行测等客观题，无法再新建申论 / 面试训练记录；
+          历史申论 / 面试训练记录仍然有效，继续参与统计并作为无四维评分时的回退口径。
         </span>
         <Link to="/subjective" className="underline font-medium">去申论作答 →</Link>
+        <Link to="/interview" className="underline font-medium">去面试记录 →</Link>
       </div>
 
       <div className="flex items-center gap-2 text-sm text-slate-600">
@@ -254,8 +256,8 @@ interface FormProps {
 }
 
 function TrainingForm({ quick, defaults, studentId, gradeLevel, availableSubjects, onClose, onSave }: FormProps) {
-  // 申论已收敛到「学科专项 → 申论作答」，训练记录不再接收申论
-  const entrySubjects: Subject[] = availableSubjects.filter((s) => s !== 'shenlun');
+  // 申论 → 申论作答；面试 → 面试记录。训练记录不再接收主观题
+  const entrySubjects: Subject[] = availableSubjects.filter((s) => s !== 'shenlun' && s !== 'mianshi');
   const initSubject =
     defaults?.subject && entrySubjects.includes(defaults.subject) ? defaults.subject : (entrySubjects[0] ?? 'xingce');
   const [subject, setSubject] = useState<Subject>(initSubject);
@@ -372,22 +374,27 @@ function TrainingForm({ quick, defaults, studentId, gradeLevel, availableSubject
     }
   };
 
-  // 只有申论学科的学员：训练记录不再提供录入，直接引导到申论作答
+  // 只剩申论 / 面试学科的学员：训练记录不再提供录入，直接引导到对应唯一入口
   if (entrySubjects.length === 0) {
     return (
       <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
         <div className="card w-full max-w-md p-6 space-y-3">
           <div className="flex items-center justify-between">
-            <h2 className="text-lg font-bold text-slate-900">申论不在训练记录录入</h2>
+            <h2 className="text-lg font-bold text-slate-900">主观题不在训练记录录入</h2>
             <button className="btn-ghost" onClick={onClose}><X size={18} /></button>
           </div>
           <p className="text-sm text-slate-600 leading-relaxed">
-            申论（单题和套卷）已统一到「学科专项 → 申论作答」：那里可录题型、试卷来源、题号与四维评分，套卷还会逐题拆开统计。
-            训练记录只用于行测等客观题。
+            申论（单题和套卷）统一到「学科专项 → 申论作答」；面试统一到「学科专项 → 面试记录」。
+            两处都会记录题型、题目来源、题号、作答时间与失分原因，并自动形成版本链。训练记录只用于行测等客观题。
           </p>
-          <Link to="/subjective" className="btn-primary inline-flex" onClick={onClose}>
-            去申论作答 <ArrowRight size={14} />
-          </Link>
+          <div className="flex flex-wrap gap-2">
+            <Link to="/subjective" className="btn-primary inline-flex" onClick={onClose}>
+              去申论作答 <ArrowRight size={14} />
+            </Link>
+            <Link to="/interview" className="btn-secondary inline-flex" onClick={onClose}>
+              去面试记录 <ArrowRight size={14} />
+            </Link>
+          </div>
         </div>
       </div>
     );

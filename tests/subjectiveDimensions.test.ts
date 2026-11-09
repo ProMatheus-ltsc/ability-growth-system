@@ -1,16 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildInterviewQuestionHistory,
+  buildInterviewStats,
   buildSubjectiveByType,
   buildSubjectiveComposition,
   buildSubjectiveDimensions,
+  buildSubjectiveErrorStats,
   buildSubjectiveMastery,
   buildSubjectiveQuestionHistory,
+  interviewScorePercent,
 } from '../src/services/analytics';
 import {
   subjectiveAnswers,
   subjectiveWithoutDimensions,
 } from './fixtures/demoData';
-import type { SubjectiveAnswer } from '../src/domain/types';
+import type { InterviewRecord, SubjectiveAnswer, TrainingRecord } from '../src/domain/types';
 import { makeQuestionKey } from '../src/domain/subjectiveQuestion';
 
 const baseAnswer = (patch: Partial<SubjectiveAnswer>): SubjectiveAnswer => ({
@@ -152,5 +156,112 @@ describe('申论题型 key、自动版本链与按题型聚合', () => {
     expect(stats[0].paperQuestionCount).toBe(1);
     // 四维继承整卷
     expect(stats[0].avgDims.points).toBe(70);
+  });
+});
+
+const baseTraining = (patch: Partial<TrainingRecord>): TrainingRecord => ({
+  id: patch.id ?? 't1',
+  date: '2026-11-01',
+  gradeLevel: 'adult',
+  subject: 'shenlun',
+  module: '归纳概括',
+  trainingType: 'module',
+  totalQuestions: 1,
+  correctCount: 0,
+  errorCount: 1,
+  errorCategories: [],
+  createdAt: '2026-11-01T00:00:00.000Z',
+  updatedAt: '2026-11-01T00:00:00.000Z',
+  ...patch,
+});
+
+describe('申论错因：新作答 + 历史训练记录只读合并', () => {
+  it('套卷分题错因优先于整卷，缺省继承整卷', () => {
+    const paper = baseAnswer({
+      id: 'p1',
+      mode: 'paper',
+      paperSource: '2023 国考副省级',
+      errorCategories: ['structure'],
+      paperQuestions: [
+        { no: '1', questionType: '归纳概括', errorCategories: ['point'] },
+        { no: '2', questionType: '归纳概括' }, // 继承整卷 structure
+      ],
+    });
+    const summary = buildSubjectiveErrorStats([paper]);
+    expect(summary.answerEntries).toBe(2);
+    expect(summary.answerSelections).toBe(2);
+    expect(summary.inheritedEntries).toBe(1);
+    expect(summary.rows.map((r) => r.category).sort()).toEqual(['point', 'structure']);
+    expect(summary.byType[0].questionType).toBe('归纳概括');
+    expect(summary.byType[0].counts.map((c) => c.category).sort()).toEqual(['point', 'structure']);
+  });
+
+  it('历史申论训练记录错因读取时并入，来源分开计数且原记录不变', () => {
+    const answer = baseAnswer({ id: 'a1', questionType: '归纳概括', errorCategories: ['point'] });
+    const training = baseTraining({ id: 't1', questionType: '归纳概括', errorCategories: ['point', 'language'] });
+    const otherSubject = baseTraining({ id: 't2', subject: 'xingce', questionType: '归纳概括', errorCategories: ['language'] });
+    const snapshot = JSON.stringify(training);
+    const summary = buildSubjectiveErrorStats([answer], [training, otherSubject]);
+    expect(summary.answerSelections).toBe(1);
+    expect(summary.trainingSelections).toBe(2); // 只合并申论训练记录
+    expect(summary.trainingRecords).toBe(1);
+    const point = summary.rows.find((r) => r.category === 'point')!;
+    expect(point.answerCount).toBe(1);
+    expect(point.trainingCount).toBe(1);
+    expect(summary.byType[0].attempts).toBe(2); // 新作答 + 历史训练都命中题型
+    expect(JSON.stringify(training)).toBe(snapshot);
+  });
+
+  it('无错因作答计入未记录错因，不影响总选择次数', () => {
+    const summary = buildSubjectiveErrorStats([baseAnswer({ id: 'a1' })]);
+    expect(summary.selections).toBe(0);
+    expect(summary.untaggedEntries).toBe(1);
+  });
+});
+
+const baseInterview = (patch: Partial<InterviewRecord>): InterviewRecord => ({
+  id: patch.id ?? 'i1',
+  date: '2026-11-01',
+  questionType: '综合分析',
+  thinkingSec: 60,
+  answerSec: 180,
+  selfScore: { content: 3, structure: 3, expression: 3, fluency: 3 },
+  problemTags: [],
+  createdAt: '2026-11-01T00:00:00.000Z',
+  updatedAt: '2026-11-01T00:00:00.000Z',
+  ...patch,
+});
+
+describe('面试：独立统计与自动版本链', () => {
+  it('同维度自评 + 他评取平均后折算百分比', () => {
+    const record = baseInterview({
+      selfScore: { content: 4, structure: 4, expression: 4, fluency: 4 },
+      teacherScore: { content: 3, structure: 3, expression: 3, fluency: 3 },
+    });
+    expect(interviewScorePercent(record)).toBe(70);
+  });
+
+  it('按题型与失分原因聚合，老记录未分类不参与题型聚合', () => {
+    const a = baseInterview({ id: 'i1', errorTags: ['表达不清', '逻辑断层'], questionKey: 'k1' });
+    const b = baseInterview({ id: 'i2', questionType: '老自由文本', errorTags: ['表达不清'] });
+    const stats = buildInterviewStats([a, b]);
+    expect(stats.total).toBe(2);
+    expect(stats.classifiedCount).toBe(1);
+    expect(stats.unclassifiedTypeCount).toBe(1);
+    expect(stats.withoutKeyCount).toBe(1);
+    expect(stats.byType).toHaveLength(1);
+    expect(stats.byType[0].questionType).toBe('综合分析');
+    expect(stats.tags[0].tag).toBe('表达不清');
+    expect(stats.tags[0].count).toBe(2);
+  });
+
+  it('同一 questionKey 按作答时间自动形成版本链', () => {
+    const a = baseInterview({ id: 'i1', questionKey: 'k1', answeredAt: '2026-11-01T10:00:00.000Z' });
+    const b = baseInterview({ id: 'i2', questionKey: 'k1', answeredAt: '2026-11-08T10:00:00.000Z' });
+    const legacy = baseInterview({ id: 'i3' });
+    const history = buildInterviewQuestionHistory([b, legacy, a]);
+    expect(history).toHaveLength(1);
+    expect(history[0].attempts).toBe(2);
+    expect(history[0].entries.map((e) => e.id)).toEqual(['i1', 'i2']);
   });
 });

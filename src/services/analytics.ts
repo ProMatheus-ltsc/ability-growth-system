@@ -13,6 +13,7 @@ import type {
   ExamRegistration,
   GapStatusHistoryItem,
   GradeLevel,
+  InterviewRecord,
   LabelStat,
   MasteryLevel,
   StudentProfile,
@@ -24,7 +25,7 @@ import type {
   WarningItem,
   WarningLevel,
 } from '../domain/types';
-import { scoreToLevel, TRAINING_TYPE_LABEL } from '../domain/types';
+import { INTERVIEW_QUESTION_TYPES, SHENLUN_QUESTION_TYPES, scoreToLevel, TRAINING_TYPE_LABEL } from '../domain/types';
 import { displayQuestionType, isClassifiedType } from '../domain/subjectiveQuestion';
 import { getRadarDimensions } from '../domain/abilityTags';
 import { normalizeModule, pathBelongsToModule } from '../domain/moduleNormalize';
@@ -806,6 +807,10 @@ export interface SubjectiveQuestionEntry {
   rated: boolean;
   /** true=来自套卷的分题，false=单题记录 */
   isPaperQuestion: boolean;
+  /** 解析后的失分原因：题目级非空时优先，否则继承整卷级；空数组=未记录错因 */
+  errorCategories: ErrorCategory[];
+  /** true=错因来自整卷级继承 */
+  errorInherited: boolean;
 }
 
 export interface SubjectiveTypeStat {
@@ -847,7 +852,9 @@ export function flattenSubjectiveQuestions(records: SubjectiveAnswer[]): Subject
     const answeredAt = r.answeredAt ?? r.createdAt ?? `${r.date}T00:00:00.000Z`;
     if (r.mode === 'paper') {
       const source = r.paperSource ?? r.paperTitle;
+      const recordErrors = r.errorCategories ?? [];
       for (const q of r.paperQuestions ?? []) {
+        const questionErrors = q.errorCategories ?? [];
         const scoreValid =
           typeof q.score === 'number' && Number.isFinite(q.score) &&
           typeof q.fullMark === 'number' && Number.isFinite(q.fullMark) && q.fullMark > 0;
@@ -867,6 +874,8 @@ export function flattenSubjectiveQuestions(records: SubjectiveAnswer[]): Subject
           dims: q.dimensionScores ?? r.dimensionScores ?? {},
           rated: hasAnyDimension(q.dimensionScores ?? r.dimensionScores),
           isPaperQuestion: true,
+          errorCategories: questionErrors.length > 0 ? questionErrors : recordErrors,
+          errorInherited: questionErrors.length === 0 && recordErrors.length > 0,
         });
       }
       continue;
@@ -885,6 +894,8 @@ export function flattenSubjectiveQuestions(records: SubjectiveAnswer[]): Subject
       dims: r.dimensionScores ?? {},
       rated: hasAnyDimension(r.dimensionScores),
       isPaperQuestion: false,
+      errorCategories: r.errorCategories ?? [],
+      errorInherited: false,
     });
   }
   return entries;
@@ -954,6 +965,311 @@ export function buildSubjectiveQuestionHistory(records: SubjectiveAnswer[]): Sub
         attempts: sorted.length,
         firstAnsweredAt: sorted[0].answeredAt,
         latestAnsweredAt: latest.answeredAt,
+        entries: sorted,
+      };
+    })
+    .sort((a, b) => b.latestAnsweredAt.localeCompare(a.latestAnsweredAt));
+}
+
+/** ============ 申论错因：新作答 + 历史训练记录的只读合并口径 ============ */
+
+export interface SubjectiveErrorStat {
+  category: ErrorCategory;
+  /** 出现次数（按题目计次；套卷的整卷级错因会摊到每道分题） */
+  count: number;
+  /** 占全部错因选择次数的比例（0-100） */
+  share: number;
+  /** 来自申论作答（新入口）的次数 */
+  answerCount: number;
+  /** 来自历史申论训练记录的次数 */
+  trainingCount: number;
+}
+
+export interface SubjectiveErrorTypeRow {
+  questionType: string;
+  /** 该题型下「有错因记录」的作答次数（用于交叉分析，不是该题型总作答次数） */
+  attempts: number;
+  counts: Array<{ category: ErrorCategory; count: number }>;
+}
+
+export interface SubjectiveErrorSummary {
+  /** 错因选择总次数 = answerSelections + trainingSelections */
+  selections: number;
+  answerSelections: number;
+  trainingSelections: number;
+  /** 新作答摊平后的题目级条目数 */
+  answerEntries: number;
+  /** 新作答中未记录错因的条目数（老记录 / 选填未选） */
+  untaggedEntries: number;
+  /** 套卷题目级未填、继承整卷级错因的条目数 */
+  inheritedEntries: number;
+  /** 有错因的历史申论训练记录数 */
+  trainingRecords: number;
+  rows: SubjectiveErrorStat[];
+  byType: SubjectiveErrorTypeRow[];
+}
+
+/**
+ * 错因汇总（只读合并）：
+ * - 新作答：按题目级摊平，题目级错因优先，缺省继承整卷级；
+ * - 历史申论训练记录：读取时并入，不迁移、不回写、不修改原记录；
+ * - 历史训练记录只有 questionType 命中申论题型枚举时才参与「题型 × 错因」交叉。
+ */
+export function buildSubjectiveErrorStats(
+  records: SubjectiveAnswer[],
+  trainings: TrainingRecord[] = [],
+): SubjectiveErrorSummary {
+  const entries = flattenSubjectiveQuestions(records);
+  const totals = new Map<ErrorCategory, { answer: number; training: number }>();
+  const typeCounts = new Map<string, { attempts: number; counts: Map<ErrorCategory, number> }>();
+  let answerSelections = 0;
+  let trainingSelections = 0;
+  let untaggedEntries = 0;
+  let inheritedEntries = 0;
+
+  const bump = (category: ErrorCategory, source: 'answer' | 'training') => {
+    const cur = totals.get(category) ?? { answer: 0, training: 0 };
+    cur[source] += 1;
+    totals.set(category, cur);
+  };
+  const typeBucket = (questionType: string) => {
+    const cur = typeCounts.get(questionType) ?? { attempts: 0, counts: new Map<ErrorCategory, number>() };
+    typeCounts.set(questionType, cur);
+    return cur;
+  };
+
+  for (const e of entries) {
+    if (e.errorCategories.length === 0) {
+      untaggedEntries += 1;
+      continue;
+    }
+    if (e.errorInherited) inheritedEntries += 1;
+    answerSelections += e.errorCategories.length;
+    const bucket = isClassifiedType(e.questionType) ? typeBucket(e.questionType) : null;
+    if (bucket) bucket.attempts += 1;
+    for (const category of e.errorCategories) {
+      bump(category, 'answer');
+      if (bucket) bucket.counts.set(category, (bucket.counts.get(category) ?? 0) + 1);
+    }
+  }
+
+  const trainingRecords = trainings.filter(
+    (t) => t.subject === 'shenlun' && (t.errorCategories?.length ?? 0) > 0,
+  );
+  for (const t of trainingRecords) {
+    trainingSelections += t.errorCategories.length;
+    const type = t.questionType?.trim() ?? '';
+    const bucket = (SHENLUN_QUESTION_TYPES as readonly string[]).includes(type) ? typeBucket(type) : null;
+    if (bucket) bucket.attempts += 1;
+    for (const category of t.errorCategories) {
+      bump(category, 'training');
+      if (bucket) bucket.counts.set(category, (bucket.counts.get(category) ?? 0) + 1);
+    }
+  }
+
+  const selections = answerSelections + trainingSelections;
+  const rows: SubjectiveErrorStat[] = Array.from(totals.entries())
+    .map(([category, v]) => ({
+      category,
+      count: v.answer + v.training,
+      share: selections === 0 ? 0 : round1(((v.answer + v.training) / selections) * 100),
+      answerCount: v.answer,
+      trainingCount: v.training,
+    }))
+    .sort((a, b) => b.count - a.count);
+
+  const byType: SubjectiveErrorTypeRow[] = Array.from(typeCounts.entries())
+    .map(([questionType, v]) => ({
+      questionType,
+      attempts: v.attempts,
+      counts: Array.from(v.counts.entries())
+        .map(([category, count]) => ({ category, count }))
+        .sort((a, b) => b.count - a.count),
+    }))
+    .sort((a, b) => b.attempts - a.attempts);
+
+  return {
+    selections,
+    answerSelections,
+    trainingSelections,
+    answerEntries: entries.length,
+    untaggedEntries,
+    inheritedEntries,
+    trainingRecords: trainingRecords.length,
+    rows,
+    byType,
+  };
+}
+
+/** ============ 面试：独立统计口径（不与申论掌握度混算） ============ */
+
+const INTERVIEW_DIMENSION_KEYS = ['content', 'structure', 'expression', 'fluency'] as const;
+
+/** 面试作答时间：优先录入时采集的 answeredAt，老记录退回 createdAt */
+export const interviewAnsweredAt = (r: InterviewRecord): string =>
+  r.answeredAt ?? r.createdAt ?? `${r.date}T00:00:00.000Z`;
+
+/**
+ * 面试综合得分（0-100）：每个维度自评/他评都在时取平均，仅一方时取该方；
+ * 再对四个维度取平均后按 5 分制折算百分比。没有任何有效评分为 null。
+ */
+export function interviewScorePercent(record: InterviewRecord): number | null {
+  const values: number[] = [];
+  for (const key of INTERVIEW_DIMENSION_KEYS) {
+    const self = record.selfScore?.[key];
+    const teacher = record.teacherScore?.[key];
+    const selfValid = typeof self === 'number' && Number.isFinite(self) && self > 0 ? self : null;
+    const teacherValid = typeof teacher === 'number' && Number.isFinite(teacher) && teacher > 0 ? teacher : null;
+    const value =
+      selfValid !== null && teacherValid !== null ? (selfValid + teacherValid) / 2 : (selfValid ?? teacherValid);
+    if (value !== null) values.push(value);
+  }
+  if (values.length === 0) return null;
+  return round1(((values.reduce((s, v) => s + v, 0) / values.length) / 5) * 100);
+}
+
+export interface InterviewTypeStat {
+  questionType: string;
+  attempts: number;
+  ratedCount: number;
+  /** 综合得分（0-100），无双评/自评时为 null */
+  avgScore: number | null;
+}
+
+export interface InterviewTagStat {
+  tag: string;
+  count: number;
+  share: number;
+}
+
+export interface InterviewStats {
+  total: number;
+  /** 题型命中面试枚举的记录数 */
+  classifiedCount: number;
+  /** 题型不在枚举内（含老自由文本）的记录数 */
+  unclassifiedTypeCount: number;
+  /** 缺 questionKey（无来源/题号）的记录数，不参与自动版本链 */
+  withoutKeyCount: number;
+  ratedCount: number;
+  avgScore: number | null;
+  selfCount: number;
+  teacherCount: number;
+  bothCount: number;
+  byType: InterviewTypeStat[];
+  tags: InterviewTagStat[];
+  tagSelections: number;
+  /** 未记录面试错因的记录数 */
+  untaggedCount: number;
+}
+
+export function buildInterviewStats(records: InterviewRecord[]): InterviewStats {
+  const byTypeMap = new Map<string, { attempts: number; scores: number[] }>();
+  const tagCounts = new Map<string, number>();
+  let classifiedCount = 0;
+  let withoutKeyCount = 0;
+  let ratedCount = 0;
+  let scoreSum = 0;
+  let selfCount = 0;
+  let teacherCount = 0;
+  let bothCount = 0;
+  let tagSelections = 0;
+  let untaggedCount = 0;
+
+  for (const r of records) {
+    const type = r.questionType?.trim() ?? '';
+    const typeClassified = (INTERVIEW_QUESTION_TYPES as readonly string[]).includes(type);
+    if (!r.questionKey) withoutKeyCount += 1;
+    if (typeClassified) {
+      classifiedCount += 1;
+      const bucket = byTypeMap.get(type) ?? { attempts: 0, scores: [] };
+      bucket.attempts += 1;
+      const score = interviewScorePercent(r);
+      if (score !== null) bucket.scores.push(score);
+      byTypeMap.set(type, bucket);
+    }
+    const score = interviewScorePercent(r);
+    if (score !== null) {
+      ratedCount += 1;
+      scoreSum += score;
+    }
+    const hasSelf = !!r.selfScore;
+    const hasTeacher = !!r.teacherScore;
+    if (hasSelf) selfCount += 1;
+    if (hasTeacher) teacherCount += 1;
+    if (hasSelf && hasTeacher) bothCount += 1;
+    const tags = r.errorTags ?? [];
+    if (tags.length === 0) untaggedCount += 1;
+    else tagSelections += tags.length;
+    for (const tag of tags) tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1);
+  }
+
+  const byType: InterviewTypeStat[] = Array.from(byTypeMap.entries())
+    .map(([questionType, v]) => ({
+      questionType,
+      attempts: v.attempts,
+      ratedCount: v.scores.length,
+      avgScore:
+        v.scores.length === 0 ? null : round1(v.scores.reduce((s, n) => s + n, 0) / v.scores.length),
+    }))
+    .sort((a, b) => b.attempts - a.attempts);
+
+  const tags: InterviewTagStat[] = Array.from(tagCounts.entries())
+    .map(([tag, count]) => ({
+      tag,
+      count,
+      share: tagSelections === 0 ? 0 : round1((count / tagSelections) * 100),
+    }))
+    .sort((a, b) => b.count - a.count);
+
+  return {
+    total: records.length,
+    classifiedCount,
+    unclassifiedTypeCount: records.length - classifiedCount,
+    withoutKeyCount,
+    ratedCount,
+    avgScore: ratedCount === 0 ? null : round1(scoreSum / ratedCount),
+    selfCount,
+    teacherCount,
+    bothCount,
+    byType,
+    tags,
+    tagSelections,
+    untaggedCount,
+  };
+}
+
+export interface InterviewHistoryGroup {
+  questionKey: string;
+  questionType: string;
+  paperSource?: string;
+  questionNo?: string;
+  attempts: number;
+  firstAnsweredAt: string;
+  latestAnsweredAt: string;
+  entries: InterviewRecord[];
+}
+
+/** 面试自动版本链：同一 questionKey 按作答时间升序排版本，不依赖 parentId */
+export function buildInterviewQuestionHistory(records: InterviewRecord[]): InterviewHistoryGroup[] {
+  const groups = new Map<string, InterviewRecord[]>();
+  for (const r of records) {
+    if (!r.questionKey) continue;
+    const arr = groups.get(r.questionKey) ?? [];
+    arr.push(r);
+    groups.set(r.questionKey, arr);
+  }
+  return Array.from(groups.entries())
+    .map(([questionKey, list]) => {
+      const sorted = [...list].sort((a, b) => interviewAnsweredAt(a).localeCompare(interviewAnsweredAt(b)));
+      const latest = sorted[sorted.length - 1];
+      return {
+        questionKey,
+        questionType: latest.questionType,
+        paperSource: latest.paperSource,
+        questionNo: latest.questionNo,
+        attempts: sorted.length,
+        firstAnsweredAt: interviewAnsweredAt(sorted[0]),
+        latestAnsweredAt: interviewAnsweredAt(latest),
         entries: sorted,
       };
     })

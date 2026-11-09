@@ -308,8 +308,8 @@ function ExamForm({
   gradeLevel: GradeLevel;
   subjects: Subject[];
 }) {
-  // 申论不在训练记录/测验诊断里录入，统一到「学科专项 → 申论作答」
-  const examSubjects = subjects.filter((s) => s !== 'shenlun');
+  // 申论 → 申论作答；面试 → 面试记录。测验诊断只接收行测等客观题
+  const examSubjects = subjects.filter((s) => s !== 'shenlun' && s !== 'mianshi');
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [subject, setSubject] = useState<Subject>(examSubjects[0] ?? 'xingce');
   const [scenario, setScenario] = useState('全套模拟');
@@ -459,21 +459,27 @@ function ExamForm({
 
   const suggested = rows.map((r) => (r.total === 0 ? '-' : Math.round(((r.total - r.errors) / r.total) * 100) + '%'));
 
-  // 只有申论学科：测验诊断不接收，引导到申论作答
+  // 只剩申论 / 面试学科：测验诊断不接收，引导到对应唯一入口
   if (examSubjects.length === 0) {
     return (
       <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
         <div className="card w-full max-w-md p-6 space-y-3">
           <div className="flex items-center justify-between">
-            <h2 className="text-lg font-bold text-slate-900">申论不在测验诊断录入</h2>
+            <h2 className="text-lg font-bold text-slate-900">主观题不在测验诊断录入</h2>
             <button className="btn-ghost" onClick={onClose}><X size={18} /></button>
           </div>
           <p className="text-sm text-slate-600 leading-relaxed">
-            申论单题与套卷统一在「学科专项 → 申论作答」录入，套卷会逐题记录题型与得分，不再从训练记录/测验诊断生成申论数据。
+            申论单题与套卷统一在「学科专项 → 申论作答」录入；面试统一在「学科专项 → 面试记录」录入。
+            测验诊断只接收行测等客观题整卷。
           </p>
-          <Link to="/subjective" className="btn-primary inline-flex" onClick={onClose}>
-            去申论作答 <ArrowRight size={14} />
-          </Link>
+          <div className="flex flex-wrap gap-2">
+            <Link to="/subjective" className="btn-primary inline-flex" onClick={onClose}>
+              去申论作答 <ArrowRight size={14} />
+            </Link>
+            <Link to="/interview" className="btn-secondary inline-flex" onClick={onClose}>
+              去面试记录 <ArrowRight size={14} />
+            </Link>
+          </div>
         </div>
       </div>
     );
