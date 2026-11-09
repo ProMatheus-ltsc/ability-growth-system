@@ -82,7 +82,7 @@ const APP_CONFIG = {
 type Visibility = (typeof MODULE_VISIBILITY)[keyof typeof MODULE_VISIBILITY];
 
 /** 构建学生视图分层导航 */
-function buildStudentGroups(v: Visibility): NavGroup[] {
+export function buildStudentGroups(v: Visibility): NavGroup[] {
   // 阶段三（验收缺陷 #1/#13）：训练闭环内补齐「数据分析 / 学习时间线」，
   // 原「今日复盘」模块已下线（用户有独立复盘站点，2026-11-09 要求移除）
   // 原来的「数据分析」独立分组与「深度洞察」入口取消（Analytics 与 Insights 已合并为分析中心）。
@@ -113,6 +113,7 @@ function buildStudentGroups(v: Visibility): NavGroup[] {
       // 申论/面试是学科专有的版本链功能，与通识训练分开
       key: 'subject',
       label: '学科专项',
+      visible: v.publicExam,
       icon: FileText,
       children: [
         { to: '/subjective', icon: FileText, label: '申论作答' },
@@ -140,7 +141,7 @@ function buildStudentGroups(v: Visibility): NavGroup[] {
         { to: '/career', icon: Compass, label: '职业选择', visible: v.career },
         { to: '/literacy', icon: GraduationCap, label: '学习素养', visible: v.literacy },
         { to: '/literacy-collab', icon: Users, label: '协作行为', visible: v.literacy },
-        { to: '/registrations', icon: Briefcase, label: '报考信息' },
+        { to: '/registrations', icon: Briefcase, label: '报考信息', visible: v.examRegistration },
       ],
     },
     {
@@ -156,8 +157,8 @@ function buildStudentGroups(v: Visibility): NavGroup[] {
 }
 
 /** 构建教师视图分层导航 */
-function buildTeacherGroups(v: Visibility): NavGroup[] {
-  return [
+export function buildTeacherGroups(v: Visibility): NavGroup[] {
+  const groups: NavGroup[] = [
     { key: 'home', label: '今日工作台', icon: Home, to: '/', end: true },
     {
       key: 'class',
@@ -206,6 +207,7 @@ function buildTeacherGroups(v: Visibility): NavGroup[] {
       // 申论/面试是学科专有的版本链功能，与通识训练分开
       key: 'subject',
       label: '学科专项',
+      visible: v.publicExam,
       icon: FileText,
       children: [
         { to: '/subjective', icon: FileText, label: '申论作答' },
@@ -233,7 +235,7 @@ function buildTeacherGroups(v: Visibility): NavGroup[] {
         { to: '/career', icon: Compass, label: '职业选择', visible: v.career },
         { to: '/literacy', icon: GraduationCap, label: '学习素养', visible: v.literacy },
         { to: '/literacy-collab', icon: Users, label: '协作行为', visible: v.literacy },
-        { to: '/registrations', icon: Briefcase, label: '报考信息' },
+        { to: '/registrations', icon: Briefcase, label: '报考信息', visible: v.examRegistration },
       ],
     },
     {
@@ -246,6 +248,21 @@ function buildTeacherGroups(v: Visibility): NavGroup[] {
       ],
     },
   ];
+  // 教师端：不按教师自身学段过滤公考板块（可能同时带不同学段学生），全量展示并标注
+  return groups.map((group) => {
+    if (group.key === 'subject') {
+      return { ...group, label: '学科专项（公考）', visible: true };
+    }
+    if (group.key === 'planning') {
+      return {
+        ...group,
+        children: group.children?.map((child) =>
+          child.to === '/registrations' ? { ...child, label: '报考信息（公考）', visible: true } : child,
+        ),
+      };
+    }
+    return group;
+  });
 }
 
 export function App() {
@@ -323,6 +340,9 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     visibility.career ? <>{children}</> : <Navigate to="/" replace />;
   const ModuleGuardLiteracy = ({ children }: { children: React.ReactNode }) =>
     visibility.literacy ? <>{children}</> : <Navigate to="/" replace />;
+  // 教师端可能同时带不同学段学生，不做强制拦截；学生按自身学段门控
+  const ModuleGuardPublicExam = ({ children }: { children: React.ReactNode }) =>
+    prefs.role === 'teacher' || visibility.publicExam ? <>{children}</> : <Navigate to="/" replace />;
 
   return (
     <Layout
@@ -340,14 +360,14 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         <Route path="/abilities" element={<AbilityCenterPage />} />
         <Route path="/problems" element={<ProblemCenterPage />} />
         <Route path="/exams" element={<ExamDiagnosisPage />} />
-        <Route path="/subjective" element={<SubjectiveAnswersPage />} />
+        <Route path="/subjective" element={<ModuleGuardPublicExam><SubjectiveAnswersPage /></ModuleGuardPublicExam>} />
         <Route path="/timeline" element={<TimelinePage />} />
         <Route path="/analytics" element={<AnalyticsPage />} />
         <Route path="/weakness" element={<Navigate to="/abilities" replace />} />
         <Route path="/label-ranking" element={<Navigate to="/abilities" replace />} />
-        <Route path="/interview" element={<InterviewRecordPage />} />
+        <Route path="/interview" element={<ModuleGuardPublicExam><InterviewRecordPage /></ModuleGuardPublicExam>} />
         <Route path="/interview-records" element={<Navigate to="/interview" replace />} />
-        <Route path="/registrations" element={<ExamRegistrationPage />} />
+        <Route path="/registrations" element={<ModuleGuardPublicExam><ExamRegistrationPage /></ModuleGuardPublicExam>} />
         {/* /insights 已并入分析中心；保留重定向避免旧书签 404（验收缺陷 #1 的同类死页面问题） */}
         <Route path="/insights" element={<Navigate to="/analytics" replace />} />
         {/* 原「今日复盘」路由已下线（用户另有独立复盘站点）；旧书签由末尾 * 兜底重定向到首页，不留 404 */}

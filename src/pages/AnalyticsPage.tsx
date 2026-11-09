@@ -56,7 +56,7 @@ import {
 } from '../services/timeWindow';
 import { CausalTab, ForecastTab, LeverageTab, StrategyTab } from './InsightsPage';
 import { ALL_TRANSFERS, TRANSFER_STRENGTH_LABEL } from '../domain/abilityTransfer';
-import { ERROR_CATEGORY_LABEL, SUBJECT_LABEL } from '../domain/types';
+import { ERROR_CATEGORY_LABEL, MODULE_VISIBILITY, SUBJECT_LABEL } from '../domain/types';
 import type { AbilityGap, ExamRegistration, Subject, SubjectiveAnswer, TrainingRecord } from '../domain/types';
 import { getAnalyticsCopy } from '../domain/analyticsCopy';
 import { getInsightsCopy } from '../domain/insightsCopy';
@@ -187,6 +187,8 @@ export function AnalyticsPage() {
 
   const copy = getAnalyticsCopy(prefs.gradeLevel);
   const insightsCopy = getInsightsCopy(prefs.gradeLevel);
+  // 公考专属内容（目标分差 / 申论汇总）只对公考学段或教师端渲染，非公考学段整块不出现
+  const canUsePublicExam = prefs.role === 'teacher' || MODULE_VISIBILITY[prefs.gradeLevel].publicExam;
 
   return (
     <div className="space-y-5">
@@ -290,7 +292,7 @@ export function AnalyticsPage() {
                 timed.rate === null ? 'text-slate-600' : timed.rate >= 80 ? 'text-emerald-600' : 'text-orange-600'
               }
             />
-            {targetGap === null ? (
+            {canUsePublicExam && (targetGap === null ? (
               <Link to="/registrations" className="block rounded-xl" title="去填写报考信息">
                 <StatCard
                   label="目标分差"
@@ -320,7 +322,7 @@ export function AnalyticsPage() {
                 }
                 accentClassName={targetGap.reached ? 'text-emerald-600' : 'text-orange-600'}
               />
-            )}
+            ))}
             <StatCard
               label={`最弱模块 · ${SUBJECT_LABEL[subject]}`}
               value={weakestModule === null ? '—' : weakestModule.module}
@@ -333,7 +335,7 @@ export function AnalyticsPage() {
             />
           </ResponsiveGrid>
 
-          {subject === 'shenlun' && (
+          {canUsePublicExam && subject === 'shenlun' && (
             <div className="card p-5 space-y-3">
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2">

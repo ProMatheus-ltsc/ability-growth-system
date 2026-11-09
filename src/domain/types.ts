@@ -73,11 +73,13 @@ export const MODULE_VISIBILITY: Record<GradeLevel, {
   career: boolean;
   literacy: boolean;
   examRegistration: boolean;
+  /** 公考专属板块（学科专项：申论作答 / 面试记录，及报考信息等） */
+  publicExam: boolean;
 }> = {
-  primary: { pdca: false, career: false, literacy: true, examRegistration: false },
-  junior:  { pdca: false, career: true,  literacy: true, examRegistration: false },
-  senior:  { pdca: false, career: true,  literacy: true, examRegistration: false },
-  adult:   { pdca: true,  career: true,  literacy: false, examRegistration: true  },
+  primary: { pdca: false, career: false, literacy: true, examRegistration: false, publicExam: false },
+  junior:  { pdca: false, career: true,  literacy: true, examRegistration: false, publicExam: false },
+  senior:  { pdca: false, career: true,  literacy: true, examRegistration: false, publicExam: false },
+  adult:   { pdca: true,  career: true,  literacy: false, examRegistration: true,  publicExam: true  },
 };
 
 /** 掌握等级 */
