@@ -14,7 +14,7 @@ import type {
   Subject,
   TrainingRecord,
 } from '../domain/types';
-import { SUBJECT_LABEL } from '../domain/types';
+import { REGISTRATION_TIMELINE_LABEL, SUBJECT_LABEL } from '../domain/types';
 import { prioritizeGaps } from './analytics';
 import { INFO_INSUFFICIENT } from '../domain/missingInfo';
 
@@ -228,22 +228,49 @@ export interface ExamTarget {
  * - 无分科计划时回退到顶层 examDate
  * - 同一天只保留第一条标签，避免重复标记
  * - from 传今天时用于“当前规划目标”（时间线页）；不传则返回全部（日历按月份浏览）
+ * - **同时把 `timeline` 里的报名/缴费/准考证节点一并带出**（2026-11-12），
+ *   这样日历不用再单独接一份数据源；同一天多个节点用 `、` 合并。
  */
 export function collectExamTargets(registrations: ExamRegistration[], from?: string): ExamTarget[] {
   const byDate = new Map<string, string>();
+  /** 考试场次：同一天只保留第一条（保持原有语义，不同科目/不同记录都不叠加） */
+  const pushExam = (date: string, label: string) => {
+    if (date && !byDate.has(date)) byDate.set(date, label);
+  };
+  /** 流程节点：同一天多个节点（如报名开始+截止）合并成一条，避免占多行 */
+  const pushTimeline = (date: string, label: string) => {
+    if (!date) return;
+    const prev = byDate.get(date);
+    if (!prev) byDate.set(date, label);
+    else if (!prev.includes(label)) byDate.set(date, `${prev}、${label}`);
+  };
+
   for (const r of registrations) {
+    const post = r.postName ?? '报考信息';
+
+    // 1) 考试日（原有逻辑：同一天只留一条，不合并标签）
     const entries = Object.entries(r.subjectPlans ?? {}).filter(([, p]) => Boolean(p?.examDate)) as [
       Subject,
       { examDate: string },
     ][];
     if (entries.length === 0) {
-      if (r.examDate && !byDate.has(r.examDate)) byDate.set(r.examDate, r.postName ?? '报考信息');
-      continue;
-    }
-    for (const [sub, plan] of entries) {
-      if (!byDate.has(plan.examDate)) byDate.set(plan.examDate, `${r.postName ?? '报考信息'} · ${SUBJECT_LABEL[sub]}`);
+      pushExam(r.examDate ?? '', post);
+    } else {
+      for (const [sub, plan] of entries) {
+        pushExam(plan.examDate, `${post} · ${SUBJECT_LABEL[sub]}`);
+      }
     }
   }
+
+  // 2) 报考流程节点（报名/缴费/准考证/成绩）——单独一轮，可与其他节点合并
+  for (const r of registrations) {
+    const post = r.postName ?? '报考信息';
+    for (const { key, label } of REGISTRATION_TIMELINE_LABEL) {
+      const date = r.timeline?.[key];
+      if (date) pushTimeline(date, `${post} · ${label}`);
+    }
+  }
+
   return [...byDate.entries()]
     .filter(([date]) => (from ? date >= from : true))
     .sort((a, b) => a[0].localeCompare(b[0]))

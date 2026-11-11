@@ -12,7 +12,7 @@ import { useAppSession } from '../hooks/useAppSession';
 import { getAllRecords, putRecord, deleteRecord } from '../services/localDB';
 import { PageHeader } from '../components/PageHeader';
 import { EmptyState } from '../components/EmptyState';
-import { SUBJECT_LABEL, type ExamRegistration, type Subject, type SubjectExamPlan } from '../domain/types';
+import { REGISTRATION_TIMELINE_LABEL, SUBJECT_LABEL, type ExamRegistration, type RegistrationTimeline, type Subject, type SubjectExamPlan } from '../domain/types';
 
 type PlanForm = { examDate: string; targetScore: string };
 
@@ -178,6 +178,16 @@ function RegForm({
     }));
   };
 
+  // 报考流程时间节点（报名/缴费/准考证/成绩），键与 RegistrationTimeline 一致
+  const [timeline, setTimeline] = useState<RegistrationTimeline>(() => initial?.timeline ?? {});
+  const [postName, setPostName] = useState<string>(() => {
+    const name = initial?.postName ?? '';
+    return name === '报考信息' ? '' : name;
+  });
+  const updateTimeline = (key: keyof RegistrationTimeline, value: string) => {
+    setTimeline((prev) => ({ ...prev, [key]: value }));
+  };
+
   const save = async () => {
     const plans: Partial<Record<Subject, SubjectExamPlan>> = {};
     for (const s of subjects) {
@@ -200,16 +210,23 @@ function RegForm({
       .map((p) => p?.examDate)
       .filter((d): d is string => Boolean(d))
       .sort();
+    // 只保留真正填了值的时间节点，避免存一堆空字符串
+    const cleanTimeline: RegistrationTimeline = {};
+    for (const { key } of REGISTRATION_TIMELINE_LABEL) {
+      const v = timeline[key];
+      if (v && v.trim()) cleanTimeline[key] = v.trim();
+    }
     const record: ExamRegistration = {
       ...(initial ?? {}),
       id: initial?.id ?? uuid(),
       studentId: studentId ?? initial?.studentId,
-      // 存储层这两个字段必填；新记录用中性默认值，编辑老记录时保留原值
-      postName: initial?.postName ?? '报考信息',
+      // 存储层这两个字段必填；岗位名留空时用中性默认值（页面显示「未填写」）
+      postName: postName.trim() || '报考信息',
       examType: initial?.examType ?? 'national',
       // 顶层考试时间取最早一场，兼容仍要读顶层 examDate 的旧逻辑
       examDate: dates[0] ?? initial?.examDate ?? '',
       subjectPlans: plans,
+      timeline: Object.keys(cleanTimeline).length > 0 ? cleanTimeline : undefined,
       createdAt: initial?.createdAt ?? now,
       updatedAt: now,
     };
@@ -228,6 +245,20 @@ function RegForm({
 
         <div className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500 mb-4">
           科目来自「设置 → 学科」，本页不重复选择。
+        </div>
+
+        {/* 岗位名称：用于日历/时间线的节点标签，留空显示为「报考信息」 */}
+        <div className="mb-4">
+          <label className="label">岗位名称</label>
+          <input
+            className="input"
+            value={postName}
+            onChange={(e) => setPostName(e.target.value)}
+            placeholder="例如：广州市南沙区发展和改革局 · 一级科员"
+          />
+          <p className="text-xs text-slate-400 mt-1">
+            日历与时间线上的节点会带上这个名字，填「单位 + 职位」最好认。
+          </p>
         </div>
 
         {legacy?.targetScore !== undefined && (
@@ -265,6 +296,30 @@ function RegForm({
               </div>
             </div>
           ))}
+        </div>
+
+        {/* 报考流程时间节点：填了哪个就在日历上生成对应节点，全不填不影响 */}
+        <div className="mt-4 rounded-xl border border-slate-200 p-3">
+          <div className="text-sm font-semibold text-slate-800 mb-1">报考流程时间节点</div>
+          <p className="text-xs text-slate-400 mb-3">
+            填了就会出现在日历的「关键节点」里；截止类（报名/缴费）带 * 提醒别错过。
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {REGISTRATION_TIMELINE_LABEL.map(({ key, label, isDeadline }) => (
+              <div key={key}>
+                <label className="label">
+                  {label}
+                  {isDeadline && <span className="text-red-500 ml-1">*</span>}
+                </label>
+                <input
+                  className="input"
+                  type="date"
+                  value={timeline[key] ?? ''}
+                  onChange={(e) => updateTimeline(key, e.target.value)}
+                />
+              </div>
+            ))}
+          </div>
         </div>
 
         <div className="flex justify-end gap-2 mt-4">

@@ -540,7 +540,43 @@ export interface ExamRegistration {
   targetScore?: number;
   /** 新数据：按科目拆分的目标分与考试时间；缺省时回退到顶层 targetScore / examDate */
   subjectPlans?: Partial<Record<Subject, SubjectExamPlan>>;
+  /**
+   * 报考流程时间节点（2026-11-12 加）。
+   * 存 `YYYY-MM-DD`，未填就不写该键；日历据此生成报名/缴费/准考证等关键节点。
+   */
+  timeline?: RegistrationTimeline;
 }
+
+/** 报考流程的关键时间点；全部可选，只填确定的那几个 */
+export interface RegistrationTimeline {
+  /** 报名开始日 */
+  registerStart?: string;
+  /** 报名截止日 */
+  registerEnd?: string;
+  /** 缴费开始日 */
+  paymentStart?: string;
+  /** 缴费截止日 */
+  paymentEnd?: string;
+  /** 准考证打印开始日 */
+  admissionTicketStart?: string;
+  /** 笔试成绩公布日（可选，用于后续面试排期） */
+  scoreRelease?: string;
+}
+
+/** 报考流程节点的展示顺序与文案（日历、时间线、详情页共用一份，避免各处写死） */
+export const REGISTRATION_TIMELINE_LABEL: Array<{
+  key: keyof RegistrationTimeline;
+  label: string;
+  /** 该节点属于「截止」类时需要额外提醒 */
+  isDeadline?: boolean;
+}> = [
+  { key: 'registerStart', label: '报名开始' },
+  { key: 'registerEnd', label: '报名截止', isDeadline: true },
+  { key: 'paymentStart', label: '缴费开始' },
+  { key: 'paymentEnd', label: '缴费截止', isDeadline: true },
+  { key: 'admissionTicketStart', label: '准考证打印开始' },
+  { key: 'scoreRelease', label: '成绩公布' },
+];
 
 /** 备考/学期阶段规划 */
 export type PlanStage = 'foundation' | 'topic' | 'sprint' | 'pre-exam';
