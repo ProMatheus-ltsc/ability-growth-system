@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { v4 as uuid } from 'uuid';
-import { AlertOctagon, CheckCircle2, PlusCircle, Trash2, X, ListTodo } from 'lucide-react';
+import { AlertOctagon, CheckCircle2, ChevronDown, ChevronRight, PlusCircle, Trash2, X, ListTodo } from 'lucide-react';
 import { Timeline, useToast, type TimelineItem } from '@shared/core';
 import { useAppSession } from '../hooks/useAppSession';
 import { findGaps, findTasks, findTrainingsByStudent, putRecord, deleteRecord } from '../services/localDB';
@@ -42,6 +42,10 @@ export function ProblemCenterPage() {
   const [trainings, setTrainings] = useState<TrainingRecord[]>([]);
   const [filter, setFilter] = useState<'unresolved' | 'in-progress' | 'verified' | 'all'>('unresolved');
   const [showForm, setShowForm] = useState(false);
+  /** 排序维度：数量多的在前 / 严重度高的在前 / 最近出现的在前 */
+  const [sortBy, setSortBy] = useState<'occurrence' | 'severity' | 'recent'>('occurrence');
+  /** 折叠时只显示标题行；默认折叠，避免几十条缺口要滚很久 */
+  const [collapsed, setCollapsed] = useState(true);
 
   const refresh = useCallback(async () => {
     const [g, t] = await Promise.all([
@@ -58,8 +62,22 @@ export function ProblemCenterPage() {
 
   const filtered = useMemo(() => {
     const scoped = filter === 'all' ? gaps : gaps.filter((g) => g.status === filter);
-    return prioritizeGaps(scoped);
-  }, [filter, gaps]);
+    const base = prioritizeGaps(scoped);
+    const severityWeight = (s: string) => (s === 'serious' ? 3 : s === 'medium' ? 2 : 1);
+    const sorted = [...base];
+    if (sortBy === 'occurrence') {
+      sorted.sort((a, b) => (b.occurrenceCount ?? 0) - (a.occurrenceCount ?? 0));
+    } else if (sortBy === 'severity') {
+      sorted.sort(
+        (a, b) =>
+          severityWeight(b.severity) - severityWeight(a.severity) ||
+          (b.occurrenceCount ?? 0) - (a.occurrenceCount ?? 0),
+      );
+    } else {
+      sorted.sort((a, b) => String(b.lastSeenAt ?? '').localeCompare(String(a.lastSeenAt ?? '')));
+    }
+    return sorted;
+  }, [filter, gaps, sortBy]);
 
   const updateGap = async (gap: AbilityGap, patch: Partial<AbilityGap>) => {
     const now = new Date().toISOString();
@@ -146,7 +164,7 @@ export function ProblemCenterPage() {
         }
       />
 
-      <div className="flex items-center gap-2 text-sm">
+      <div className="flex items-center gap-2 text-sm flex-wrap">
         {(['unresolved', 'in-progress', 'verified', 'all'] as const).map((k) => (
           <button
             key={k}
@@ -163,6 +181,26 @@ export function ProblemCenterPage() {
             {k === 'all' && '全部'}
           </button>
         ))}
+
+        {/* 排序 + 折叠：缺口多时先按「复现次数」压到最上面，其余折叠成一行 */}
+        <div className="ml-auto flex items-center gap-2">
+          <label className="text-xs text-slate-500">排序</label>
+          <select
+            className="input py-1 text-xs"
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
+          >
+            <option value="occurrence">复现次数</option>
+            <option value="severity">严重程度</option>
+            <option value="recent">最近出现</option>
+          </select>
+          <button
+            className="px-3 py-1.5 rounded-lg bg-white border border-slate-200 text-slate-600 hover:border-slate-300 text-xs"
+            onClick={() => setCollapsed((v) => !v)}
+          >
+            {collapsed ? `全部展开 (${filtered.length})` : '全部折叠'}
+          </button>
+        </div>
       </div>
 
       {filtered.length === 0 ? (
@@ -181,6 +219,7 @@ export function ProblemCenterPage() {
                 trainings.filter((r) => r.subject === g.subject),
                 g.errorCategory,
               )}
+              defaultCollapsed={collapsed}
               onUpdate={(patch) => updateGap(g, patch)}
               onDelete={() => deleteGap(g.id)}
               onCreateTask={() => createFixTask(g)}
@@ -209,12 +248,15 @@ export function ProblemCenterPage() {
 export function GapCard({
   gap,
   recurrence,
+  defaultCollapsed = false,
   onUpdate,
   onDelete,
   onCreateTask,
 }: {
   gap: AbilityGap;
   recurrence: number;
+  /** 初始是否折叠（由页面级「全部折叠」控制） */
+  defaultCollapsed?: boolean;
   onUpdate: (patch: Partial<AbilityGap>) => void;
   onDelete: () => void;
   onCreateTask: () => void;
@@ -224,6 +266,11 @@ export function GapCard({
   const point = path.point ?? INFO_INSUFFICIENT;
   const moduleText = path.module ?? INFO_INSUFFICIENT;
   const recurrencePct = Number.isFinite(recurrence) ? Math.round(recurrence * 100) : null;
+  // 单卡可独立展开/收起；页面级「全部折叠」变化时同步
+  const [collapsed, setCollapsed] = useState(defaultCollapsed);
+  useEffect(() => {
+    setCollapsed(defaultCollapsed);
+  }, [defaultCollapsed]);
   const severityColor: Record<AbilityGap['severity'], string> = {
     light: 'bg-yellow-50 text-yellow-700',
     medium: 'bg-orange-50 text-orange-700',
@@ -242,6 +289,13 @@ export function GapCard({
       <div className="flex items-start justify-between gap-3">
         <div className="flex-1">
           <div className="flex items-center gap-2 flex-wrap">
+            <button
+              className="text-slate-400 hover:text-slate-700 shrink-0"
+              title={collapsed ? '展开详情' : '收起详情'}
+              onClick={() => setCollapsed((v) => !v)}
+            >
+              {collapsed ? <ChevronRight size={16} /> : <ChevronDown size={16} />}
+            </button>
             <span className="text-base font-semibold text-slate-900">{point}</span>
             <span className="badge bg-slate-100 text-slate-600">
               {SUBJECT_LABEL[gap.subject] ?? INFO_INSUFFICIENT} · {moduleText}
@@ -250,7 +304,17 @@ export function GapCard({
             <span className="badge bg-blue-50 text-blue-700">
               复现 {gap.occurrenceCount ?? INFO_INSUFFICIENT} 次
             </span>
+            {/* 折叠时把关键判断依据留在标题行，不用展开就能扫 */}
+            {collapsed && (
+              <span className="text-xs text-slate-500">
+                {errorCategoryText(gap.errorCategory)} · 复现率{' '}
+                {recurrencePct === null ? INFO_INSUFFICIENT : `${recurrencePct}%`} · 最近{' '}
+                {formatDay(gap.lastSeenAt)}
+              </span>
+            )}
           </div>
+          {collapsed ? null : (
+            <>
           {path.missing && (
             <Link
               to="/trainings"
@@ -310,6 +374,8 @@ export function GapCard({
           <div className="text-xs text-slate-400 mt-2">
             首次: {formatDay(gap.firstSeenAt)} · 最近: {formatDay(gap.lastSeenAt)}
           </div>
+            </>
+          )}
         </div>
 
         <div className="flex flex-col items-end gap-2">

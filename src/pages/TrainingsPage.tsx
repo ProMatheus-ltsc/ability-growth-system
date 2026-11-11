@@ -78,10 +78,56 @@ export function TrainingsPage() {
     [prefs.subjects, prefs.gradeLevel],
   );
 
-  const filtered = useMemo(
-    () => (filterSubject === 'all' ? records : records.filter((r) => r.subject === filterSubject)),
-    [records, filterSubject],
+  // ---- 筛选 / 排序 / 分页（2026-11-12 加：记录多时刷屏，默认每页 20 条）----
+  const PAGE_SIZE = 20;
+  const [filterModule, setFilterModule] = useState<string>('all');
+  const [filterType, setFilterType] = useState<string>('all');
+  const [dateFrom, setDateFrom] = useState<string>('');
+  const [dateTo, setDateTo] = useState<string>('');
+  const [sortBy, setSortBy] = useState<'date-desc' | 'date-asc' | 'accuracy-asc' | 'accuracy-desc'>('date-desc');
+  const [page, setPage] = useState(1);
+
+  /** 当前学科筛选下的可选模块与题型，只列出真实存在的，避免下拉里一堆空选项 */
+  const moduleOptions = useMemo(() => {
+    const scoped = filterSubject === 'all' ? records : records.filter((r) => r.subject === filterSubject);
+    return Array.from(new Set(scoped.map((r) => r.module).filter(Boolean))).sort();
+  }, [records, filterSubject]);
+
+  const typeOptions = useMemo(() => {
+    const scoped = filterSubject === 'all' ? records : records.filter((r) => r.subject === filterSubject);
+    return Array.from(new Set(scoped.map((r) => r.trainingType).filter(Boolean))).sort();
+  }, [records, filterSubject]);
+
+  const filtered = useMemo(() => {
+    let list = filterSubject === 'all' ? records : records.filter((r) => r.subject === filterSubject);
+    if (filterModule !== 'all') list = list.filter((r) => r.module === filterModule);
+    if (filterType !== 'all') list = list.filter((r) => r.trainingType === filterType);
+    if (dateFrom) list = list.filter((r) => String(r.date ?? '') >= dateFrom);
+    if (dateTo) list = list.filter((r) => String(r.date ?? '') <= dateTo);
+
+    const accuracy = (r: TrainingRecord) =>
+      r.totalQuestions > 0 ? (r.totalQuestions - r.errorCount) / r.totalQuestions : 0;
+    const sorted = [...list];
+    if (sortBy === 'date-desc') sorted.sort((a, b) => String(b.date ?? '').localeCompare(String(a.date ?? '')));
+    else if (sortBy === 'date-asc') sorted.sort((a, b) => String(a.date ?? '').localeCompare(String(b.date ?? '')));
+    else if (sortBy === 'accuracy-asc') sorted.sort((a, b) => accuracy(a) - accuracy(b));
+    else sorted.sort((a, b) => accuracy(b) - accuracy(a));
+    return sorted;
+  }, [records, filterSubject, filterModule, filterType, dateFrom, dateTo, sortBy]);
+
+  // 筛选条件变化时回到第一页，避免停在越界页
+  useEffect(() => {
+    setPage(1);
+  }, [filterSubject, filterModule, filterType, dateFrom, dateTo, sortBy]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages);
+  const pageItems = useMemo(
+    () => filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE),
+    [filtered, safePage],
   );
+  const hasActiveFilter =
+    filterModule !== 'all' || filterType !== 'all' || dateFrom !== '' || dateTo !== '';
 
   const handleSave = async (draft: TrainingRecord) => {
     await putRecord('trainings', draft);
@@ -162,7 +208,7 @@ export function TrainingsPage() {
         <Link to="/interview" className="underline font-medium">去面试记录 →</Link>
       </div>
 
-      <div className="flex items-center gap-2 text-sm text-slate-600">
+      <div className="flex items-center gap-2 text-sm text-slate-600 flex-wrap">
         <Filter size={14} />
         <span>学科筛选:</span>
         <button
@@ -182,11 +228,85 @@ export function TrainingsPage() {
         ))}
       </div>
 
+      {/* 模块 / 题型 / 时间 / 排序：记录多时用它们把范围收窄，避免一屏几十条 */}
+      <div className="flex items-center gap-2 flex-wrap text-xs">
+        <select
+          className="input py-1 text-xs"
+          value={filterModule}
+          onChange={(e) => setFilterModule(e.target.value)}
+        >
+          <option value="all">全部模块</option>
+          {moduleOptions.map((m) => (
+            <option key={m} value={m}>
+              {m}
+            </option>
+          ))}
+        </select>
+
+        <select
+          className="input py-1 text-xs"
+          value={filterType}
+          onChange={(e) => setFilterType(e.target.value)}
+        >
+          <option value="all">全部题型</option>
+          {typeOptions.map((t) => (
+            <option key={t} value={t}>
+              {TRAINING_TYPE_LABEL[t as TrainingType] ?? t}
+            </option>
+          ))}
+        </select>
+
+        <span className="text-slate-400">时间</span>
+        <input
+          className="input py-1 text-xs"
+          type="date"
+          value={dateFrom}
+          onChange={(e) => setDateFrom(e.target.value)}
+        />
+        <span className="text-slate-400">至</span>
+        <input
+          className="input py-1 text-xs"
+          type="date"
+          value={dateTo}
+          onChange={(e) => setDateTo(e.target.value)}
+        />
+
+        <select
+          className="input py-1 text-xs"
+          value={sortBy}
+          onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
+        >
+          <option value="date-desc">最近优先</option>
+          <option value="date-asc">最早优先</option>
+          <option value="accuracy-asc">正确率低到高</option>
+          <option value="accuracy-desc">正确率高到低</option>
+        </select>
+
+        {hasActiveFilter && (
+          <button
+            className="px-2 py-1 rounded border border-slate-200 text-slate-600 hover:border-slate-300"
+            onClick={() => {
+              setFilterModule('all');
+              setFilterType('all');
+              setDateFrom('');
+              setDateTo('');
+            }}
+          >
+            清空筛选
+          </button>
+        )}
+
+        <span className="ml-auto text-slate-400">
+          共 {filtered.length} 条
+          {totalPages > 1 && ` · 第 ${safePage}/${totalPages} 页`}
+        </span>
+      </div>
+
       {filtered.length === 0 ? (
         <EmptyState
           icon={PlusCircle}
-          title={copy.emptyTitle}
-          description={copy.emptyDescription}
+          title={hasActiveFilter ? '当前筛选没有记录' : copy.emptyTitle}
+          description={hasActiveFilter ? '放宽筛选条件试试，或清空筛选' : copy.emptyDescription}
           action={
             <button className="btn-primary" onClick={() => setShowForm(true)}>
               <PlusCircle size={16} /> {copy.emptyAction}
@@ -194,11 +314,35 @@ export function TrainingsPage() {
           }
         />
       ) : (
-        <div className="card divide-y divide-slate-100">
-          {filtered.map((r) => (
-            <RecordItem key={r.id} record={r} onDelete={() => handleDelete(r.id)} />
-          ))}
-        </div>
+        <>
+          <div className="card divide-y divide-slate-100">
+            {pageItems.map((r) => (
+              <RecordItem key={r.id} record={r} onDelete={() => handleDelete(r.id)} />
+            ))}
+          </div>
+
+          {totalPages > 1 && (
+            <div className="flex items-center justify-center gap-2 text-sm">
+              <button
+                className="btn-ghost text-xs disabled:opacity-40"
+                disabled={safePage <= 1}
+                onClick={() => setPage(safePage - 1)}
+              >
+                上一页
+              </button>
+              <span className="text-slate-500">
+                {safePage} / {totalPages}
+              </span>
+              <button
+                className="btn-ghost text-xs disabled:opacity-40"
+                disabled={safePage >= totalPages}
+                onClick={() => setPage(safePage + 1)}
+              >
+                下一页
+              </button>
+            </div>
+          )}
+        </>
       )}
 
       {showForm && (
