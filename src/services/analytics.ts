@@ -27,6 +27,8 @@ import type {
 } from '../domain/types';
 import { INTERVIEW_QUESTION_TYPES, SHENLUN_QUESTION_TYPES, scoreToLevel, TRAINING_TYPE_LABEL } from '../domain/types';
 import { displayQuestionType, isClassifiedType } from '../domain/subjectiveQuestion';
+import { buildAbilityPath, inferErrorCategories } from '../domain/abilityPath';
+import { validateAbilityPath } from '../domain/abilityPathGuard';
 import { getRadarDimensions } from '../domain/abilityTags';
 import { normalizeModule, pathBelongsToModule } from '../domain/moduleNormalize';
 import { isStandardMinutesInferred } from '../domain/paperStructure';
@@ -1680,9 +1682,13 @@ export function deriveGapsFromTraining(
   const severity: AbilityGap['severity'] =
     errorRate >= 0.7 ? 'serious' : errorRate >= 0.4 ? 'medium' : 'light';
 
-  // 若无错误类型标签,使用默认 concept 兜底(避免"训练录入错题但未选错因"场景漏归集)
-  const categories: ErrorCategory[] = record.errorCategories.length > 0 ? record.errorCategories : ['concept'];
-  const abilityPath = `${record.subject}/${record.module}`;
+  // 错因：显式标签优先，缺失时按模块/题型/备注推断（不再一律兜底成 concept）
+  const categories: ErrorCategory[] = inferErrorCategories(record);
+  // 路径：统一口径（按学科定深度、模块名归一化），与 deriveSnapshotFromTraining 共用。
+  // 再过一遍白名单校验：行测第 3/4 段必须在标签库里，防止脚本写入自由字符串把同一考点裂成多条。
+  const draftedPath = buildAbilityPath(record);
+  const checked = validateAbilityPath(draftedPath, record.subject, record.gradeLevel as GradeLevel, true);
+  const abilityPath = checked.normalized || draftedPath;
 
   const updated: AbilityGap[] = [];
   for (const category of categories) {
@@ -1804,7 +1810,7 @@ export function deriveSnapshotFromTraining(record: TrainingRecord): AbilitySnaps
     id: uuid(),
     studentId: record.studentId,
     subject: record.subject,
-    abilityPath: `${record.subject}/${record.module}`,
+    abilityPath: buildAbilityPath(record),
     score,
     level,
     confidence,

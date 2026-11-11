@@ -87,12 +87,25 @@ export function normalizeModule(
   const exact = canonical.find((m) => squeeze(m) === target);
   if (exact) return exact;
 
-  // 3) 前缀包含（双向）: 规范名是前缀，或原文是规范名的前缀
-  const prefixHit = canonical.find((m) => {
-    const c = squeeze(m);
-    return target.startsWith(c) || c.startsWith(target);
-  });
-  if (prefixHit) return prefixHit;
+  // 3) 前缀包含（双向）: 规范名是前缀，或原文是规范名的前缀。
+  //    ⚠️ 必须取**最短**命中，且短名不得太短（≥3 字）——
+  //    否则 K12 的 `函数` 会被 `函数分析` 吞掉（2026-11-11 实测误判）。
+  //    例：`言语理解与表达` 应命中 `言语理解`（而不是更长的同前缀规范名）。
+  const prefixHits = canonical
+    .filter((m) => {
+      const c = squeeze(m);
+      return target.startsWith(c) || c.startsWith(target);
+    })
+    .sort((a, b) => squeeze(a).length - squeeze(b).length);
+  const shortest = prefixHits[0];
+  if (shortest && squeeze(shortest).length >= 3) {
+    // 只有当原文比规范名长（如 `言语理解与表达` → `言语理解`）时才替换；
+    // 原文本身就是完整模块名（如 `函数`）时保持原样，避免被更长的规范名吞掉。
+    if (squeeze(shortest).length < target.length) return shortest;
+    if (squeeze(shortest) === target) return shortest;
+    // 原文是规范名的前缀但更短 → 保留原文（它可能是一个合法的更细模块）
+    return head;
+  }
 
   // 4) 别名表
   const alias = MODULE_ALIASES[target];
