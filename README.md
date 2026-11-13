@@ -58,7 +58,7 @@
 | 训练记录 | `/trainings` | 支持多学段多学科的训练记录,含标准/快速模式、错误 chips、陌生题标记 |
 | 能力中心 | `/abilities` | 能力雷达图、增长曲线、模块掌握度、三级能力标签明细 |
 | 问题中心 | `/problems` | 跨学科统一管理未修复能力缺口,含错误复现率、修复→验证状态机 |
-| 复盘中心 | — | 已下线（2026-11-09 用户另有独立复盘站点，界面与素养指标一并移除；`reviews` 表待 `0004_drop_reviews.sql` 执行后删除，当前未执行） |
+| 复盘中心 | — | 已下线（2026-11-09 用户另有独立复盘站点，界面与素养指标一并移除；`reviews` 表已删除） |
 | 学段学科配置 | `Onboarding` | 5 分钟启动引导:身份 → 学段 → 学科 |
 | 学生管理 (教师) | `/students` | 添加/编辑学生,含学段/年级/学科/分组/考试类型 |
 | 设置 | `/settings` | 身份/学段/学科偏好,清空云端数据 |
@@ -247,13 +247,15 @@ ability-growth-system/
 ### 5.1 D1 表结构
 
 26 张在用业务表结构一致，主键为 `(workspace, id)`，`workspace` 为登录用户名（小写）。
-已下线的 `reviews` 表仍留在库中，待 `0004_drop_reviews.sql` 执行后删除，不在快照与备份范围内。
+已下线的 `reviews` 与 `labelStats` 表均已从库中删除，不在快照与备份范围内。
 复合主键保证确定性 id（如粉笔派生的 `ab-*`、`fenbi-md-*`）在不同账户下各自独立，写入不会跨账户抢行。
 写入使用不带目标的 `ON CONFLICT DO UPDATE`，兼容迁移前后的主键。
 
 **迁移执行顺序**：先发布代码，再执行 `0005_composite_pk.sql`，最后执行 `0007_drop_labelStats.sql`
 （旧代码的 `initSchema` 会把 labelStats 重建出来，必须等新代码上线后再删）。
 `0006_data_cleanup.sql` 只做数据订正与索引，已在新代码部署前执行，可重复执行。
+`0008_training_semantics.sql` 归一训练记录结构字段（`kind/examRef/attemptId/parentId/depth`），
+保留 `scope/aggregationRole` 供旧代码在线时读取，新旧代码均可运行，可重复执行。
 
 ```sql
 CREATE TABLE trainings (
@@ -268,11 +270,10 @@ CREATE INDEX idx_trainings_workspace_updated ON trainings(workspace, updated_at)
 
 | 表 | 实体 | 主要字段 |
 |-------|-------|---------|
-| `trainings` | 训练记录 | date · subject · module · totalQuestions · errorCount · errorCategories · isUnfamiliar |
+| `trainings` | 训练记录 | date · subject · module · kind · attemptId · examRef · parentId · depth · totalQuestions · errorCount · errorCategories · isUnfamiliar |
 | `gaps` | 能力缺口 | subject · abilityPath · severity · status · occurrenceCount |
 | `abilities` | 能力快照 | subject · abilityPath · score · level · confidence · source |
 | `students` | 学生档案 | name · gradeLevel · subjects · group · examDate |
-| `reviews` | 日/周/月复盘记录(已下线) | level · date · did · issues · next |
 | `tasks` | 修复/验证任务 | subject · abilityPath · type · status |
 | `templates` | 任务模板库 | gradeLevel · subject · taskKind · suggestedQuestions |
 | `assignments` | 教师任务下发 | title · subject · totalQuestions · dueAt · assigneeStudentIds |
@@ -308,7 +309,30 @@ CREATE INDEX idx_trainings_workspace_updated ON trainings(workspace, updated_at)
 
 浏览器 IndexedDB 仅保留设备级 `meta`（偏好、最近录入默认值），不存储业务数据。
 
-### 5.2 Pages Functions API
+### 5.2 训练记录语义层（Option A）
+
+`trainings` 仍是单表，但每条记录显式声明自己在一次作答中的结构角色，不再依赖
+`scope` / `aggregationRole` / id 字符串约定互相压制：
+
+| 字段 | 含义 |
+|------|------|
+| `kind` | `exam`（整卷根，depth 0）· `module`（模块段，depth 1）· `label`（标签段，depth ≥ 2）· `practice`（独立练习）· `review`（错题复盘）· `summary`（跨日期聚合行，任何求和都排除） |
+| `attemptId` | 同一次作答的树；未来拆 attempts 表时直接作为主键 |
+| `examRef` | 试卷实体引用，统一为 `exam-fenbi-exam-{paperId}`；同一张卷的多次作答可共享 `examRef`、不同 `attemptId` |
+| `parentId` / `depth` | 直接父节点与层级；`module → exam`、`label → module/label` |
+
+**聚合口径**：学科题量同一棵树优先整卷 → 否则模块 → 否则独立记录，`label` 永不相加
+（一张 130 题卷的标签题量和为 330，直接加会虚增）；模块统计优先模块 → 否则整卷。
+`exams.moduleBreakdown` 是派生投影：存在模块行时由 `deriveExamModuleBreakdown` 计算，
+仅在没有模块行时回退到快照中的存量值。
+`validity='duplicate'` 只是数据质量标记（如 2026-11-07 卷手工模块行与粉笔模块行重复），
+不参与结构判定，也不参与求和。
+
+写入边界（前端 `putRecord`、API `PUT/bulk/快照导入`）统一调用 `withTrainingSemantics`
+补全 `kind/examRef/attemptId/depth`；外部导入按 `(source, sourceId, kind)` 幂等去重。
+`migrations/0008_training_semantics.sql` 对存量数据做同样归一，可重复执行。
+
+### 5.3 Pages Functions API
 
 前端只依赖同域 `/api`，通过 HttpOnly 会话 Cookie 鉴权；业务路由的工作空间由服务端会话推导，客户端无法指定。
 

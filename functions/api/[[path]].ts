@@ -26,6 +26,11 @@ import type { D1Database, D1PreparedStatement, PagesFunction } from '@cloudflare
 import { STORE_NAMES, type ExportedSnapshot, type StoreName } from '../../src/services/snapshot';
 import { guardTrainingRecords } from '../../src/domains/public-exam';
 import {
+  dedupeTrainingRecordsByIdempotencyKey,
+  withTrainingSemantics,
+} from '../../src/domain/trainingSemantics';
+import type { TrainingRecord } from '../../src/domain/types';
+import {
   filterStoreRecordsForGrade,
   isGradeLevel,
   isScopeManagedStore,
@@ -474,12 +479,20 @@ function validRecords(value: unknown): JsonRecord[] {
 
 /** 历史公考记录缺 gradeLevel 时补 adult；K12 记录缺学段保持原样，不做猜测 */
 function normalizeScopedRecords(store: StoreName, records: JsonRecord[]): JsonRecord[] {
-  // 来源可追溯：训练记录缺 source 时按手工录入补齐，外部同步工具会显式写 fenbi
+  // 来源可追溯：训练记录缺 source 时按手工录入补齐，外部同步工具会显式写 fenbi。
+  // 训练记录同时补 kind / examRef / attemptId / depth，并按 (source, sourceId, kind) 去重，
+  // 保证未迁移的旧快照重新导入后也落到同一语义模型。
   const withSource =
     store === 'trainings'
-      ? records.map((record) =>
-          typeof record.source === 'string' && record.source ? record : { ...record, source: 'manual' },
-        )
+      ? (dedupeTrainingRecordsByIdempotencyKey(
+          records.map((record) =>
+            withTrainingSemantics({
+              ...(record as unknown as TrainingRecord),
+              source:
+                typeof record.source === 'string' && record.source ? record.source : 'manual',
+            }),
+          ),
+        ) as unknown as JsonRecord[])
       : records;
   if (!isScopeManagedStore(store)) return withSource;
   return withSource.map(

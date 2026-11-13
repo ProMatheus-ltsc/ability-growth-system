@@ -16,6 +16,7 @@ import { getModules } from '../domain/abilityTags';
 import { selectTrainingEntrySubjects } from '../domains/public-exam';
 import { putRecord } from '../services/localDB';
 import { deriveGapsFromTraining, deriveSnapshotFromTraining } from '../services/analytics';
+import { withTrainingSemantics } from '../domain/trainingSemantics';
 
 const GRADE_ORDER: GradeLevel[] = ['primary', 'junior', 'senior', 'adult'];
 
@@ -68,7 +69,7 @@ export function OnboardingPage() {
       // V5.11 Bug #002 修复:如用户填写了基线训练,立即保存并派生 gap+快照
       if (!isTeacher && !skipBaseline && baseline) {
         const now = new Date().toISOString();
-        const record: TrainingRecord = {
+        const record = withTrainingSemantics({
           id: uuid(),
           date: now.slice(0, 10),
           gradeLevel,
@@ -84,7 +85,7 @@ export function OnboardingPage() {
           note: '初始能力基线',
           createdAt: now,
           updatedAt: now,
-        };
+        } satisfies TrainingRecord);
         await putRecord('trainings', record);
         const gaps = deriveGapsFromTraining(record, []);
         for (const g of gaps) await putRecord('gaps', g);

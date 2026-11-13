@@ -10,7 +10,8 @@ import { EmptyState } from '../components/EmptyState';
 import { MasteryBar } from '../components/MasteryBar';
 import { getModules } from '../domain/abilityTags';
 import { selectTrainingEntrySubjects } from '../domains/public-exam';
-import { deriveGapsFromTraining } from '../services/analytics';
+import { deriveExamModuleBreakdown, deriveGapsFromTraining, findExamTrainings } from '../services/analytics';
+import { normalizeExamRef, resolveTrainingKind } from '../domain/trainingSemantics';
 import { PAPER_TYPE_LABEL, PAPER_TYPE_OPTIONS, scoreToLevel, SUBJECT_LABEL } from '../domain/types';
 import type {
   AbilityGap,
@@ -147,9 +148,10 @@ export function ExamDiagnosisPage() {
       ) : (
         <div className="space-y-4">
           {exams.map((e) => {
-            const linkedTrainings = trainings.filter((t) => t.examId === e.id);
-            const fullTrainings = linkedTrainings.filter((t) => t.scope === 'full');
-            const moduleTrainings = linkedTrainings.filter((t) => t.scope === 'module');
+            const linkedTrainings = findExamTrainings(trainings, e.id);
+            const fullTrainings = linkedTrainings.filter((t) => resolveTrainingKind(t) === 'exam');
+            const moduleTrainings = linkedTrainings.filter((t) => resolveTrainingKind(t) === 'module');
+            const breakdown = deriveExamModuleBreakdown(trainings, e.id) ?? e.moduleBreakdown;
             return (
             <div key={e.id} className="card p-5">
               <div className="flex items-center justify-between mb-3">
@@ -186,7 +188,7 @@ export function ExamDiagnosisPage() {
                 <div className="text-[11px] text-slate-400 uppercase tracking-wider">
                   Layer 1 · 模块掌握度分布
                 </div>
-                {e.moduleBreakdown.map((m) => (
+                {breakdown.map((m) => (
                   <div key={m.module} className="flex items-center gap-3 text-sm">
                     <div className="w-32 text-slate-700">{m.module}</div>
                     <MasteryBar score={m.score} className="flex-1" />
@@ -200,7 +202,7 @@ export function ExamDiagnosisPage() {
               {linkedTrainings.length > 0 && (
                 <div className="mt-3 rounded-lg border border-slate-100 bg-slate-50/60 p-3">
                   <div className="text-[11px] text-slate-400 uppercase tracking-wider mb-2">
-                    关联训练 · 按 examId 分组
+                    关联训练 · 按 examRef 关联
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
@@ -406,30 +408,9 @@ function ExamForm({
     await putRecord('exams', record);
 
     if (syncModule) {
-      // 模块明细行（scope=module）
-      for (const m of breakdown) {
-        const row: TrainingRecord = {
-          id: uuid(),
-          studentId,
-          date,
-          gradeLevel,
-          subject,
-          module: m.module,
-          trainingType: 'exam',
-          totalQuestions: m.total,
-          correctCount: m.total - m.errors,
-          errorCount: m.errors,
-          errorCategories: [],
-          createdAt: now,
-          updatedAt: now,
-          examId: record.id,
-          scope: 'module',
-          ...(paperType ? { paperType } : {}),
-          ...(yearValue !== undefined ? { paperYear: yearValue } : {}),
-        };
-        await putRecord('trainings', row);
-      }
-      // 整卷权威行（scope=full）
+      const examRef = normalizeExamRef(record.id);
+      const attemptId = `attempt:${record.id}`;
+      // 整卷权威行（kind=exam）：题量以它为准，模块行只做分解
       const fullRow: TrainingRecord = {
         id: uuid(),
         studentId,
@@ -446,6 +427,10 @@ function ExamForm({
         createdAt: now,
         updatedAt: now,
         examId: record.id,
+        examRef,
+        attemptId,
+        kind: 'exam',
+        depth: 0,
         scope: 'full',
         ...(paperType ? { paperType } : {}),
         ...(yearValue !== undefined ? { paperYear: yearValue } : {}),
@@ -454,6 +439,34 @@ function ExamForm({
         ...(standardValue !== undefined ? { standardMinutes: standardValue } : {}),
       };
       await putRecord('trainings', fullRow);
+
+      for (const m of breakdown) {
+        const row: TrainingRecord = {
+          id: uuid(),
+          studentId,
+          date,
+          gradeLevel,
+          subject,
+          module: m.module,
+          trainingType: 'exam',
+          totalQuestions: m.total,
+          correctCount: m.total - m.errors,
+          errorCount: m.errors,
+          errorCategories: [],
+          createdAt: now,
+          updatedAt: now,
+          examId: record.id,
+          examRef,
+          attemptId,
+          parentId: fullRow.id,
+          kind: 'module',
+          depth: 1,
+          scope: 'module',
+          ...(paperType ? { paperType } : {}),
+          ...(yearValue !== undefined ? { paperYear: yearValue } : {}),
+        };
+        await putRecord('trainings', row);
+      }
     }
 
     onSaved();

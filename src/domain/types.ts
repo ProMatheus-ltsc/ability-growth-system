@@ -211,17 +211,18 @@ export const PAPER_TYPE_OPTIONS: readonly PaperType[] = [
   'military-transfer',
 ];
 
-/** 训练记录粒度：整卷 / 模块 / 单条 */
+/** @deprecated 由 `TrainingRecord.kind` 取代，仅为兼容未迁移的快照与外部写入保留 */
 export type TrainingScope = 'full' | 'module' | 'single';
 
-/**
- * 聚合角色（数据侧写入的显式标记）：
- * - `full_paper`：整卷权威行；
- * - `module_detail`：同一份卷的模块明细行；
- * - `derived`：跨日期 topic 聚合行，不参与任何求和/计数。
- * 历史记录可能没有该字段，由 analytics 的 `resolveAggregationRole` 按 `scope` 兼容映射。
- */
+/** @deprecated 由 `TrainingRecord.kind` / `attemptId` 取代，仅为兼容历史数据保留 */
 export type TrainingAggregationRole = 'full_paper' | 'module_detail' | 'derived';
+
+/**
+ * 训练记录在一次作答中的结构角色（Option A 单表模型，见 domain/trainingSemantics.ts）：
+ * - `exam` 整卷根节点；`module` 整卷下的模块分段；`label` 模块下的标签分段；
+ * - `practice` 独立练习；`review` 错题复盘；`summary` 跨日期聚合行（不参与求和）。
+ */
+export type TrainingKind = 'exam' | 'module' | 'label' | 'practice' | 'review' | 'summary';
 
 /** 能力缺口状态流转历史 */
 export interface GapStatusHistoryItem {
@@ -261,7 +262,21 @@ export interface TrainingRecord {
   /** 标准用时为推断值（如按考纲推算）；缺省时回退 note 文本判定，见 paperStructure.ts */
   standardMinutesInferred?: boolean;
   questionType?: string;
+  /** @deprecated 读侧统一走 `examRef`，写侧由 `withTrainingSemantics` 归一化 */
   examId?: string;
+  /** 规范化试卷引用：`exam-fenbi-exam-{paperId}` */
+  examRef?: string;
+  /** 作答树聚合键；同一份卷的不同作答可有相同 examRef、不同 attemptId */
+  attemptId?: string;
+  /** 直接父节点 id：模块→整卷行，标签→模块行或上位标签行 */
+  parentId?: string;
+  /** 树深度：整卷/独立记录 0，模块 1，标签 ≥2 */
+  depth?: number;
+  /** 结构角色；缺省时读侧按历史标记降级推导，见 domain/trainingSemantics.ts */
+  kind?: TrainingKind;
+  /** 外部题库的层级路径（如 `xingce/资料分析/增长率`），标签行必填 */
+  modulePath?: string;
+  /** @deprecated 由 `kind` 取代，仅为兼容历史数据保留 */
   scope?: TrainingScope;
   /** 外部题库/练习的精确关联键（禁止按卷名模糊匹配） */
   sourceId?: string;
@@ -269,11 +284,11 @@ export interface TrainingRecord {
   /** 数据来源（fenbi / manual / …），禁止跨源合并统计 */
   source?: string;
   /**
-   * 数据有效性：`duplicate` 表示重复导入行，任何统计、计数、用时求和都应排除；
-   * 缺省视为正常记录（历史记录不会因为没打标记而被丢掉）。
+   * 数据质量标记：`duplicate` 表示重复导入行，任何统计、计数、用时求和都应排除；
+   * 缺省视为正常记录。结构角色由 `kind` 负责，本字段只表达数据质量。
    */
   validity?: 'valid' | 'duplicate';
-  /** 聚合角色，缺省时按 `scope` 兼容映射，见 TrainingAggregationRole */
+  /** @deprecated 由 `kind` 取代，仅为兼容历史数据保留 */
   aggregationRole?: TrainingAggregationRole;
 }
 

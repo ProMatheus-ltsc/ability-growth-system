@@ -31,6 +31,13 @@ import { validateAbilityPath } from '../domain/abilityPathGuard';
 import { getRadarDimensions } from '../domain/abilityTags';
 import { normalizeAbilityPath, normalizeModule, pathBelongsToModule } from '../domain/moduleNormalize';
 import { isStandardMinutesInferred } from '../domain/paperStructure';
+import {
+  isPseudoModule,
+  normalizeExamRef,
+  resolveAttemptId,
+  resolveExamRef,
+  resolveTrainingKind,
+} from '../domain/trainingSemantics';
 
 /**
  * ============ 口径统一（唯一来源，2026-11-09 用户验收缺陷 #4/#5/#6） ============
@@ -137,115 +144,129 @@ export function aggregateBySubject(rawRecords: TrainingRecord[]): SubjectStats[]
   return stats;
 }
 
-/** ============ F-03 / A1 整卷与模块不重复聚合 ============ */
+/** ============ F-03 / A1 作答树与可加层 ============ */
 
 /**
- * 记录级「有效性与聚合角色」的唯一判定入口（2026-11-09 双算修复）。
- *
- * 过滤规则：
- * 1. `validity === 'duplicate'`：重复导入行，任何统计/计数/用时求和都排除；
- *    缺省时视为正常记录（历史数据没打标记不代表重复）。
- * 2. `aggregationRole === 'derived'`：跨日期 topic 聚合行，不参与任何聚合，
- *    否则会与原始行双算（该批 43 行带 1,813 题）。
- * 3. 粉笔标签拆分行（`-pt-`）：同一份模块作答按标签层级再切一遍，
- *    题量是父模块行（`-mod-`）的再分配，按衍生行处理（见 `isLabelSplitRecord`）。
- * 4. 整卷与模块只在同一个 examId 内互相压制，绝不按日期猜。
+ * 记录有效性：只排除数据质量问题（`duplicate`）与跨日期聚合行（`summary`）。
+ * 结构角色全部由 `kind` / `attemptId` 决定；`scope` / `aggregationRole` / id 约定
+ * 只在老记录缺 `kind` 时由 `resolveTrainingKind` 降级推导。
  */
-export type ResolvedAggregationRole = 'full_paper' | 'module_detail' | 'derived' | 'standalone';
-
-/**
- * 粉笔标签拆分行：`fenbi-md-<paperId>-pt-<label>`。
- * 这些行的题量已经包含在父模块行 `fenbi-md-<paperId>-mod-<module>` 里，
- * 2026-11-13 线上 2,952 行实测 0 孤儿（每行都有父行），因此可以整类排除而不丢数据。
- */
-export function isLabelSplitRecord(record: TrainingRecord): boolean {
-  return (record.id ?? '').includes('-pt-');
-}
-
-/**
- * 解析聚合角色。
- * 标签拆分行优先按衍生行处理：写入方给它们打了 `module_detail`，
- * 但那是错误粒度，按 id 约定覆盖。
- * 其余记录优先读显式 `aggregationRole`；历史记录缺该字段时按已有 `scope` 兼容映射
- * （full→full_paper、module→module_detail）；两者都缺失视为 `standalone`。
- *
- * 缺失字段的处理理由：既不默认整卷（会误压同日的模块明细），也不默认排除
- * （历史记录占多数且是真实训练，排除会凭空丢数据），而是作为独立记录原样参与聚合。
- */
-export function resolveAggregationRole(record: TrainingRecord): ResolvedAggregationRole {
-  if (isLabelSplitRecord(record)) return 'derived';
-  if (record.aggregationRole === 'derived') return 'derived';
-  if (record.aggregationRole === 'full_paper') return 'full_paper';
-  if (record.aggregationRole === 'module_detail') return 'module_detail';
-  if (record.scope === 'full') return 'full_paper';
-  if (record.scope === 'module') return 'module_detail';
-  return 'standalone';
-}
-
-/** 仅保留可参与统计的记录：排除重复导入行与跨日期聚合行 */
 export function selectValidRecords(records: TrainingRecord[]): TrainingRecord[] {
   return records.filter(
-    (r) => r.validity !== 'duplicate' && resolveAggregationRole(r) !== 'derived',
+    (r) => r.validity !== 'duplicate' && resolveTrainingKind(r) !== 'summary',
   );
 }
 
-/**
- * 整卷行 examId 带 `fenbi-exam-` 前缀（如 `fenbi-exam-4291593113`），
- * 模块行只写 paperId（如 `4291593113`），直接字符串比较永远配不上。
- * 2026-11-13 线上因此有 81 条模块行（1,785 题）与整卷双算，比较前统一去前缀。
- */
-function normalizedExamId(record: TrainingRecord): string | null {
-  const raw = (record.examId ?? '').trim();
-  if (!raw) return null;
-  return raw.startsWith('fenbi-exam-') ? raw.slice('fenbi-exam-'.length) : raw;
+function groupByAttempt(records: TrainingRecord[]): TrainingRecord[][] {
+  const groups = new Map<string, TrainingRecord[]>();
+  for (const r of records) {
+    const key = resolveAttemptId(r);
+    const list = groups.get(key) ?? [];
+    list.push(r);
+    groups.set(key, list);
+  }
+  return Array.from(groups.values());
 }
 
 /**
- * 学科级聚合去重：
- * - 先剔除 `duplicate` 与 `derived`（含标签拆分行）；
- * - 压制只在同一个 examId 内发生：该 examId 存在整卷行时排除它的模块明细；
- * - 不同 examId 之间互不影响；
- * - **没有 examId 的记录不做任何压制**，各自独立计入（历史数据 228 条无 examId，
- *   用日期+科目去压等于拿猜测当证据，会把「上午专项、晚上整卷」误判成同一次）；
- * - 缺 aggregationRole 的老记录按 scope 映射角色，但同样只在有 examId 时参与压制。
+ * 学科级可加层（同一棵作答树只取一层）：
+ * - 有整卷行 → 整卷；
+ * - 否则有模块行 → 模块；
+ * - 否则取独立记录（practice / review）。
+ * 标签行（`label`）在任何情况下都不进入题量求和：粉笔标签是一题多标签的再切分，
+ * 实测一张 130 题卷的标签题量和为 330，直接相加会虚增。
  */
 export function selectAggregationRecords(records: TrainingRecord[]): TrainingRecord[] {
-  const valid = selectValidRecords(records);
-  const fullByExam = new Set<string>();
-  for (const r of valid) {
-    if (resolveAggregationRole(r) !== 'full_paper') continue;
-    const examId = normalizedExamId(r);
-    if (examId) fullByExam.add(examId);
+  const selected: TrainingRecord[] = [];
+  for (const group of groupByAttempt(selectValidRecords(records))) {
+    const exams = group.filter((r) => resolveTrainingKind(r) === 'exam');
+    if (exams.length > 0) {
+      selected.push(...exams);
+      continue;
+    }
+    const modules = group.filter((r) => resolveTrainingKind(r) === 'module');
+    if (modules.length > 0) {
+      selected.push(...modules);
+      continue;
+    }
+    selected.push(...group.filter((r) => resolveTrainingKind(r) !== 'label'));
   }
-  return valid.filter((r) => {
-    if (resolveAggregationRole(r) !== 'module_detail') return true;
-    const examId = normalizedExamId(r);
-    return !(examId && fullByExam.has(examId));
-  });
+  return selected;
 }
 
 /** ============ F-04 / A2 模块统计与周环比 ============ */
 
 /**
- * 模块级去重（F-03 模块口径）：
- * - 先剔除 `duplicate` 与 `derived`（含标签拆分行）；
- * - 压制只在同一个 examId 内发生：该 examId 存在模块明细时排除它的整卷行，保留模块明细；
- * - 只有整卷时保留整卷，避免整卷数据整体丢失；
- * - **没有 examId 的记录不做任何压制**，整卷与模块各自独立计入。
+ * 模块级可加层（同一棵作答树只取一层）：
+ * - 有模块行 → 模块；
+ * - 否则有整卷行 → 整卷（避免只有整卷时数据整体丢失）；
+ * - 标签行不参与模块题量。
  * 时间分配、模块统计、雷达的模块兜底统一使用本函数。
  */
 export function selectModuleLevelRecords(records: TrainingRecord[]): TrainingRecord[] {
-  const valid = selectValidRecords(records);
-  const modulesByExam = new Set<string>();
-  for (const r of valid) {
-    if (resolveAggregationRole(r) !== 'module_detail') continue;
-    const examId = normalizedExamId(r);
-    if (examId) modulesByExam.add(examId);
+  const selected: TrainingRecord[] = [];
+  for (const group of groupByAttempt(selectValidRecords(records))) {
+    const modules = group.filter((r) => resolveTrainingKind(r) === 'module');
+    if (modules.length > 0) {
+      selected.push(...modules);
+      continue;
+    }
+    const exams = group.filter((r) => resolveTrainingKind(r) === 'exam');
+    if (exams.length > 0) {
+      selected.push(...exams);
+      continue;
+    }
+    selected.push(...group.filter((r) => resolveTrainingKind(r) !== 'label'));
   }
-  return valid.filter((r) => {
-    if (resolveAggregationRole(r) !== 'full_paper') return true;
-    const examId = normalizedExamId(r);
-    return !(examId && modulesByExam.has(examId));
+  return selected;
+}
+
+/** 测验页：按规范化 examRef 找出同一张卷的全部训练记录（含标签行） */
+export function findExamTrainings(
+  records: TrainingRecord[],
+  examId: string,
+): TrainingRecord[] {
+  const ref = normalizeExamRef(examId);
+  if (!ref) return [];
+  return records.filter((r) => resolveExamRef(r) === ref);
+}
+
+export interface ExamModuleProjection {
+  module: string;
+  total: number;
+  errors: number;
+  score: number;
+  level: MasteryLevel;
+}
+
+/**
+ * `exams.moduleBreakdown` 的投影：以模块行（kind=module）为唯一数据源，
+ * 不再依赖录入时手写的副本。返回 null 表示没有模块行，调用方回退到已存快照。
+ */
+export function deriveExamModuleBreakdown(
+  records: TrainingRecord[],
+  examId: string,
+): ExamModuleProjection[] | null {
+  const ref = normalizeExamRef(examId);
+  if (!ref) return null;
+  const moduleRecords = selectModuleLevelRecords(records).filter(
+    (r) => resolveExamRef(r) === ref && resolveTrainingKind(r) === 'module',
+  );
+  if (moduleRecords.length === 0) return null;
+
+  const groups = new Map<string, { module: string; total: number; errors: number }>();
+  for (const r of moduleRecords) {
+    const module = normalizeModule(r.module, r.subject, r.gradeLevel);
+    if (!module) continue;
+    const group = groups.get(module) ?? { module, total: 0, errors: 0 };
+    group.total += r.totalQuestions;
+    group.errors += r.errorCount;
+    groups.set(module, group);
+  }
+  if (groups.size === 0) return null;
+  return Array.from(groups.values()).map((g) => {
+    const score = g.total === 0 ? 0 : Math.round(((g.total - g.errors) / g.total) * 1000) / 10;
+    return { ...g, score, level: scoreToLevel(score) };
   });
 }
 
@@ -263,20 +284,11 @@ export interface ModuleStatsItem {
 }
 
 /**
- * 伪模块：`整卷`/`行测整卷` 是卷型，`错题复盘` 是训练类型，都不是考点模块。
- * 它们只应出现在「时间分配」的整体桶里，不能进入模块正确率/薄弱模块排名。
- */
-export function isPseudoModule(module: string): boolean {
-  return module === '整卷' || module === '行测整卷' || module.startsWith('错题复盘');
-}
-
-/**
  * 模块级聚合：排除整卷行、保留模块行，按一级模块归并。
  * 无题量样本时 correctRate / masteryScore / avgMinutesPerQuestion 为 null（不补 0）。
  */
 export function buildModuleStats(records: TrainingRecord[]): ModuleStatsItem[] {
-  // 模块级口径（PRD F-03）：整卷与模块并存时排除整卷行、保留模块明细，
-  // 不套用学科级 A1 去重，否则有整卷行时模块明细会整体消失。
+  // 模块级口径：同一棵作答树优先模块行、否则整卷行；不套用学科级的整卷优先。
   const moduleRecords = selectModuleLevelRecords(records);
 
   const groups = new Map<string, { subject: Subject; module: string; list: TrainingRecord[] }>();

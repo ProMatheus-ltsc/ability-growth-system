@@ -7,6 +7,7 @@ import { useAppSession } from '../hooks/useAppSession';
 import { getTrainingsCopy } from '../domain/trainingsCopy';
 import { findTrainingsByStudent, findGaps, putRecord, deleteRecord, getMeta, setMeta, getAllRecords } from '../services/localDB';
 import { deriveGapsFromTraining, deriveSnapshotFromTraining, isTimedMet, interviewAnsweredAt, interviewScorePercent } from '../services/analytics';
+import { withTrainingSemantics } from '../domain/trainingSemantics';
 import { getAbilityTags, getModules } from '../domain/abilityTags';
 import { selectTrainingEntrySubjects, isTrainingExcludedSubject } from '../domains/public-exam';
 import { domainOfGradeLevel, domainOfSubject } from '../domains/shared/scope';
@@ -131,11 +132,12 @@ export function TrainingsPage() {
     filterModule !== 'all' || filterType !== 'all' || dateFrom !== '' || dateTo !== '';
 
   const handleSave = async (draft: TrainingRecord) => {
-    await putRecord('trainings', draft);
+    const record = withTrainingSemantics(draft);
+    await putRecord('trainings', record);
 
     // V5.11 Bug #005 修复:训练保存后自动派生能力缺口(错题归集为问题)
-    const existingGaps = await findGaps(draft.studentId);
-    const derivedGaps = deriveGapsFromTraining(draft, existingGaps);
+    const existingGaps = await findGaps(record.studentId);
+    const derivedGaps = deriveGapsFromTraining(record, existingGaps);
     let newGapCount = 0;
     for (const gap of derivedGaps) {
       const already = existingGaps.some((g) => g.id === gap.id);
@@ -144,15 +146,15 @@ export function TrainingsPage() {
     }
 
     // V5.11 Bug #009 修复:训练保存后自动生成能力快照,建立基线 + 支撑增长曲线
-    const snapshot = deriveSnapshotFromTraining(draft);
+    const snapshot = deriveSnapshotFromTraining(record);
     await putRecord('abilities', snapshot);
 
     const nextRecent: RecentDefaults = {
-      subject: draft.subject,
-      module: draft.module,
-      trainingType: draft.trainingType,
-      totalQuestions: draft.totalQuestions,
-      durationMinutes: draft.durationMinutes ?? 30,
+      subject: record.subject,
+      module: record.module,
+      trainingType: record.trainingType,
+      totalQuestions: record.totalQuestions,
+      durationMinutes: record.durationMinutes ?? 30,
     };
     setRecent(nextRecent);
     await setMeta(RECENT_KEY, nextRecent);
