@@ -12,7 +12,7 @@ import { getModules } from '../domain/abilityTags';
 import { selectTrainingEntrySubjects } from '../domains/public-exam';
 import { resolveExamModuleBreakdown, deriveGapsFromTraining, findExamTrainings } from '../services/analytics';
 import { normalizeExamRef, resolveTrainingKind } from '../domain/trainingSemantics';
-import { PAPER_TYPE_LABEL, PAPER_TYPE_OPTIONS, scoreToLevel, SUBJECT_LABEL } from '../domain/types';
+import { MASTERY_LABEL, PAPER_TYPE_LABEL, PAPER_TYPE_OPTIONS, scoreToLevel, SUBJECT_LABEL } from '../domain/types';
 import type {
   AbilityGap,
   ExamRecord,
@@ -383,7 +383,7 @@ function ExamForm({
     const totalQuestions = breakdown.reduce((s, r) => s + r.total, 0);
     const totalErrors = breakdown.reduce((s, r) => s + r.errors, 0);
     const weakest = breakdown.sort((a, b) => a.score - b.score).slice(0, 3);
-    const mainProblems = weakest.map((w) => `${w.module}: ${w.score}% (${w.level})`);
+    const mainProblems = weakest.map((w) => `${w.module}: ${w.score}% (${MASTERY_LABEL[w.level]})`);
     const record: ExamRecord = {
       id: uuid(),
       studentId,

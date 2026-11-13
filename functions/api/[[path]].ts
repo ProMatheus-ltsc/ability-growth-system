@@ -55,6 +55,8 @@ const SNAPSHOT_VERSION = '2.2.0';
 
 const SESSION_COOKIE = 'ability_growth_session';
 const SESSION_DAYS = 30;
+const MAX_SESSIONS_PER_USER = 20;
+const AUTH_ATTEMPT_RETENTION_MS = 2 * 86_400_000;
 // Workers WebCrypto 对 PBKDF2 迭代次数有上限，100000 是两者兼容的安全值
 const PASSWORD_ITERATIONS = 100_000;
 const AUTH_WINDOW_MS = 10 * 60_000;
@@ -277,7 +279,20 @@ async function createSession(db: D1Database, request: Request, userId: string): 
     .prepare('INSERT INTO sessions (id, user_id, token_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?)')
     .bind(`ses_${crypto.randomUUID()}`, userId, await sha256(token), expiresAt, now.toISOString())
     .run();
+  await pruneSessionsForUser(db, userId);
   return sessionCookie(token, SESSION_DAYS * 86_400, isSecure(request));
+}
+
+/** 每用户只保留最近 MAX_SESSIONS_PER_USER 个会话，避免登录测试把会话表堆到几百行 */
+export async function pruneSessionsForUser(db: D1Database, userId: string): Promise<void> {
+  await db
+    .prepare(
+      `DELETE FROM sessions WHERE user_id = ? AND id NOT IN (
+         SELECT id FROM sessions WHERE user_id = ? ORDER BY created_at DESC, id DESC LIMIT ?
+       )`,
+    )
+    .bind(userId, userId, MAX_SESSIONS_PER_USER)
+    .run();
 }
 
 async function authAttemptsExceeded(
@@ -297,6 +312,11 @@ async function authAttemptsExceeded(
 }
 
 async function recordAuthAttempt(db: D1Database, key: string, succeeded: boolean): Promise<void> {
+  // 登录是低频写，顺手清掉窗口外的历史尝试，避免表无限增长
+  await db
+    .prepare('DELETE FROM auth_attempts WHERE created_at <= ?')
+    .bind(new Date(Date.now() - AUTH_ATTEMPT_RETENTION_MS).toISOString())
+    .run();
   await db
     .prepare('INSERT INTO auth_attempts (client_key, succeeded, created_at) VALUES (?, ?, ?)')
     .bind(key, succeeded ? 1 : 0, new Date().toISOString())
@@ -808,6 +828,35 @@ export function backupIdsToPrune(backups: ReadonlyArray<{ id: string; size: numb
   return prune;
 }
 
+// ============ 备份载荷编码 ============
+// D1 单行上限 2,000,000 字节；快照明文已达 1.85MB，gzip 后体积约为原来的 1/6。
+const BACKUP_GZIP_PREFIX = 'gz:';
+const MAX_BACKUP_ROW_BYTES = 1_900_000;
+const textDecoder = new TextDecoder();
+
+async function gzipBytes(bytes: Uint8Array): Promise<Uint8Array> {
+  const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream('gzip'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+async function gunzipBytes(bytes: Uint8Array): Promise<Uint8Array> {
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+export async function encodeBackupPayload(snapshot: unknown): Promise<string> {
+  const compressed = await gzipBytes(encoder.encode(JSON.stringify(snapshot)));
+  return `${BACKUP_GZIP_PREFIX}${toBase64(compressed)}`;
+}
+
+/** 兼容压缩前的历史明文备份；只有带 gz: 前缀的才解压 */
+export async function decodeBackupPayload(payload: string): Promise<Record<string, unknown>> {
+  const json = payload.startsWith(BACKUP_GZIP_PREFIX)
+    ? textDecoder.decode(await gunzipBytes(fromBase64(payload.slice(BACKUP_GZIP_PREFIX.length))))
+    : payload;
+  return JSON.parse(json) as Record<string, unknown>;
+}
+
 // ============ 路由 ============
 
 async function handle(request: Request, env: Env): Promise<Response> {
@@ -1018,26 +1067,32 @@ async function handle(request: Request, env: Env): Promise<Response> {
         .bind(workspace)
         .all<{ id: string; created_at: string; data: string }>();
       return json(
-        (rows.results ?? []).map((row) => {
-          let records = 0;
-          try {
-            const snapshot = JSON.parse(row.data) as Record<string, unknown>;
-            records = STORE_NAMES.reduce(
-              (sum, store) => sum + (Array.isArray(snapshot[store]) ? (snapshot[store] as unknown[]).length : 0),
-              0,
-            );
-          } catch {
-            records = 0;
-          }
-          return { timestamp: row.id, size: row.data.length, records };
-        }),
+        await Promise.all(
+          (rows.results ?? []).map(async (row) => {
+            let records = 0;
+            try {
+              const snapshot = await decodeBackupPayload(row.data);
+              records = STORE_NAMES.reduce(
+                (sum, store) => sum + (Array.isArray(snapshot[store]) ? (snapshot[store] as unknown[]).length : 0),
+                0,
+              );
+            } catch {
+              records = 0;
+            }
+            return { timestamp: row.id, size: row.data.length, records };
+          }),
+        ),
       );
     }
     if (method === 'POST') {
       const timestamp = new Date().toISOString();
       const snapshot = await exportSnapshot(env.DB, workspace);
+      const data = await encodeBackupPayload(snapshot);
+      if (data.length > MAX_BACKUP_ROW_BYTES) {
+        return fail(`备份体积 ${data.length} 字节超过单行上限，请先清理历史数据再试`, 413);
+      }
       await env.DB.prepare('INSERT INTO sync_backups (id, account_id, created_at, data) VALUES (?, ?, ?, ?)')
-        .bind(timestamp, workspace, timestamp, JSON.stringify(snapshot))
+        .bind(timestamp, workspace, timestamp, data)
         .run();
       const rows = await env.DB.prepare(
         'SELECT id, length(data) AS size FROM sync_backups WHERE account_id = ? ORDER BY created_at DESC, id DESC',
@@ -1054,7 +1109,7 @@ async function handle(request: Request, env: Env): Promise<Response> {
           .bind(workspace, ...chunk)
           .run();
       }
-      return json({ ok: true, timestamp, pruned: prune.length });
+      return json({ ok: true, timestamp, pruned: prune.length, size: data.length });
     }
   }
 
@@ -1063,7 +1118,7 @@ async function handle(request: Request, env: Env): Promise<Response> {
       .bind(segments[1], workspace)
       .first<{ data: string }>();
     if (!row) return fail('未找到备份', 404);
-    const snapshot = JSON.parse(row.data) as Record<string, unknown>;
+    const snapshot = await decodeBackupPayload(row.data);
     try {
       const counts = await importSnapshot(env.DB, workspace, snapshot, 'replace', profile);
       return json({ ok: true, counts });
