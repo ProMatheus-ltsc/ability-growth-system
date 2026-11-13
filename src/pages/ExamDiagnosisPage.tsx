@@ -9,7 +9,7 @@ import { PageHeader } from '../components/PageHeader';
 import { EmptyState } from '../components/EmptyState';
 import { MasteryBar } from '../components/MasteryBar';
 import { getModules } from '../domain/abilityTags';
-import { selectTrainingEntrySubjects } from '../domain/storeGuards';
+import { selectTrainingEntrySubjects } from '../domains/public-exam';
 import { deriveGapsFromTraining } from '../services/analytics';
 import { PAPER_TYPE_LABEL, PAPER_TYPE_OPTIONS, scoreToLevel, SUBJECT_LABEL } from '../domain/types';
 import type {
@@ -64,7 +64,7 @@ export function ExamDiagnosisPage() {
         id: `${exam.id}::${m.module}`,
         studentId: exam.studentId,
         date: exam.date,
-        gradeLevel: prefs.gradeLevel,
+        gradeLevel: exam.gradeLevel ?? prefs.gradeLevel,
         subject: exam.subject,
         module: m.module,
         trainingType: 'exam',
@@ -88,6 +88,7 @@ export function ExamDiagnosisPage() {
           const task: FixTask = {
             id: uuid(),
             studentId: exam.studentId,
+            gradeLevel: gap.gradeLevel ?? exam.gradeLevel ?? prefs.gradeLevel,
             subject: exam.subject,
             abilityPath: gap.abilityPath,
             relatedGapId: gap.id,

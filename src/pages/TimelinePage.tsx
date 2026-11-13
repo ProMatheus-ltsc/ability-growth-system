@@ -8,7 +8,7 @@ import { EmptyState } from '../components/EmptyState';
 import { getAllRecords, putRecord, deleteRecord, findDueSpacedReviews } from '../services/localDB';
 import { advanceSpacedReview, collectExamTargets, createSpacedReview, describeStagePlan, generateDefaultStagePlan, SPACED_INTERVALS } from '../services/planner';
 import { getAbilityTags } from '../domain/abilityTags';
-import type { ExamRegistration, SpacedReviewItem, StagePlan, Subject } from '../domain/types';
+import type { ExamRegistration, GradeLevel, SpacedReviewItem, StagePlan, Subject } from '../domain/types';
 import { GRADE_LEVEL_LABEL, PLAN_STAGE_LABEL, SUBJECT_LABEL } from '../domain/types';
 import { abilityPointText } from '../domain/missingInfo';
 
@@ -80,7 +80,7 @@ export function TimelinePage() {
       await deleteRecord('stagePlans', s.id);
     }
     for (const p of plan) {
-      await putRecord('stagePlans', { ...p, studentId: prefs.currentStudentId });
+      await putRecord('stagePlans', { ...p, studentId: prefs.currentStudentId, gradeLevel: prefs.gradeLevel });
     }
     void refresh();
     showToast(`已生成 ${plan.length} 个阶段`, 'success');
@@ -283,7 +283,7 @@ export function TimelinePage() {
         )}
       </div>
 
-      {showStageForm && <StagePlanForm onClose={() => setShowStageForm(false)} onSaved={() => { setShowStageForm(false); void refresh(); }} studentId={prefs.currentStudentId} />}
+      {showStageForm && <StagePlanForm onClose={() => setShowStageForm(false)} onSaved={() => { setShowStageForm(false); void refresh(); }} studentId={prefs.currentStudentId} gradeLevel={prefs.gradeLevel} />}
       {showSpacedForm && (
         <SpacedForm
           onClose={() => setShowSpacedForm(false)}
@@ -300,7 +300,17 @@ export function TimelinePage() {
   );
 }
 
-function StagePlanForm({ onClose, onSaved, studentId }: { onClose: () => void; onSaved: () => void; studentId?: string }) {
+function StagePlanForm({
+  onClose,
+  onSaved,
+  studentId,
+  gradeLevel,
+}: {
+  onClose: () => void;
+  onSaved: () => void;
+  studentId?: string;
+  gradeLevel: GradeLevel;
+}) {
   const [stage, setStage] = useState<StagePlan['stage']>('foundation');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
@@ -313,6 +323,7 @@ function StagePlanForm({ onClose, onSaved, studentId }: { onClose: () => void; o
     await putRecord('stagePlans', {
       id: uuid(),
       studentId,
+      gradeLevel,
       stage,
       startDate,
       endDate,

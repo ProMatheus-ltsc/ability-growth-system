@@ -1,18 +1,23 @@
 /**
- * 写入侧数据口径校验（前后端共用）
+ * 公考域（adult / public-exam）
  *
- * 背景（2026-11-09）：申论统一到「学科专项 → 申论作答」、面试统一到「学科专项 → 面试记录」，
- * 训练记录只用于行测等客观题。但收敛只发生在 UI 层时，接口仍能写入申论 / 面试训练记录：
- * 一旦漏进来，学科掌握度会按「总题数-错题数」算出一个假的正确率，与申论四维口径打架。
- * 这里给出唯一判定入口，Pages Functions 在 PUT / bulk 时直接拒绝，UI 侧同一套规则提示。
+ * 边界：
+ * - 学科：行测、申论、面试；与 K12 学科集合不相交；
+ * - 训练记录只接收客观题，申论 / 面试走「学科专项」的作答与面试记录；
+ * - 只有 adult 学段可见本域模块（见 MODULE_VISIBILITY 派生）。
  */
+import type { GradeLevel } from '../../domain/types';
+import { PUBLIC_EXAM_SUBJECTS } from '../shared/scope';
+
+export { PUBLIC_EXAM_SUBJECTS };
+
+export const PUBLIC_EXAM_GRADE_LEVELS = ['adult'] as const satisfies readonly GradeLevel[];
 
 /** 不允许写入训练记录（trainings）的主观题学科 */
 export const TRAINING_EXCLUDED_SUBJECTS = ['shenlun', 'mianshi'] as const;
 
 const EXCLUDED = new Set<string>(TRAINING_EXCLUDED_SUBJECTS);
 
-/** 该学科是否禁止写入训练记录 */
 export function isTrainingExcludedSubject(subject: unknown): boolean {
   return typeof subject === 'string' && EXCLUDED.has(subject);
 }
@@ -33,7 +38,9 @@ const REJECT_MESSAGE =
  * 只做学科口径拦截，不校验其它字段——其它字段的完整性由各自页面负责，
  * 这里加宽会把历史导入通道一起挡掉。
  */
-export function guardTrainingRecords(records: ReadonlyArray<Record<string, unknown>>): TrainingGuardResult {
+export function guardTrainingRecords(
+  records: ReadonlyArray<Record<string, unknown>>,
+): TrainingGuardResult {
   const rejectedIndexes: number[] = [];
   records.forEach((record, index) => {
     if (record && typeof record === 'object' && isTrainingExcludedSubject(record.subject)) {
@@ -50,4 +57,3 @@ export function guardTrainingRecords(records: ReadonlyArray<Record<string, unkno
 export function selectTrainingEntrySubjects<T extends string>(subjects: readonly T[]): T[] {
   return subjects.filter((subject) => !EXCLUDED.has(subject));
 }
-

@@ -17,6 +17,7 @@ import {
   type ErrorCategory,
   type FixTask,
   type GapStatusHistoryItem,
+  type GradeLevel,
   type Subject,
   type TrainingRecord,
 } from '../domain/types';
@@ -81,7 +82,13 @@ export function ProblemCenterPage() {
 
   const updateGap = async (gap: AbilityGap, patch: Partial<AbilityGap>) => {
     const now = new Date().toISOString();
-    const next: AbilityGap = { ...gap, ...patch, updatedAt: now };
+    // 历史缺口可能没有 gradeLevel，写回时补齐，避免服务端拒绝 K12 记录
+    const next: AbilityGap = {
+      ...gap,
+      ...patch,
+      gradeLevel: patch.gradeLevel ?? gap.gradeLevel ?? prefs.gradeLevel,
+      updatedAt: now,
+    };
     // 手工状态流转追加 source='manual' 历史
     if (patch.status && patch.status !== gap.status) {
       next.statusHistory = [
@@ -125,6 +132,7 @@ export function ProblemCenterPage() {
     const task: FixTask = {
       id: uuid(),
       studentId: gap.studentId,
+      gradeLevel: gap.gradeLevel ?? prefs.gradeLevel,
       subject: gap.subject,
       abilityPath: gap.abilityPath,
       relatedGapId: gap.id,
@@ -445,18 +453,18 @@ interface FormProps {
 function QuickGapForm({
   onClose,
   studentId,
+  gradeLevel,
   availableSubjects,
   onSaved,
 }: {
   studentId?: string;
-  gradeLevel: string;
+  gradeLevel: GradeLevel;
   availableSubjects: Subject[];
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const { prefs } = useAppSession();
   const [subject, setSubject] = useState<Subject>(availableSubjects[0] ?? 'math');
-  const tags = getAbilityTags(prefs.gradeLevel, subject);
+  const tags = getAbilityTags(gradeLevel, subject);
   const [abilityPath, setAbilityPath] = useState<string>(tags[0]?.path ?? '');
   const [category, setCategory] = useState<ErrorCategory>('concept');
   const [severity, setSeverity] = useState<AbilityGap['severity']>('medium');
@@ -474,6 +482,7 @@ function QuickGapForm({
     const gap: AbilityGap = {
       id: uuid(),
       studentId,
+      gradeLevel,
       subject,
       abilityPath,
       errorCategory: category,

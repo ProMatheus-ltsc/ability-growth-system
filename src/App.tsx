@@ -353,7 +353,8 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
       onLogout={onLogout}
     >
       <ToastContainer />
-      <Routes>
+      {/* 学段/学生切换时整棵路由重挂载，避免页面级缓存继续展示上一学段的数据 */}
+      <Routes key={`${prefs.gradeLevel}:${prefs.currentStudentId ?? ''}`}>
         {/* 公共路由 */}
         <Route path="/" element={<DashboardPage />} />
         <Route path="/trainings" element={<TrainingsPage />} />

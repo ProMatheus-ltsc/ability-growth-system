@@ -4,7 +4,7 @@ import {
   guardTrainingRecords,
   isTrainingExcludedSubject,
   selectTrainingEntrySubjects,
-} from '../src/domain/storeGuards';
+} from '../src/domains/public-exam';
 
 describe('训练记录学科口径：申论 / 面试不得写入 trainings', () => {
   it('申论与面试被判定为禁止学科，其它学科放行', () => {

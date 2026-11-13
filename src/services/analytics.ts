@@ -1705,6 +1705,7 @@ export function deriveGapsFromTraining(
       updated.push({
         id: uuid(),
         studentId: record.studentId,
+        gradeLevel: record.gradeLevel,
         subject: record.subject,
         abilityPath,
         errorCategory: category,
@@ -1732,6 +1733,7 @@ export function deriveGapsFromTraining(
       const { verifiedAt: _staleVerifiedAt, ...reopened } = existing;
       updated.push({
         ...reopened,
+        gradeLevel: existing.gradeLevel ?? record.gradeLevel,
         status: 'in-progress',
         occurrenceCount: existing.occurrenceCount + 1,
         reopenedCount: (existing.reopenedCount ?? 0) + 1,
@@ -1752,6 +1754,7 @@ export function deriveGapsFromTraining(
       // 未验证缺口合并计数
       updated.push({
         ...existing,
+        gradeLevel: existing.gradeLevel ?? record.gradeLevel,
         occurrenceCount: existing.occurrenceCount + 1,
         lastSeenAt: now,
         updatedAt: now,
@@ -1809,6 +1812,7 @@ export function deriveSnapshotFromTraining(record: TrainingRecord): AbilitySnaps
   return {
     id: uuid(),
     studentId: record.studentId,
+    gradeLevel: record.gradeLevel,
     subject: record.subject,
     abilityPath: buildAbilityPath(record),
     score,

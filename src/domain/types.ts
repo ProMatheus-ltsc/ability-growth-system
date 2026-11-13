@@ -2,7 +2,15 @@
  * 通用能力增长系统领域模型
  * 覆盖学段：小学 / 初中 / 高中 / 成年人(公考)
  * 覆盖学科：数学 / 物理 / 行测 / 申论 / 面试
+ *
+ * 学科矩阵与模块可见性由 src/domains 下的产品域定义派生：
+ * - public-exam：行测 / 申论 / 面试
+ * - k12：数学 / 物理 / 语文 / 英语 / 化学 / 生物
+ * - growth：学习素养 / 职业选择 / PDCA
  */
+import { K12_SUBJECT_MATRIX } from '../domains/k12';
+import { CAREER_GRADE_LEVELS, LITERACY_GRADE_LEVELS, PDCA_GRADE_LEVELS } from '../domains/growth';
+import { PUBLIC_EXAM_GRADE_LEVELS, PUBLIC_EXAM_SUBJECTS } from '../domains/public-exam';
 
 export type GradeLevel = 'primary' | 'junior' | 'senior' | 'adult';
 /**
@@ -47,10 +55,10 @@ export const SUBJECT_LABEL: Record<Subject, string> = {
  *  P2 语文/英语/化学/生物 通过设置扩展启用(K12 学段)。
  */
 export const SUBJECT_MATRIX: Record<GradeLevel, Subject[]> = {
-  primary: ['math', 'chinese', 'english'],
-  junior: ['math', 'physics', 'chinese', 'english', 'chemistry', 'biology'],
-  senior: ['math', 'physics', 'chinese', 'english', 'chemistry', 'biology'],
-  adult: ['xingce', 'shenlun', 'mianshi'],
+  primary: [...K12_SUBJECT_MATRIX.primary],
+  junior: [...K12_SUBJECT_MATRIX.junior],
+  senior: [...K12_SUBJECT_MATRIX.senior],
+  adult: [...PUBLIC_EXAM_SUBJECTS],
 };
 
 /** 已配备完整能力标签库(v1)的学科, 其余为扩展占位, 允许用户自建 */
@@ -68,18 +76,31 @@ export const FULLY_SUPPORTED_SUBJECTS: Subject[] = [
  *  - 职业选择(生涯测评) : 初中 / 高中 / 成年人
  *  - 学习素养(K12 通用) : 小学 / 初中 / 高中
  */
-export const MODULE_VISIBILITY: Record<GradeLevel, {
+export interface ModuleVisibility {
   pdca: boolean;
   career: boolean;
   literacy: boolean;
   examRegistration: boolean;
   /** 公考专属板块（学科专项：申论作答 / 面试记录，及报考信息等） */
   publicExam: boolean;
-}> = {
-  primary: { pdca: false, career: false, literacy: true, examRegistration: false, publicExam: false },
-  junior:  { pdca: false, career: true,  literacy: true, examRegistration: false, publicExam: false },
-  senior:  { pdca: false, career: true,  literacy: true, examRegistration: false, publicExam: false },
-  adult:   { pdca: true,  career: true,  literacy: false, examRegistration: true,  publicExam: true  },
+}
+
+const includesGrade = (levels: readonly GradeLevel[], gradeLevel: GradeLevel) =>
+  (levels as readonly GradeLevel[]).includes(gradeLevel);
+
+const buildModuleVisibility = (gradeLevel: GradeLevel): ModuleVisibility => ({
+  pdca: includesGrade(PDCA_GRADE_LEVELS, gradeLevel),
+  career: includesGrade(CAREER_GRADE_LEVELS, gradeLevel),
+  literacy: includesGrade(LITERACY_GRADE_LEVELS, gradeLevel),
+  examRegistration: includesGrade(PUBLIC_EXAM_GRADE_LEVELS, gradeLevel),
+  publicExam: includesGrade(PUBLIC_EXAM_GRADE_LEVELS, gradeLevel),
+});
+
+export const MODULE_VISIBILITY: Record<GradeLevel, ModuleVisibility> = {
+  primary: buildModuleVisibility('primary'),
+  junior: buildModuleVisibility('junior'),
+  senior: buildModuleVisibility('senior'),
+  adult: buildModuleVisibility('adult'),
 };
 
 /** 掌握等级 */
@@ -261,6 +282,7 @@ export interface TrainingRecord {
  */
 export interface LabelStat {
   id: string;
+  gradeLevel?: GradeLevel;
   subject: Subject;
   /** 完整标签路径（一级/二级/三级/四级） */
   path: string[];
@@ -299,6 +321,8 @@ export interface LabelStat {
 export interface AbilityGap {
   id: string;
   studentId?: string;
+  /** 学历段；历史公考数据缺省，读侧按 subject 回落为 adult */
+  gradeLevel?: GradeLevel;
   subject: Subject;
   abilityPath: string;
   errorCategory: ErrorCategory;
@@ -320,6 +344,8 @@ export interface AbilityGap {
 export interface AbilitySnapshot {
   id: string;
   studentId?: string;
+  /** 学历段；历史公考数据缺省，读侧按 subject 回落为 adult */
+  gradeLevel?: GradeLevel;
   subject: Subject;
   abilityPath: string;
   score: number;
@@ -356,6 +382,7 @@ export interface StudentProfile {
 export interface FixTask {
   id: string;
   studentId?: string;
+  gradeLevel?: GradeLevel;
   subject: Subject;
   abilityPath: string;
   relatedGapId?: string;
@@ -440,6 +467,7 @@ export interface AssignmentProgress {
 export interface ExamRecord {
   id: string;
   studentId?: string;
+  gradeLevel?: GradeLevel;
   date: string;
   subject: Subject;
   scenario: string;
@@ -475,6 +503,7 @@ export interface ExamRecord {
 export interface Correction {
   id: string;
   studentId: string;
+  gradeLevel?: GradeLevel;
   subject: Subject;
   scenario: string;
   date: string;
@@ -523,6 +552,8 @@ export interface SubjectExamPlan {
 export interface ExamRegistration {
   id: string;
   studentId?: string;
+  /** 公考专属；显式标记后 K12 侧读不到 */
+  gradeLevel?: GradeLevel;
   postName: string;
   department?: string;
   postLevel?: 'central' | 'province' | 'city' | 'county' | 'town';
@@ -592,6 +623,7 @@ export const PLAN_STAGE_LABEL: Record<PlanStage, string> = {
 export interface StagePlan {
   id: string;
   studentId?: string;
+  gradeLevel?: GradeLevel;
   subject?: Subject;
   stage: PlanStage;
   startDate: string;
@@ -798,6 +830,7 @@ export const CLOSURE_OBSTACLE_LABEL: Record<ClosureObstacleType, string> = {
 export interface PDCAProblem {
   id: string;
   studentId?: string;
+  gradeLevel?: GradeLevel;
   title: string;
   description: string;
   problemType: PDCAProblemType;
@@ -1254,6 +1287,7 @@ export const UNCLASSIFIED_QUESTION_TYPE = '未分类';
 export interface SubjectiveAnswer {
   id: string;
   studentId?: string;
+  gradeLevel?: GradeLevel;
   subject: Extract<Subject, 'shenlun' | 'mianshi'>;
   scenario: string;
   date: string;
@@ -1342,6 +1376,7 @@ export const UNCLASSIFIED_INTERVIEW_TYPE = '未分类';
 export interface InterviewRecord {
   id: string;
   studentId?: string;
+  gradeLevel?: GradeLevel;
   date: string;
   questionType: string;
   thinkingSec: number;

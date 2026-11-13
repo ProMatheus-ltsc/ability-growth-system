@@ -24,7 +24,13 @@
  */
 import type { D1Database, D1PreparedStatement, PagesFunction } from '@cloudflare/workers-types';
 import { STORE_NAMES, type ExportedSnapshot, type StoreName } from '../../src/services/snapshot';
-import { guardTrainingRecords } from '../../src/domain/storeGuards';
+import { guardTrainingRecords } from '../../src/domains/public-exam';
+import {
+  isScopeManagedStore,
+  normalizeRecordScope,
+  validateRecordScope,
+  type ScopeAwareRecord,
+} from '../../src/domains/shared/scope';
 
 interface Env {
   DB: D1Database;
@@ -376,6 +382,24 @@ function validRecords(value: unknown): JsonRecord[] {
   );
 }
 
+/** 历史公考记录缺 gradeLevel 时补 adult；K12 记录缺学段保持原样，不做猜测 */
+function normalizeScopedRecords(store: StoreName, records: JsonRecord[]): JsonRecord[] {
+  if (!isScopeManagedStore(store)) return records;
+  return records.map(
+    (record) => normalizeRecordScope(record as unknown as ScopeAwareRecord) as unknown as JsonRecord,
+  );
+}
+
+/** 学段与学科必须属于同一产品域；历史数据缺学段不拦截 */
+function validateScopedRecords(store: StoreName, records: JsonRecord[]): string | null {
+  if (!isScopeManagedStore(store)) return null;
+  for (let index = 0; index < records.length; index += 1) {
+    const result = validateRecordScope(records[index] as unknown as ScopeAwareRecord);
+    if (!result.ok) return `第 ${index + 1} 条：${result.message ?? '学段与学科不匹配'}`;
+  }
+  return null;
+}
+
 async function listStore(db: D1Database, store: StoreName, workspace: string): Promise<JsonRecord[]> {
   const result = await db
     .prepare(`SELECT data FROM ${store} WHERE workspace = ? ORDER BY updated_at DESC`)
@@ -651,7 +675,7 @@ async function handle(request: Request, env: Env): Promise<Response> {
 
     if (segments.length === 3 && segments[2] === 'bulk' && method === 'POST') {
       const body = (await request.json()) as { records?: unknown } | unknown[];
-      const records = validRecords(Array.isArray(body) ? body : body.records);
+      const records = normalizeScopedRecords(store, validRecords(Array.isArray(body) ? body : body.records));
       // 口径拦截：申论 / 面试不得写入训练记录（历史记录不受影响，不做迁移与删除）
       if (store === 'trainings') {
         const guard = guardTrainingRecords(records);
@@ -662,6 +686,8 @@ async function handle(request: Request, env: Env): Promise<Response> {
           );
         }
       }
+      const scopeError = validateScopedRecords(store, records);
+      if (scopeError) return fail(scopeError, 422);
       if (records.length > 0) {
         await runBatches(env.DB, upsertStatements(env.DB, store, workspace, records, false));
       }
@@ -681,12 +707,14 @@ async function handle(request: Request, env: Env): Promise<Response> {
     if (method === 'PUT') {
       const body = (await request.json()) as Partial<JsonRecord>;
       if (!body || typeof body !== 'object') return fail('请求体必须是记录对象');
-      const record: JsonRecord = { ...(body as JsonRecord), id };
+      const record = normalizeScopedRecords(store, [{ ...(body as JsonRecord), id }])[0];
       // 口径拦截：申论 / 面试不得写入训练记录（历史记录不受影响，不做迁移与删除）
       if (store === 'trainings') {
         const guard = guardTrainingRecords([record]);
         if (!guard.ok) return fail(guard.message, 422);
       }
+      const scopeError = validateScopedRecords(store, [record]);
+      if (scopeError) return fail(scopeError, 422);
       await runBatches(env.DB, upsertStatements(env.DB, store, workspace, [record], false));
       return json({ ok: true, id });
     }

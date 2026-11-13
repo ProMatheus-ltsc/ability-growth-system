@@ -10,6 +10,7 @@ import type {
   AbilityGap,
   AbilitySnapshot,
   Assignment,
+  GradeLevel,
   AssignmentProgress,
   CareerAssessment,
   CareerObservationPoint,
@@ -36,6 +37,15 @@ import type {
   WeeklyChecklist,
 } from '../domain/types';
 import type { StoreName } from './snapshot';
+import {
+  filterStoreRecordsForGrade,
+  isK12GradeLevel,
+  isScopeManagedStore,
+  K12_ONLY_STORES,
+  PUBLIC_EXAM_ONLY_STORES,
+  stampRecordScope,
+  type ScopeAwareRecord,
+} from '../domains/shared/scope';
 import * as d1 from './d1Client';
 
 export const APP_DB_PREFIX = 'ability-growth';
@@ -189,6 +199,26 @@ interface AGSchema extends DBSchema {
 let currentAccountId: string | undefined;
 let dbPromise: Promise<IDBPDatabase<AGSchema>> | undefined;
 
+export interface DataScope {
+  role: 'student' | 'teacher';
+  gradeLevel: GradeLevel;
+}
+
+/**
+ * 学生端当前学段；教师端不按自身学段过滤（可能同时带不同学段学生）。
+ * D1 列表接口仍返回整个 workspace，这里在数据出口统一收口，
+ * 避免每个页面各写一份 filter 而漏掉某个入口。
+ */
+let activeDataScope: DataScope | undefined;
+
+export function setActiveDataScope(scope: DataScope | undefined): void {
+  activeDataScope = scope;
+}
+
+export function getActiveDataScope(): DataScope | undefined {
+  return activeDataScope;
+}
+
 export function setBusinessAccount(accountId: string | undefined): void {
   currentAccountId = accountId;
   dbPromise = undefined;
@@ -290,16 +320,40 @@ function db(): Promise<IDBPDatabase<AGSchema>> {
 
 type StoreValue<S extends StoreName> = AGSchema[S]['value'];
 
+function stampForActiveScope<S extends StoreName>(store: S, value: StoreValue<S>): StoreValue<S> {
+  if (!activeDataScope || activeDataScope.role !== 'student' || !isScopeManagedStore(store)) return value;
+  const record = value as unknown as ScopeAwareRecord;
+  if (PUBLIC_EXAM_ONLY_STORES.has(store)) {
+    return activeDataScope.gradeLevel === 'adult'
+      ? ({ ...record, gradeLevel: 'adult' } as unknown as StoreValue<S>)
+      : value;
+  }
+  if (K12_ONLY_STORES.has(store)) {
+    return isK12GradeLevel(activeDataScope.gradeLevel)
+      ? ({ ...record, gradeLevel: activeDataScope.gradeLevel } as unknown as StoreValue<S>)
+      : value;
+  }
+  return stampRecordScope(record, activeDataScope.gradeLevel) as unknown as StoreValue<S>;
+}
+
+function filterForActiveScope<S extends StoreName>(store: S, list: StoreValue<S>[]): StoreValue<S>[] {
+  if (!activeDataScope || activeDataScope.role !== 'student') return list;
+  return filterStoreRecordsForGrade(store, list, activeDataScope.gradeLevel);
+}
+
 export async function putRecord<S extends StoreName>(store: S, value: StoreValue<S>): Promise<void> {
-  await d1.putRecord(store, value as StoreValue<S> & { id: string });
+  await d1.putRecord(store, stampForActiveScope(store, value) as StoreValue<S> & { id: string });
 }
 
 export async function getRecord<S extends StoreName>(store: S, id: string): Promise<StoreValue<S> | undefined> {
-  return d1.getRecord<StoreValue<S>>(store, id);
+  const record = await d1.getRecord<StoreValue<S>>(store, id);
+  if (!record) return record;
+  return filterForActiveScope(store, [record])[0];
 }
 
 export async function getAllRecords<S extends StoreName>(store: S): Promise<StoreValue<S>[]> {
-  return d1.listRecords<StoreValue<S>>(store);
+  const list = await d1.listRecords<StoreValue<S>>(store);
+  return filterForActiveScope(store, list);
 }
 
 export async function deleteRecord<S extends StoreName>(store: S, id: string): Promise<void> {
@@ -307,7 +361,8 @@ export async function deleteRecord<S extends StoreName>(store: S, id: string): P
 }
 
 export async function bulkPut<S extends StoreName>(store: S, records: StoreValue<S>[]): Promise<void> {
-  await d1.bulkPut(store, records as (StoreValue<S> & { id: string })[]);
+  const stamped = records.map((record) => stampForActiveScope(store, record));
+  await d1.bulkPut(store, stamped as (StoreValue<S> & { id: string })[]);
 }
 
 // ============ 领域查询辅助 ============

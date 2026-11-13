@@ -82,7 +82,14 @@ export function StudentsPage() {
               key={s.id}
               student={s}
               active={prefs.currentStudentId === s.id}
-              onSelect={() => setPrefs({ currentStudentId: s.id })}
+              onSelect={() =>
+                void setPrefs({
+                  currentStudentId: s.id,
+                  // 教师端切学生时同步学段/学科，录入数据才会打到该学生所属学段
+                  gradeLevel: s.gradeLevel,
+                  subjects: s.subjects,
+                })
+              }
               onDelete={() => remove(s.id)}
             />
           ))}

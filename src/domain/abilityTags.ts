@@ -4,6 +4,7 @@
  * 结构：学科 → 模块 → 能力点(带难度/掌握周期/关联题型)
  */
 import type { AbilityTag, GradeLevel, Subject } from './types';
+import { K12_SUBJECT_SCAFFOLDS } from '../domains/k12';
 
 const t = (
   subject: Subject,
@@ -219,10 +220,17 @@ const MIANSHI: AbilityTag[] = [
 
 const EMPTY: AbilityTag[] = [];
 
+/** K12 扩展学科使用 domains/k12 的通用脚手架，保证可录入、可归因、可出雷达图 */
+const scaffoldTags = (gradeLevel: GradeLevel, subject: Subject): AbilityTag[] => {
+  const points = K12_SUBJECT_SCAFFOLDS[`${gradeLevel}-${subject}`];
+  if (!points) return EMPTY;
+  return points.map((p) => t(subject, p.module, p.point, p.difficulty, p.cycle, p.questionType, gradeLevel));
+};
+
 /** 三级能力标签库(v1)
  *  已填充: math (primary/junior/senior/adult), physics (junior/senior), xingce/shenlun/mianshi (adult)
- *  预留(P2): 语文/英语/化学/生物 全学段 + 各种学段-学科的边缘组合;
- *  预留组合允许用户自建模块并录入训练,能力标签库随版本迭代补充。
+ *  K12 语文/英语/化学/生物: 通用脚手架（非完整考纲）;
+ *  公考学段的 K12 学科组合保持为空，避免跨域内容混入。
  */
 export const ABILITY_TAGS: Record<`${GradeLevel}-${Subject}`, AbilityTag[]> = {
   'primary-math': MATH_PRIMARY,
@@ -230,8 +238,8 @@ export const ABILITY_TAGS: Record<`${GradeLevel}-${Subject}`, AbilityTag[]> = {
   'primary-xingce': EMPTY,
   'primary-shenlun': EMPTY,
   'primary-mianshi': EMPTY,
-  'primary-chinese': EMPTY,
-  'primary-english': EMPTY,
+  'primary-chinese': scaffoldTags('primary', 'chinese'),
+  'primary-english': scaffoldTags('primary', 'english'),
   'primary-chemistry': EMPTY,
   'primary-biology': EMPTY,
   'junior-math': MATH_JUNIOR,
@@ -239,19 +247,19 @@ export const ABILITY_TAGS: Record<`${GradeLevel}-${Subject}`, AbilityTag[]> = {
   'junior-xingce': EMPTY,
   'junior-shenlun': EMPTY,
   'junior-mianshi': EMPTY,
-  'junior-chinese': EMPTY,
-  'junior-english': EMPTY,
-  'junior-chemistry': EMPTY,
-  'junior-biology': EMPTY,
+  'junior-chinese': scaffoldTags('junior', 'chinese'),
+  'junior-english': scaffoldTags('junior', 'english'),
+  'junior-chemistry': scaffoldTags('junior', 'chemistry'),
+  'junior-biology': scaffoldTags('junior', 'biology'),
   'senior-math': MATH_SENIOR,
   'senior-physics': PHYSICS_SENIOR,
   'senior-xingce': EMPTY,
   'senior-shenlun': EMPTY,
   'senior-mianshi': EMPTY,
-  'senior-chinese': EMPTY,
-  'senior-english': EMPTY,
-  'senior-chemistry': EMPTY,
-  'senior-biology': EMPTY,
+  'senior-chinese': scaffoldTags('senior', 'chinese'),
+  'senior-english': scaffoldTags('senior', 'english'),
+  'senior-chemistry': scaffoldTags('senior', 'chemistry'),
+  'senior-biology': scaffoldTags('senior', 'biology'),
   'adult-math': MATH_SENIOR,
   'adult-physics': EMPTY,
   'adult-xingce': XINGCE,
@@ -351,5 +359,17 @@ export const RADAR_DIMENSIONS: Partial<Record<`${GradeLevel}-${Subject}`, RadarD
 };
 
 export function getRadarDimensions(gradeLevel: GradeLevel, subject: Subject): RadarDimension[] {
-  return RADAR_DIMENSIONS[`${gradeLevel}-${subject}`] ?? [];
+  const explicit = RADAR_DIMENSIONS[`${gradeLevel}-${subject}`];
+  if (explicit && explicit.length > 0) return explicit;
+
+  // 没有手写权重的学科按模块均分，至少让 K12 扩展学科有可用的能力雷达
+  const modules = getModules(gradeLevel, subject);
+  if (modules.length === 0) return [];
+  const base = Math.floor(100 / modules.length);
+  return modules.map((module, index) => ({
+    key: `module-${index}`,
+    label: module,
+    weight: index === modules.length - 1 ? 100 - base * (modules.length - 1) : base,
+    modules: [module],
+  }));
 }

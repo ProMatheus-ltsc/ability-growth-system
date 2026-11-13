@@ -8,7 +8,8 @@ import { getTrainingsCopy } from '../domain/trainingsCopy';
 import { findTrainingsByStudent, findGaps, putRecord, deleteRecord, getMeta, setMeta, getAllRecords } from '../services/localDB';
 import { deriveGapsFromTraining, deriveSnapshotFromTraining, isTimedMet, interviewAnsweredAt, interviewScorePercent } from '../services/analytics';
 import { getAbilityTags, getModules } from '../domain/abilityTags';
-import { selectTrainingEntrySubjects, isTrainingExcludedSubject } from '../domain/storeGuards';
+import { selectTrainingEntrySubjects, isTrainingExcludedSubject } from '../domains/public-exam';
+import { domainOfGradeLevel, domainOfSubject } from '../domains/shared/scope';
 import {
   SUBJECT_LABEL,
   SUBJECT_MATRIX,
@@ -175,6 +176,7 @@ export function TrainingsPage() {
   };
 
   const copy = getTrainingsCopy(prefs.gradeLevel);
+  const isPublicExam = domainOfGradeLevel(prefs.gradeLevel) === 'public-exam';
   return (
     <div className="space-y-5">
       <PageHeader
@@ -198,15 +200,17 @@ export function TrainingsPage() {
         }
       />
 
-      <div className="rounded-lg bg-blue-50 px-3 py-2 text-xs text-blue-700 leading-relaxed flex flex-wrap items-center gap-2">
-        <span>
-          训练记录只接收行测等客观题。申论请到「学科专项 → 申论作答」录入（单题 / 套卷均可，套卷逐题记题型），
-          面试请到「学科专项 → 面试记录」录入；这两处保存的作答在本页下方以只读形式展示，不重复计入训练记录。
-          历史申论 / 面试训练记录仍然有效，继续参与统计并作为无四维评分时的回退口径。
-        </span>
-        <Link to="/subjective" className="underline font-medium">去申论作答 →</Link>
-        <Link to="/interview" className="underline font-medium">去面试记录 →</Link>
-      </div>
+      {isPublicExam && (
+        <div className="rounded-lg bg-blue-50 px-3 py-2 text-xs text-blue-700 leading-relaxed flex flex-wrap items-center gap-2">
+          <span>
+            训练记录只接收行测等客观题。申论请到「学科专项 → 申论作答」录入（单题 / 套卷均可，套卷逐题记题型），
+            面试请到「学科专项 → 面试记录」录入；这两处保存的作答在本页下方以只读形式展示，不重复计入训练记录。
+            历史申论 / 面试训练记录仍然有效，继续参与统计并作为无四维评分时的回退口径。
+          </span>
+          <Link to="/subjective" className="underline font-medium">去申论作答 →</Link>
+          <Link to="/interview" className="underline font-medium">去面试记录 →</Link>
+        </div>
+      )}
 
       <div className="flex items-center gap-2 text-sm text-slate-600 flex-wrap">
         <Filter size={14} />
@@ -357,12 +361,14 @@ export function TrainingsPage() {
         />
       )}
 
-      <SubjectiveReadOnlySection
-        answers={shenlunAnswers}
-        interviews={interviewRecords}
-        filter={subjectiveFilter}
-        onFilter={setSubjectiveFilter}
-      />
+      {isPublicExam && (
+        <SubjectiveReadOnlySection
+          answers={shenlunAnswers}
+          interviews={interviewRecords}
+          filter={subjectiveFilter}
+          onFilter={setSubjectiveFilter}
+        />
+      )}
     </div>
   );
 }
@@ -520,6 +526,8 @@ function RecordItem({ record, onDelete }: { record: TrainingRecord; onDelete: ()
         ? { label: '达标', className: 'bg-emerald-50 text-emerald-700' }
         : { label: '超时', className: 'bg-red-50 text-red-600' };
   const questionType = record.questionType || record.module.split('/')[1] || '未标注';
+  // 卷型/年份/得分/标准用时是公考卷面口径，K12 记录不展示这些空字段
+  const showPaperMeta = domainOfSubject(record.subject) === 'public-exam';
   return (
     <div className="p-4 flex flex-wrap items-center gap-3">
       <div className="flex-1 min-w-[200px]">
@@ -534,14 +542,16 @@ function RecordItem({ record, onDelete }: { record: TrainingRecord; onDelete: ()
         <div className="text-xs text-slate-500 mt-1">
           {record.date} · {record.totalQuestions} 题 · 正确 {correct} / 错 {record.errorCount} · 用时 {record.durationMinutes ?? '-'} 分
         </div>
-        <div className="text-xs text-slate-500 mt-1">
-          卷型 {record.paperType ? PAPER_TYPE_LABEL[record.paperType] : '未标注'}
-          · 年份 {record.paperYear ?? '未标注'}
-          · 得分 {record.score ?? '未标注'}
-          {record.fullMark !== undefined ? ` / ${record.fullMark}` : ''}
-          · 标准用时 {record.standardMinutes ?? '未标注'} 分
-          · 题型 {questionType}
-        </div>
+        {showPaperMeta && (
+          <div className="text-xs text-slate-500 mt-1">
+            卷型 {record.paperType ? PAPER_TYPE_LABEL[record.paperType] : '未标注'}
+            · 年份 {record.paperYear ?? '未标注'}
+            · 得分 {record.score ?? '未标注'}
+            {record.fullMark !== undefined ? ` / ${record.fullMark}` : ''}
+            · 标准用时 {record.standardMinutes ?? '未标注'} 分
+            · 题型 {questionType}
+          </div>
+        )}
         {record.errorCategories.length > 0 && (
           <div className="flex flex-wrap gap-1 mt-2">
             {record.errorCategories.map((c) => (
@@ -603,6 +613,8 @@ function TrainingForm({ quick, defaults, studentId, gradeLevel, availableSubject
 
   const errorLibrary = getErrorLibrary(subject);
   const pointOptions = getPoints(gradeLevel, subject, moduleName);
+  // 卷面结构是公考（国考/省考/事业单位/军转）口径，K12 不展示也不写入
+  const showPaperMeta = domainOfGradeLevel(gradeLevel) === 'public-exam';
   /** 实际写入记录的 module：有考点则两级，否则一级 */
   const effectiveModule = pointName ? `${moduleName}/${pointName}` : moduleName;
 
@@ -865,42 +877,44 @@ function TrainingForm({ quick, defaults, studentId, gradeLevel, availableSubject
             </label>
           </div>
 
-          <div className="col-span-1 sm:col-span-2">
-            <div className="text-sm font-medium text-slate-700 mb-2">卷面结构（选填，留空不记录）</div>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <div>
-                <label className="label">卷型</label>
-                <select className="input" value={paperType} onChange={(e) => setPaperType(e.target.value as PaperType | '')}>
-                  <option value="">未标注</option>
-                  {PAPER_TYPE_OPTIONS.map((p) => (
-                    <option key={p} value={p}>
-                      {PAPER_TYPE_LABEL[p]}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="label">年份</label>
-                <input className="input" type="number" value={paperYear} onChange={(e) => setPaperYear(e.target.value)} placeholder="如 2025" />
-              </div>
-              <div>
-                <label className="label">满分</label>
-                <input className="input" type="number" value={fullMark} onChange={(e) => setFullMark(e.target.value)} placeholder="如 100" />
-              </div>
-              <div>
-                <label className="label">得分</label>
-                <input className="input" type="number" value={score} onChange={(e) => setScore(e.target.value)} placeholder="0 到满分之间" />
-              </div>
-              <div>
-                <label className="label">标准用时(分钟)</label>
-                <input className="input" type="number" value={standardMinutes} onChange={(e) => setStandardMinutes(e.target.value)} />
-              </div>
-              <div>
-                <label className="label">题型</label>
-                <input className="input" value={questionType} onChange={(e) => setQuestionType(e.target.value)} placeholder="如 计算/概括" maxLength={20} />
+          {showPaperMeta && (
+            <div className="col-span-1 sm:col-span-2">
+              <div className="text-sm font-medium text-slate-700 mb-2">卷面结构（选填，留空不记录）</div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="label">卷型</label>
+                  <select className="input" value={paperType} onChange={(e) => setPaperType(e.target.value as PaperType | '')}>
+                    <option value="">未标注</option>
+                    {PAPER_TYPE_OPTIONS.map((p) => (
+                      <option key={p} value={p}>
+                        {PAPER_TYPE_LABEL[p]}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="label">年份</label>
+                  <input className="input" type="number" value={paperYear} onChange={(e) => setPaperYear(e.target.value)} placeholder="如 2025" />
+                </div>
+                <div>
+                  <label className="label">满分</label>
+                  <input className="input" type="number" value={fullMark} onChange={(e) => setFullMark(e.target.value)} placeholder="如 100" />
+                </div>
+                <div>
+                  <label className="label">得分</label>
+                  <input className="input" type="number" value={score} onChange={(e) => setScore(e.target.value)} placeholder="0 到满分之间" />
+                </div>
+                <div>
+                  <label className="label">标准用时(分钟)</label>
+                  <input className="input" type="number" value={standardMinutes} onChange={(e) => setStandardMinutes(e.target.value)} />
+                </div>
+                <div>
+                  <label className="label">题型</label>
+                  <input className="input" value={questionType} onChange={(e) => setQuestionType(e.target.value)} placeholder="如 计算/概括" maxLength={20} />
+                </div>
               </div>
             </div>
-          </div>
+          )}
         </div>
 
         {formErrors.length > 0 && (

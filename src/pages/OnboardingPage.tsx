@@ -13,7 +13,7 @@ import {
   type TrainingType,
 } from '../domain/types';
 import { getModules } from '../domain/abilityTags';
-import { selectTrainingEntrySubjects } from '../domain/storeGuards';
+import { selectTrainingEntrySubjects } from '../domains/public-exam';
 import { putRecord } from '../services/localDB';
 import { deriveGapsFromTraining, deriveSnapshotFromTraining } from '../services/analytics';
 

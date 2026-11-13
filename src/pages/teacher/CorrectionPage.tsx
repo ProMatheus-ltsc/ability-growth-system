@@ -139,6 +139,7 @@ function CorrectionForm({
     const rec: Correction = {
       id: uuid(),
       studentId,
+      gradeLevel: student?.gradeLevel,
       subject,
       scenario,
       date: now.slice(0, 10),
