@@ -45,4 +45,14 @@ describe('F-09 时间分配（演示数据）', () => {
     expect(buildTimeAllocation([noDuration])).toEqual([]);
     expect(buildTimeAllocation([])).toEqual([]);
   });
+
+  it('伪模块名收进整体桶，用时总量不丢', () => {
+    const base = moduleOnlyTrainings[0];
+    const items = buildTimeAllocation([
+      { ...base, id: 'pseudo-full', module: '行测整卷', examId: undefined, scope: 'full' as const },
+      { ...base, id: 'pseudo-review', module: '错题复盘/高频错点', examId: undefined, scope: 'single' as const },
+    ]);
+    expect(items.map((i) => i.module).sort()).toEqual(['整卷', '错题复盘'].sort());
+    expect(items.reduce((s, i) => s + i.totalMinutes, 0)).toBe((base.durationMinutes ?? 0) * 2);
+  });
 });

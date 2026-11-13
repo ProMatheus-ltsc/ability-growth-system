@@ -1,8 +1,7 @@
 /**
- * 薄弱点区段（并入能力中心）：三档 Tab
+ * 薄弱点区段（并入能力中心）：两档 Tab
  *
  * - 模块级：训练记录按知识模块汇总，分母 = 训练记录题数
- * - 考点级：labelStats 的考点路径排名，分母 = 题目作答次数（与模块级不同，页面明确标注）
  * - 能力缺口级：由训练记录派生的 gaps（未解决优先）
  *
  * 只读：不写入任何 store，不改动已有统计口径。由 AbilityCenterPage 作为区段渲染；
@@ -10,19 +9,17 @@
  */
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { AlertOctagon, BarChart3, Layers, Tags } from 'lucide-react';
+import { AlertOctagon, BarChart3, Layers } from 'lucide-react';
 import { EmptyState } from '../components/EmptyState';
 import { useAppSession } from '../hooks/useAppSession';
 import { findGaps, findTrainingsByStudent } from '../services/localDB';
 import { buildModuleStats } from '../services/analytics';
 import { SUBJECT_LABEL, type AbilityGap, type Subject, type TrainingRecord } from '../domain/types';
-import { LabelRankingPage } from './LabelRankingPage';
 
-type WeaknessTab = 'module' | 'label' | 'gap';
+type WeaknessTab = 'module' | 'gap';
 
 const TABS: Array<{ key: WeaknessTab; label: string; icon: typeof Layers }> = [
   { key: 'module', label: '模块级', icon: Layers },
-  { key: 'label', label: '考点级', icon: Tags },
   { key: 'gap', label: '能力缺口级', icon: AlertOctagon },
 ];
 
@@ -80,9 +77,8 @@ export function WeaknessPanels({ subject: subjectProp }: { subject?: Subject | n
   return (
     <div className="space-y-4">
       <div className="rounded-lg bg-slate-50 p-3 text-xs text-slate-500 leading-relaxed">
-        三档分母不同，不要横向比较百分比：<b className="text-slate-700">模块级</b>按训练记录题数、
-        <b className="text-slate-700">考点级</b>按题目作答次数（云端 labelStats 聚合）、
-        <b className="text-slate-700">能力缺口级</b>是按错误类型累计的出现次数。
+        两档分母不同，不要横向比较百分比：<b className="text-slate-700">模块级</b>按训练记录题数、
+        <b className="text-slate-700">能力缺口级</b>按错误类型累计的出现次数。
       </div>
 
       {subjectProp === undefined && subjectsInData.length > 1 && (
@@ -147,8 +143,6 @@ export function WeaknessPanels({ subject: subjectProp }: { subject?: Subject | n
           )}
         </div>
       )}
-
-      {tab === 'label' && <LabelRankingPage embedded />}
 
       {tab === 'gap' && (
         <div className="card p-4 space-y-2">

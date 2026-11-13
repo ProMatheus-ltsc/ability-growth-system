@@ -14,7 +14,6 @@ import type {
   GapStatusHistoryItem,
   GradeLevel,
   InterviewRecord,
-  LabelStat,
   MasteryLevel,
   StudentProfile,
   Subject,
@@ -30,7 +29,7 @@ import { displayQuestionType, isClassifiedType } from '../domain/subjectiveQuest
 import { buildAbilityPath, inferErrorCategories } from '../domain/abilityPath';
 import { validateAbilityPath } from '../domain/abilityPathGuard';
 import { getRadarDimensions } from '../domain/abilityTags';
-import { normalizeModule, pathBelongsToModule } from '../domain/moduleNormalize';
+import { normalizeAbilityPath, normalizeModule, pathBelongsToModule } from '../domain/moduleNormalize';
 import { isStandardMinutesInferred } from '../domain/paperStructure';
 
 /**
@@ -143,24 +142,38 @@ export function aggregateBySubject(rawRecords: TrainingRecord[]): SubjectStats[]
 /**
  * 记录级「有效性与聚合角色」的唯一判定入口（2026-11-09 双算修复）。
  *
- * 三级过滤规则：
+ * 过滤规则：
  * 1. `validity === 'duplicate'`：重复导入行，任何统计/计数/用时求和都排除；
  *    缺省时视为正常记录（历史数据没打标记不代表重复）。
  * 2. `aggregationRole === 'derived'`：跨日期 topic 聚合行，不参与任何聚合，
  *    否则会与原始行双算（该批 43 行带 1,813 题）。
- * 3. 同日期同科目优先取整卷：`full_paper` 压制同日同科目的 `module_detail`。
+ * 3. 粉笔标签拆分行（`-pt-`）：同一份模块作答按标签层级再切一遍，
+ *    题量是父模块行（`-mod-`）的再分配，按衍生行处理（见 `isLabelSplitRecord`）。
+ * 4. 整卷与模块只在同一个 examId 内互相压制，绝不按日期猜。
  */
 export type ResolvedAggregationRole = 'full_paper' | 'module_detail' | 'derived' | 'standalone';
 
 /**
+ * 粉笔标签拆分行：`fenbi-md-<paperId>-pt-<label>`。
+ * 这些行的题量已经包含在父模块行 `fenbi-md-<paperId>-mod-<module>` 里，
+ * 2026-11-13 线上 2,952 行实测 0 孤儿（每行都有父行），因此可以整类排除而不丢数据。
+ */
+export function isLabelSplitRecord(record: TrainingRecord): boolean {
+  return (record.id ?? '').includes('-pt-');
+}
+
+/**
  * 解析聚合角色。
- * 优先读显式 `aggregationRole`；历史记录缺该字段时按已有 `scope` 兼容映射
+ * 标签拆分行优先按衍生行处理：写入方给它们打了 `module_detail`，
+ * 但那是错误粒度，按 id 约定覆盖。
+ * 其余记录优先读显式 `aggregationRole`；历史记录缺该字段时按已有 `scope` 兼容映射
  * （full→full_paper、module→module_detail）；两者都缺失视为 `standalone`。
  *
  * 缺失字段的处理理由：既不默认整卷（会误压同日的模块明细），也不默认排除
  * （历史记录占多数且是真实训练，排除会凭空丢数据），而是作为独立记录原样参与聚合。
  */
 export function resolveAggregationRole(record: TrainingRecord): ResolvedAggregationRole {
+  if (isLabelSplitRecord(record)) return 'derived';
   if (record.aggregationRole === 'derived') return 'derived';
   if (record.aggregationRole === 'full_paper') return 'full_paper';
   if (record.aggregationRole === 'module_detail') return 'module_detail';
@@ -176,12 +189,21 @@ export function selectValidRecords(records: TrainingRecord[]): TrainingRecord[] 
   );
 }
 
-const hasExamId = (r: TrainingRecord): string | null => (r.examId ? r.examId : null);
+/**
+ * 整卷行 examId 带 `fenbi-exam-` 前缀（如 `fenbi-exam-4291593113`），
+ * 模块行只写 paperId（如 `4291593113`），直接字符串比较永远配不上。
+ * 2026-11-13 线上因此有 81 条模块行（1,785 题）与整卷双算，比较前统一去前缀。
+ */
+function normalizedExamId(record: TrainingRecord): string | null {
+  const raw = (record.examId ?? '').trim();
+  if (!raw) return null;
+  return raw.startsWith('fenbi-exam-') ? raw.slice('fenbi-exam-'.length) : raw;
+}
 
 /**
  * 学科级聚合去重：
- * - 先剔除 `duplicate` 与 `derived`；
- * - 压制只在同一个 `examId` 内发生：该 examId 存在整卷行时排除它的模块明细；
+ * - 先剔除 `duplicate` 与 `derived`（含标签拆分行）；
+ * - 压制只在同一个 examId 内发生：该 examId 存在整卷行时排除它的模块明细；
  * - 不同 examId 之间互不影响；
  * - **没有 examId 的记录不做任何压制**，各自独立计入（历史数据 228 条无 examId，
  *   用日期+科目去压等于拿猜测当证据，会把「上午专项、晚上整卷」误判成同一次）；
@@ -192,12 +214,12 @@ export function selectAggregationRecords(records: TrainingRecord[]): TrainingRec
   const fullByExam = new Set<string>();
   for (const r of valid) {
     if (resolveAggregationRole(r) !== 'full_paper') continue;
-    const examId = hasExamId(r);
+    const examId = normalizedExamId(r);
     if (examId) fullByExam.add(examId);
   }
   return valid.filter((r) => {
     if (resolveAggregationRole(r) !== 'module_detail') return true;
-    const examId = hasExamId(r);
+    const examId = normalizedExamId(r);
     return !(examId && fullByExam.has(examId));
   });
 }
@@ -206,8 +228,8 @@ export function selectAggregationRecords(records: TrainingRecord[]): TrainingRec
 
 /**
  * 模块级去重（F-03 模块口径）：
- * - 先剔除 `duplicate` 与 `derived`；
- * - 压制只在同一个 `examId` 内发生：该 examId 存在模块明细时排除它的整卷行，保留模块明细；
+ * - 先剔除 `duplicate` 与 `derived`（含标签拆分行）；
+ * - 压制只在同一个 examId 内发生：该 examId 存在模块明细时排除它的整卷行，保留模块明细；
  * - 只有整卷时保留整卷，避免整卷数据整体丢失；
  * - **没有 examId 的记录不做任何压制**，整卷与模块各自独立计入。
  * 时间分配、模块统计、雷达的模块兜底统一使用本函数。
@@ -217,12 +239,12 @@ export function selectModuleLevelRecords(records: TrainingRecord[]): TrainingRec
   const modulesByExam = new Set<string>();
   for (const r of valid) {
     if (resolveAggregationRole(r) !== 'module_detail') continue;
-    const examId = hasExamId(r);
+    const examId = normalizedExamId(r);
     if (examId) modulesByExam.add(examId);
   }
   return valid.filter((r) => {
     if (resolveAggregationRole(r) !== 'full_paper') return true;
-    const examId = hasExamId(r);
+    const examId = normalizedExamId(r);
     return !(examId && modulesByExam.has(examId));
   });
 }
@@ -241,6 +263,14 @@ export interface ModuleStatsItem {
 }
 
 /**
+ * 伪模块：`整卷`/`行测整卷` 是卷型，`错题复盘` 是训练类型，都不是考点模块。
+ * 它们只应出现在「时间分配」的整体桶里，不能进入模块正确率/薄弱模块排名。
+ */
+export function isPseudoModule(module: string): boolean {
+  return module === '整卷' || module === '行测整卷' || module.startsWith('错题复盘');
+}
+
+/**
  * 模块级聚合：排除整卷行、保留模块行，按一级模块归并。
  * 无题量样本时 correctRate / masteryScore / avgMinutesPerQuestion 为 null（不补 0）。
  */
@@ -252,7 +282,7 @@ export function buildModuleStats(records: TrainingRecord[]): ModuleStatsItem[] {
   const groups = new Map<string, { subject: Subject; module: string; list: TrainingRecord[] }>();
   for (const r of moduleRecords) {
     const module = normalizeModule(r.module, r.subject, r.gradeLevel);
-    if (!module) continue;
+    if (!module || isPseudoModule(module)) continue;
     const key = `${r.subject}::${module}`;
     const group = groups.get(key) ?? { subject: r.subject, module, list: [] };
     group.list.push(r);
@@ -287,109 +317,6 @@ export function buildModuleStats(records: TrainingRecord[]): ModuleStatsItem[] {
     });
   }
   return stats;
-}
-
-/** ============ 题型标签聚合（labelStats） ============ */
-
-export interface LabelStatNode {
-  /** 完整前缀路径，例如 ['资料分析', '综合分析'] */
-  path: string[];
-  depth: number;
-  /** 该前缀下全部叶子作答次数之和 */
-  questionCount: number;
-  /** 该前缀下去重题量之和 */
-  uniqueQuestionCount: number;
-  correctCount: number;
-  /** 正确率 0–100，保留一位小数 */
-  rate: number;
-  /** 该前缀下并列最深标签的作答次数之和 */
-  multiLabelCount: number;
-  /** 叶子来源汇总：全部官方 / 全部推断 / 混合 */
-  labelSource: 'official' | 'inferred' | 'mixed';
-  officialLeaves: number;
-  inferredLeaves: number;
-  children: LabelStatNode[];
-}
-
-/**
- * 题型标签行的有效口径：剔除重复导入行与跨日期聚合行（与 trainings 同一规则）。
- * 缺省字段视为正常行，避免把历史聚合行整批丢掉。
- */
-export function selectValidLabelStats(leaves: LabelStat[]): LabelStat[] {
-  return leaves.filter((l) => l.validity !== 'duplicate' && l.aggregationRole !== 'derived');
-}
-
-/**
- * 把 `labelStats` 的叶子行按 `path` 前缀向上卷成树。
- * 叶子之间互斥（每题只记最深一级主标签），因此父节点题量等于子节点之和，不会重复计数。
- * 排序：正确率从低到高（与排名页一致），同分时样本大的在前。
- */
-export function buildLabelStats(leaves: LabelStat[]): LabelStatNode[] {
-  const keyOf = (path: string[]) => path.join(' > ');
-  const nodes = new Map<string, LabelStatNode>();
-  for (const leaf of leaves) {
-    if (!leaf.path || leaf.path.length === 0) continue;
-    for (let i = 1; i <= leaf.path.length; i += 1) {
-      const path = leaf.path.slice(0, i);
-      const key = keyOf(path);
-      let node = nodes.get(key);
-      if (!node) {
-        node = {
-          path,
-          depth: i,
-          questionCount: 0,
-          uniqueQuestionCount: 0,
-          correctCount: 0,
-          rate: 0,
-          multiLabelCount: 0,
-          labelSource: leaf.labelSource,
-          officialLeaves: 0,
-          inferredLeaves: 0,
-          children: [],
-        };
-        nodes.set(key, node);
-      }
-      node.questionCount += leaf.questionCount;
-      node.uniqueQuestionCount += leaf.uniqueQuestionCount;
-      node.correctCount += leaf.correctCount;
-      node.multiLabelCount += leaf.multiLabelCount;
-    }
-    // 来源只在「叶子」层计数，父节点的来源由子叶子汇总得出
-    const leafNode = nodes.get(keyOf(leaf.path));
-    if (leafNode) {
-      if (leaf.labelSource === 'official') leafNode.officialLeaves += 1;
-      else leafNode.inferredLeaves += 1;
-    }
-  }
-
-  for (const node of nodes.values()) {
-    node.rate =
-      node.questionCount === 0 ? 0 : Math.round((node.correctCount / node.questionCount) * 1000) / 10;
-    const parentKey = keyOf(node.path.slice(0, -1));
-    const parent = node.depth > 1 ? nodes.get(parentKey) : undefined;
-    if (parent) parent.children.push(node);
-  }
-
-  // 自底向上汇总来源计数，再判定 official / inferred / mixed
-  const resolveSource = (node: LabelStatNode): void => {
-    for (const child of node.children) resolveSource(child);
-    if (node.children.length > 0) {
-      node.officialLeaves = node.children.reduce((s, c) => s + c.officialLeaves, 0);
-      node.inferredLeaves = node.children.reduce((s, c) => s + c.inferredLeaves, 0);
-    }
-    if (node.inferredLeaves === 0) node.labelSource = 'official';
-    else if (node.officialLeaves === 0) node.labelSource = 'inferred';
-    else node.labelSource = 'mixed';
-  };
-
-  const sortTree = (list: LabelStatNode[]) => {
-    list.sort((a, b) => a.rate - b.rate || b.questionCount - a.questionCount);
-    for (const node of list) sortTree(node.children);
-  };
-  const roots = Array.from(nodes.values()).filter((n) => n.depth === 1);
-  for (const root of roots) resolveSource(root);
-  sortTree(roots);
-  return roots;
 }
 
 export interface WeeklyDelta {
@@ -600,15 +527,21 @@ export interface TimeAllocationItem {
 /**
  * 仅统计有效用时（durationMinutes > 0），按模块级口径去重（整卷与模块并存时保留模块明细）、
  * 按一级模块归并；share 以有效总时长为分母，空集合返回 []。
- * 注：此前后用了学科级去重，导致「有整卷行时模块时间明细消失」，已按验收缺陷 #7 修正。
+ * 卷型/活动类型（整卷、错题复盘）不是考点模块，统一收进 `整卷` / `错题复盘` 两个整体桶，
+ * 保证总时长不丢但不会以伪模块名出现在时间分配里。
  */
 export function buildTimeAllocation(records: TrainingRecord[]): TimeAllocationItem[] {
   const timed = selectModuleLevelRecords(records).filter((r) => (r.durationMinutes ?? 0) > 0);
 
   const groups = new Map<string, { module: string; minutes: number; questions: number; sessions: number }>();
   for (const r of timed) {
-    const module = normalizeModule(r.module, r.subject, r.gradeLevel);
-    if (!module) continue;
+    const normalized = normalizeModule(r.module, r.subject, r.gradeLevel);
+    if (!normalized) continue;
+    const module = normalized.startsWith('错题复盘')
+      ? '错题复盘'
+      : normalized === '行测整卷'
+        ? '整卷'
+        : normalized;
     const group = groups.get(module) ?? { module, minutes: 0, questions: 0, sessions: 0 };
     group.minutes += r.durationMinutes ?? 0;
     group.questions += r.totalQuestions;
@@ -1303,12 +1236,15 @@ export function buildRadarSlices(
   // 去重口径（验收缺陷 #7）：模块兜底统计前先剔除与模块行重复的整卷行，
   // 此前直接用原始记录导致整卷+模块被重复计入。
   const scoped = selectModuleLevelRecords(records).filter((r) => r.subject === subject);
+  // 与能力中心一致：按归一化路径去重，避免 `xingce/言语理解` 与
+  // `xingce/言语理解与表达` 被当成两个能力点重复平均（2026-11-13 线上 9 组重复路径）。
   const abilityByPath = new Map<string, AbilitySnapshot>();
   for (const a of abilities) {
     if (a.subject !== subject) continue;
-    const prev = abilityByPath.get(a.abilityPath);
+    const key = normalizeAbilityPath(a.abilityPath, subject, gradeLevel);
+    const prev = abilityByPath.get(key);
     if (!prev || a.evaluationTime > prev.evaluationTime) {
-      abilityByPath.set(a.abilityPath, a);
+      abilityByPath.set(key, a);
     }
   }
 

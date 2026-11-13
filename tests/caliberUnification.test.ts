@@ -49,6 +49,29 @@ describe('口径统一 · 掌握度 / 目标 / 时间窗口', () => {
     expect(noTarget.every((s) => s.targetScore === undefined)).toBe(true);
   });
 
+  it('雷达按归一化路径去重：同一能力只取最近快照，不因写法不同被平均', () => {
+    const ability = {
+      id: 'ab-1',
+      subject: 'xingce' as const,
+      gradeLevel: 'adult' as const,
+      score: 80,
+      level: 'proficient' as const,
+      confidence: 1,
+      source: 'manual' as const,
+      createdAt: '2026-11-01T00:00:00Z',
+    };
+    const slices = buildRadarSlices(
+      [],
+      [
+        { ...ability, abilityPath: 'xingce/言语理解', evaluationTime: '2026-11-01T00:00:00Z' },
+        { ...ability, id: 'ab-2', abilityPath: 'xingce/言语理解与表达', score: 60, evaluationTime: '2026-11-10T00:00:00Z' },
+      ],
+      'adult',
+      'xingce',
+    );
+    expect(slices.find((s) => s.key === 'language')?.score).toBe(60);
+  });
+
   it('增长曲线使用学科级去重，整卷与模块不重复计入', () => {
     const base = fullAndModuleTrainings[0];
     const records = [

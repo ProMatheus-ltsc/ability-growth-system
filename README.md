@@ -163,7 +163,7 @@
 │  ├── taskTemplates.ts   内置任务模板库 + 评语库                      │
 │  ├── localDB.ts     业务 CRUD 门面（转调 d1Client）+ 设备级元数据    │
 │  ├── d1Client.ts    Pages 同域 /api 请求层（Cookie 会话）            │
-│  └── snapshot.ts    27 张表名单 + 快照类型的唯一来源                 │
+│  └── snapshot.ts    26 张表名单 + 快照类型的唯一来源                 │
 ├─────────────────────────────────────────────────────────────────────┤
 │  Domain                                                              │
 │  ├── types.ts       30+ 领域实体类型定义                             │
@@ -173,9 +173,9 @@
 │  Persistence                                                         │
 │  Cloudflare Pages Functions (functions/api/[[path]].ts)              │
 │  └── 同域 /api → D1 Binding "DB"                                     │
-│      ├── 27 张业务表: (workspace, id, updated_at, data)               │
-│      ├── 服务端账号: users / sessions / auth_attempts                 │
-│      └── sync_backups: 每工作空间最近 20 个备份点                     │
+│      ├── 26 张业务表: (workspace, id, updated_at, data)               │
+│      ├── 服务端账号: users(含 role/grade_level) / sessions / auth_attempts │
+│      └── sync_backups: 每工作空间按体积保留（≥3 个，≤6MB / 20 个）    │
 │  IndexedDB（本机）                                                   │
 │  └── 仅登录偏好 / 设备级元数据                                        │
 └─────────────────────────────────────────────────────────────────────┘
@@ -195,7 +195,7 @@ ability-growth-system/
 │   ├── services/                   # 服务层
 │   │   ├── localDB.ts              # 业务 CRUD 门面（转调 d1Client）+ 设备元数据
 │   │   ├── d1Client.ts             # Pages 同域 /api 请求层
-│   │   ├── snapshot.ts             # 27 张表名单 / 快照类型
+│   │   ├── snapshot.ts             # 26 张表名单 / 快照类型
 │   │   ├── analytics.ts            # 基础分析引擎
 │   │   ├── insights.ts             # P2 深度洞察引擎
 │   │   ├── planner.ts              # 学习规划器
@@ -221,7 +221,12 @@ ability-growth-system/
 │   └── tsconfig.json
 ├── migrations/
 │   ├── 0001_init.sql               # 27 张业务表 + sync_backups
-│   └── 0002_auth.sql               # users / sessions / auth_attempts
+│   ├── 0002_auth.sql               # users / sessions / auth_attempts
+│   ├── 0003_labelStats.sql         # 题型标签聚合表（已被 0007 删除）
+│   ├── 0004_drop_reviews.sql       # 下线 reviews 表
+│   ├── 0005_composite_pk.sql       # 业务表主键改为 (workspace, id)
+│   ├── 0006_data_cleanup.sql       # 时间戳 UTC / source 回填 / 悬空引用 / 会话 / 备份保留
+│   └── 0007_drop_labelStats.sql    # 删除已死的 labelStats（需在新代码部署后执行）
 ├── public/_redirects               # SPA 路由回退
 ├── scripts/cf-pages-build.sh       # Pages 构建：克隆 shared-core + npm ci + build
 ├── worker/                         # 仅保留粉笔练习数据播种 SQL（旧 Worker 已删除）
@@ -241,14 +246,22 @@ ability-growth-system/
 
 ### 5.1 D1 表结构
 
-27 张业务表结构一致，主键为 `id`，`workspace` 为登录用户名（小写）：
+26 张在用业务表结构一致，主键为 `(workspace, id)`，`workspace` 为登录用户名（小写）。
+已下线的 `reviews` 表仍留在库中，待 `0004_drop_reviews.sql` 执行后删除，不在快照与备份范围内。
+复合主键保证确定性 id（如粉笔派生的 `ab-*`、`fenbi-md-*`）在不同账户下各自独立，写入不会跨账户抢行。
+写入使用不带目标的 `ON CONFLICT DO UPDATE`，兼容迁移前后的主键。
+
+**迁移执行顺序**：先发布代码，再执行 `0005_composite_pk.sql`，最后执行 `0007_drop_labelStats.sql`
+（旧代码的 `initSchema` 会把 labelStats 重建出来，必须等新代码上线后再删）。
+`0006_data_cleanup.sql` 只做数据订正与索引，已在新代码部署前执行，可重复执行。
 
 ```sql
 CREATE TABLE trainings (
   workspace  TEXT NOT NULL DEFAULT '',
-  id         TEXT PRIMARY KEY,
+  id         TEXT NOT NULL,
   updated_at TEXT NOT NULL,
-  data       TEXT NOT NULL           -- 实体 JSON
+  data       TEXT NOT NULL,          -- 实体 JSON
+  PRIMARY KEY (workspace, id)
 );
 CREATE INDEX idx_trainings_workspace_updated ON trainings(workspace, updated_at);
 ```
@@ -285,10 +298,13 @@ CREATE INDEX idx_trainings_workspace_updated ON trainings(workspace, updated_at)
 
 辅助表：
 
-- `users(id, username, password_hash, created_at)` — 用户名唯一（小写）。
-- `sessions(token_hash, user_id, created_at, expires_at, user_agent, ip_hash)` — 仅保存令牌 SHA-256。
+- `users(id, username, password_hash, created_at, role, grade_level, profile_initialized)` — 用户名唯一（小写）；
+  `role` 为 `student | teacher`，`grade_level` 为 `primary | junior | senior | adult`。
+- `sessions(token_hash, user_id, created_at, expires_at, user_agent, ip_hash)` — 仅保存令牌 SHA-256；
+  过期会话在创建新会话或旧令牌再次出现时被删除，`idx_sessions_expires` 支撑清理。
 - `auth_attempts(ip_hash, kind, attempted_at)` — 注册/登录失败限流。
-- `sync_backups(id, account_id, created_at, data)` — 每个工作空间最近 20 个全量备份点。
+- `sync_backups(id, account_id, created_at, data)` — 全量备份点，按体积保留：
+  至少 3 个，累计超过 6MB 或超过 20 个时从最旧开始删除。
 
 浏览器 IndexedDB 仅保留设备级 `meta`（偏好、最近录入默认值），不存储业务数据。
 
@@ -302,8 +318,10 @@ CREATE INDEX idx_trainings_workspace_updated ON trainings(workspace, updated_at)
 | `POST /api/auth/register` | 注册（用户名 + 密码），成功后写入会话 Cookie |
 | `POST /api/auth/login` | 登录 |
 | `POST /api/auth/logout` | 登出并清除 Cookie |
-| `GET  /api/auth/me` | 当前会话用户 |
-| `GET  /api/stats` | 当前工作空间各表记录数 |
+| `GET  /api/auth/me` | 当前会话用户（含 `profile`） |
+| `GET  /api/profile` | 当前角色 / 学段 / 是否已完成初始化 |
+| `PUT  /api/profile` | 更新角色与学段（写入 `users.role / grade_level`） |
+| `GET  /api/stats` | 当前工作空间各表记录数（学生按本学段统计） |
 | `GET  /api/stores/:store` | 列出记录 |
 | `GET  /api/stores/:store/:id` | 读取单条 |
 | `PUT  /api/stores/:store/:id` | 新增/覆盖单条 |
@@ -313,15 +331,22 @@ CREATE INDEX idx_trainings_workspace_updated ON trainings(workspace, updated_at)
 | `GET/POST /api/backups` | 备份列表 / 创建备份 |
 | `POST   /api/backups/:id/restore` | 用备份覆盖当前工作空间 |
 
-**冲突策略**: Last-Write-Wins，按 `updatedAt / createdAt / evaluationTime` 逐条比对，保留较新版本。
+**角色与学段过滤**: 角色是服务端概念（`users.role`），不是前端视图。
+`student` 账号的读写、统计、备份恢复与清空都只作用于 `users.grade_level` 对应的学段；
+`teacher` 账号不受学段限制。跨学段写入会被 API 拒绝，快照导入/恢复同样按学段裁剪。
+**冲突策略**: Last-Write-Wins，按 `updatedAt / createdAt / evaluationTime` 逐条比对，保留较新版本；
+比较使用 `julianday()`，`+08:00` 与 `Z` 在同一时间轴上；写入前时间戳统一归一为 UTC ISO（毫秒精度）。
 **账号安全**: 密码使用 PBKDF2-SHA256（10 万次迭代）加盐哈希；会话令牌 30 天有效，仅存哈希；
-同一 IP 10 分钟内注册失败 8 次或登录失败 10 次会被限流。
+过期会话自动清理；同一 IP 10 分钟内注册失败 8 次或登录失败 10 次会被限流。
 
 ---
 
 ## 6. 学生 vs 教师 权限区分
 
 系统按 `AppSession.prefs.role` 展示不同导航,并在路由层通过 `<TeacherOnly>` 组件强制守卫。
+角色同时是服务端事实：`users.role` 由 `/api/profile` 维护，前端角色只影响导航与默认视图。
+学生账号的读写、统计、备份恢复与清空都只作用于自身 `grade_level`；教师账号不做学段过滤；
+越权写入由 API 拒绝，而不是仅靠前端隐藏。
 
 | 路由 | 学生 | 教师 | 说明 |
 |------|:----:|:----:|------|
@@ -481,18 +506,27 @@ npm run pages:deploy
    - Variable name: `DB`
    - D1 database: `ability_growth`
 
-3. 执行建表（27 张业务表 + 账户/会话表）：
+3. 执行建表（26 张业务表 + 账户/会话表）：
 
    ```bash
    npm run db:migrate:remote
    ```
 
    Pages Functions 首次请求也会自动补建缺失的表，因此旧库无需手工迁移。
+   但 `0005_composite_pk.sql` 属于主键重建：旧库必须显式 apply 才会生效，
+   建议顺序为 **先发布代码、再 apply 0005**（写入语句对新旧主键都兼容），
+   apply 前先导出一份 D1 备份，执行后核对 26 张表行数与 `PRAGMA table_info(<表名>)` 的 pk 列。
+
+   完整顺序：
+
+   1. 部署新代码（`0006` 只订正数据与索引，可在部署前执行，且可重复执行）；
+   2. apply `0005_composite_pk.sql`；
+   3. apply `0007_drop_labelStats.sql`（必须在新代码之后，否则旧 `initSchema` 会重建该表）。
 
 4. 部署后访问 `https://<项目>.pages.dev/api/health`，返回 `{"ok":true,"storage":"d1"}` 即连通。
 
 > D1 是业务数据的唯一来源，应用不提供本地数据导入/合并，也不提供 JSON 导出。
-> 备份与恢复都在云端完成（`sync_backups` 表，每个工作空间保留最近 20 个版本）。
+> 备份与恢复都在云端完成（`sync_backups` 表，按体积保留：至少 3 个，累计超过 6MB 或 20 个时从最旧删除）。
 > 账号密码与会话完全由 Pages Functions 管理，无需额外环境变量或访问令牌。
 
 ### 9.3 数据播种脚本（旧 Worker 已移除）

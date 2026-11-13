@@ -12,6 +12,27 @@ import type { GradeLevel, Subject } from '../../domain/types';
 
 export type ProductDomain = 'public-exam' | 'k12';
 
+/**
+ * 账户角色由服务端持有（users.role），不再只是前端视图：
+ * - student：读写严格限制在自己的学段内；
+ * - teacher：同一 workspace 内不按学段过滤。
+ * workspace 仍按账户隔离，因此角色不是跨账户的提权边界。
+ */
+export type UserRole = 'student' | 'teacher';
+
+export const USER_ROLES = ['student', 'teacher'] as const satisfies readonly UserRole[];
+
+export function isUserRole(value: unknown): value is UserRole {
+  return typeof value === 'string' && (USER_ROLES as readonly string[]).includes(value);
+}
+
+export interface UserProfile {
+  role: UserRole;
+  gradeLevel: GradeLevel;
+  /** 服务端是否已收到过显式偏好；false 时客户端可用本地设置做一次引导同步 */
+  profileInitialized: boolean;
+}
+
 export const GRADE_LEVELS = ['primary', 'junior', 'senior', 'adult'] as const satisfies readonly GradeLevel[];
 export const K12_GRADE_LEVELS = ['primary', 'junior', 'senior'] as const satisfies readonly GradeLevel[];
 
@@ -106,7 +127,6 @@ export const SUBJECT_SCOPED_STORES = new Set([
   'subjectiveAnswers',
   'stagePlans',
   'spacedReviews',
-  'labelStats',
 ]);
 
 /** 只属于公考域的数据表（记录没有 subject/gradeLevel 也要按域隔离） */

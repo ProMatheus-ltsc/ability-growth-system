@@ -54,10 +54,11 @@ npx wrangler d1 execute ability_growth --remote --command \
 所有 INSERT 用 LWW upsert：
 
 ```sql
-ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at, data=excluded.data
+ON CONFLICT DO UPDATE SET updated_at=excluded.updated_at, data=excluded.data
 WHERE excluded.updated_at > <table>.updated_at
 ```
 
+不带冲突目标，兼容旧主键 `id` 与 `0005` 之后的复合主键 `(workspace, id)`。
 即：**只有本地记录比远端新时才覆盖**。所以重复执行安全，也不会覆盖你在应用里做的新修改。
 
 ## 想更新数据时

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { aggregateBySubject, selectAggregationRecords } from '../src/services/analytics';
+import { aggregateBySubject, selectAggregationRecords, selectModuleLevelRecords } from '../src/services/analytics';
 import type { TrainingRecord } from '../src/domain/types';
 import {
   fullAndModuleTrainings,
@@ -48,5 +48,33 @@ describe('A1 整卷与模块去重聚合（演示数据）', () => {
       scope: 'module',
     };
     expect(selectAggregationRecords([noExamFull, moduleNoExam])).toHaveLength(2);
+  });
+});
+
+/**
+ * 2026-11-13 线上双算修复：
+ * - 粉笔标签拆分行（`-pt-`）是父模块行的再切分，必须按衍生行排除；
+ * - 整卷 examId 带 `fenbi-exam-` 前缀、模块行只有数字 paperId，比较前要归一化。
+ */
+describe('标签拆分行与 examId 命名空间', () => {
+  const base = fullAndModuleTrainings[0];
+
+  it('标签拆分行不参与学科级与模块级聚合，父模块行保留', () => {
+    const records = [
+      { ...base, id: 'fenbi-md-42-mod-资料分析', examId: '42', aggregationRole: 'module_detail' as const, totalQuestions: 20, errorCount: 4 },
+      { ...base, id: 'fenbi-md-42-pt-资料分析', examId: '42', aggregationRole: 'module_detail' as const, totalQuestions: 20, errorCount: 4 },
+      { ...base, id: 'fenbi-md-42-pt-资料分析-增长率', examId: '42', aggregationRole: 'module_detail' as const, totalQuestions: 12, errorCount: 3 },
+    ];
+    expect(selectAggregationRecords(records).map((r) => r.id)).toEqual(['fenbi-md-42-mod-资料分析']);
+    expect(selectModuleLevelRecords(records).map((r) => r.id)).toEqual(['fenbi-md-42-mod-资料分析']);
+  });
+
+  it('整卷 examId 带 fenbi-exam- 前缀时仍能与模块行配对', () => {
+    const records = [
+      { ...base, id: 'fenbi-exam-42', examId: 'fenbi-exam-42', aggregationRole: 'full_paper' as const, totalQuestions: 100, errorCount: 40 },
+      { ...base, id: 'fenbi-md-42-mod-资料分析', examId: '42', aggregationRole: 'module_detail' as const, totalQuestions: 20, errorCount: 4 },
+    ];
+    expect(selectAggregationRecords(records).map((r) => r.id)).toEqual(['fenbi-exam-42']);
+    expect(selectModuleLevelRecords(records).map((r) => r.id)).toEqual(['fenbi-md-42-mod-资料分析']);
   });
 });

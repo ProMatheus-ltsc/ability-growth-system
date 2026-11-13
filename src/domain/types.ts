@@ -266,6 +266,8 @@ export interface TrainingRecord {
   /** 外部题库/练习的精确关联键（禁止按卷名模糊匹配） */
   sourceId?: string;
   exerciseId?: string;
+  /** 数据来源（fenbi / manual / …），禁止跨源合并统计 */
+  source?: string;
   /**
    * 数据有效性：`duplicate` 表示重复导入行，任何统计、计数、用时求和都应排除；
    * 缺省视为正常记录（历史记录不会因为没打标记而被丢掉）。
@@ -273,48 +275,6 @@ export interface TrainingRecord {
   validity?: 'valid' | 'duplicate';
   /** 聚合角色，缺省时按 `scope` 兼容映射，见 TrainingAggregationRole */
   aggregationRole?: TrainingAggregationRole;
-}
-
-/** 题型标签聚合（labelStats）
- *  - 一行 = 一个标签叶子；`path` 保留完整层级，前端按前缀向上卷。
- *  - 官方标签 `labelSource: 'official'`；粉笔只给 1–2 级或缺标签时按解析推断的为 `'inferred'`。
- *  - `multiLabelCount` 记录该叶子下「最深标签并列」的作答次数（不确定性显式暴露）。
- */
-export interface LabelStat {
-  id: string;
-  gradeLevel?: GradeLevel;
-  subject: Subject;
-  /** 完整标签路径（一级/二级/三级/四级） */
-  path: string[];
-  /** 层级快照，便于按前缀聚合，也便于前端展示 */
-  levels: {
-    l1: string;
-    l2?: string;
-    l3?: string;
-    l4?: string;
-  };
-  depth: number;
-  labelSource: 'official' | 'inferred';
-  /** 仅 inferred 有值：引用题干特征或解析原文说明推断依据 */
-  labelBasis?: string;
-  /** 作答次数（同一道题多次作答分别计数） */
-  questionCount: number;
-  correctCount: number;
-  /** 正确率 0–100，保留一位小数 */
-  rate: number;
-  /** 去重题量 */
-  uniqueQuestionCount: number;
-  /** 该叶子下并列最深标签的作答次数 */
-  multiLabelCount: number;
-  /** 样本练习 id（exerciseId），最多保留若干条 */
-  sampleExercises?: string[];
-  /** 数据来源，如 fenbi */
-  source?: string;
-  /** 与训练记录同一口径：重复导入行不参与题型排名（缺省视为正常） */
-  validity?: 'valid' | 'duplicate';
-  /** 与训练记录同一口径：跨日期聚合行不参与题型排名 */
-  aggregationRole?: TrainingAggregationRole;
-  updatedAt: string;
 }
 
 /** 能力缺口/问题 */

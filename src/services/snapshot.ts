@@ -18,7 +18,6 @@ import type {
   ExamRegistration,
   FixTask,
   InterviewRecord,
-  LabelStat,
   PDCAProblem,
   PdcaArtifact,
   RetestReflection,
@@ -59,7 +58,6 @@ export const STORE_NAMES = [
   'vetoOverrides',
   'careerObservationPoints',
   'careerRetestReflections',
-  'labelStats',
 ] as const;
 
 export type StoreName = (typeof STORE_NAMES)[number];
@@ -93,5 +91,4 @@ export interface ExportedSnapshot {
   vetoOverrides: CareerVetoOverride[];
   careerObservationPoints: CareerObservationPoint[];
   careerRetestReflections: RetestReflection[];
-  labelStats: LabelStat[];
 }

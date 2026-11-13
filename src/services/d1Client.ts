@@ -4,6 +4,7 @@
  * 账户由服务端校验，会话放在 HttpOnly Cookie 中，前端不接触令牌。
  */
 import type { StoreName } from './snapshot';
+import type { UserProfile } from '../domains/shared/scope';
 
 const ERROR_EVENT = 'ability-growth:data-error';
 const UNAUTHORIZED_EVENT = 'ability-growth:auth-unauthorized';
@@ -98,6 +99,7 @@ interface AuthResponse {
   user: AuthUser;
   workspace: string;
   expiresAt?: string;
+  profile: UserProfile;
 }
 
 export async function fetchMe(): Promise<AuthResponse> {
@@ -122,6 +124,18 @@ export async function registerAccount(username: string, password: string): Promi
 
 export async function logoutAccount(): Promise<void> {
   await request('/api/auth/logout', { method: 'POST', notifyUnauthorized: false });
+}
+
+// ============ 角色 / 学段偏好 ============
+
+export async function fetchProfile(): Promise<UserProfile> {
+  return request<UserProfile>('/api/profile', { notifyUnauthorized: false });
+}
+
+export async function updateProfile(
+  patch: Partial<Pick<UserProfile, 'role' | 'gradeLevel'>>,
+): Promise<UserProfile> {
+  return request<UserProfile>('/api/profile', { method: 'PUT', body: patch });
 }
 
 // ============ 业务数据 ============

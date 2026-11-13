@@ -36,6 +36,17 @@ describe('F-04 模块统计（演示数据）', () => {
     expect(stats.map((s) => s.module).sort()).toEqual(['判断推理', '资料分析'].sort());
   });
 
+  it('伪模块（整卷/行测整卷/错题复盘）不进入模块正确率', () => {
+    const base = moduleOnlyTrainings[0];
+    const stats = buildModuleStats([
+      base,
+      { ...base, id: 'pseudo-full', module: '行测整卷', examId: undefined, scope: 'module' as const },
+      { ...base, id: 'pseudo-review', module: '错题复盘/高频错点', examId: undefined, scope: 'single' as const },
+    ]);
+    expect(stats.map((s) => s.module)).toEqual(['资料分析']);
+    expect(stats[0].totalQuestions).toBe(10);
+  });
+
   it('无题量样本时正确率与掌握度为 null（不补 0）', () => {
     const stats = buildModuleStats(durationOnlyTrainings);
     expect(stats).toHaveLength(1);
