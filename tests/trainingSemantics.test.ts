@@ -10,6 +10,7 @@ import {
 import {
   dedupeTrainingRecordsByIdempotencyKey,
   normalizeExamRef,
+  planTrainingWrite,
   resolveAttemptId,
   resolveTrainingKind,
   trainingIdempotencyKey,
@@ -319,5 +320,75 @@ describe('(source, sourceId, kind) 幂等键', () => {
     expect(
       dedupeTrainingRecordsByIdempotencyKey([older, manual, newer]).map((r) => r.id),
     ).toEqual(['manual', 'new']);
+  });
+});
+
+/**
+ * 验收缺陷 P2-4：同一次外部作答跨请求重复导入。
+ * 仅在单批内去重不够；服务端写入前要把库里同键的旧行一起纳入决策，
+ * 由较新的 updatedAt 胜出，并删除被替代的行，避免聚合重复计题。
+ */
+describe('跨请求训练写入决策', () => {
+  const older: TrainingRecord = {
+    ...base,
+    id: 'old',
+    source: 'fenbi',
+    sourceId: 'dup',
+    totalQuestions: 10,
+    updatedAt: '2026-11-01T00:00:00.000Z',
+  };
+
+  it('新记录覆盖同键旧记录，并删除旧行', () => {
+    const incoming = { ...older, id: 'new', totalQuestions: 20, updatedAt: '2026-11-02T00:00:00.000Z' };
+    expect(planTrainingWrite([incoming], [older])).toEqual({
+      upserts: [incoming],
+      deleteIds: ['old'],
+    });
+  });
+
+  it('旧记录到达时不覆盖新记录', () => {
+    const stale = { ...older, id: 'stale', updatedAt: '2026-10-31T00:00:00.000Z' };
+    expect(planTrainingWrite([stale], [older])).toEqual({ upserts: [], deleteIds: [] });
+  });
+
+  it('同时间戳按后写入优先（与 LWW >= 语义一致）', () => {
+    const incoming = { ...older, id: 'same-time' };
+    expect(planTrainingWrite([incoming], [older])).toEqual({
+      upserts: [incoming],
+      deleteIds: ['old'],
+    });
+  });
+
+  it('+08:00 与 Z 时间按同一时间轴比较', () => {
+    const localOlder: TrainingRecord = {
+      ...older,
+      id: 'local-old',
+      updatedAt: '2026-11-01T08:00:00.000+08:00', // = 00:00Z
+    };
+    const later = { ...older, id: 'later', updatedAt: '2026-11-01T00:00:01.000Z' };
+    expect(planTrainingWrite([later], [localOlder]).deleteIds).toEqual(['local-old']);
+
+    const earlier = { ...older, id: 'earlier', updatedAt: '2026-10-31T23:59:59.000Z' };
+    expect(planTrainingWrite([earlier], [localOlder]).upserts).toEqual([]);
+  });
+
+  it('无幂等键的记录永远写入，不参与互删', () => {
+    const manual = { ...base, id: 'manual-new', updatedAt: '2026-11-02T00:00:00.000Z' };
+    expect(planTrainingWrite([manual], [older])).toEqual({ upserts: [manual], deleteIds: [] });
+  });
+
+  it('只删除同键的其他行，不误删不同键或同 id 的记录', () => {
+    const sibling: TrainingRecord = { ...older, id: 'sibling', sourceId: 'other' };
+    const sameId = { ...older, id: 'new', totalQuestions: 99 };
+    const incoming = { ...older, id: 'new', totalQuestions: 20, updatedAt: '2026-11-02T00:00:00.000Z' };
+    const plan = planTrainingWrite([incoming], [older, sibling, sameId]);
+    expect(plan.upserts).toEqual([incoming]);
+    expect(plan.deleteIds).toEqual(['old']);
+  });
+
+  it('非字符串 sourceId 不会让写入抛错', () => {
+    const dirty = { ...older, id: 'dirty', sourceId: 42 as unknown as string };
+    expect(() => planTrainingWrite([dirty], [older])).not.toThrow();
+    expect(planTrainingWrite([dirty], [older])).toEqual({ upserts: [dirty], deleteIds: [] });
   });
 });

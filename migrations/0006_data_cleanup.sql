@@ -196,12 +196,7 @@ WHERE json_valid(data) AND json_type(data, '$.updatedAt') = 'text'
   AND json_extract(data, '$.updatedAt') NOT LIKE '%Z'
   AND julianday(json_extract(data, '$.updatedAt')) IS NOT NULL;
 
-UPDATE labelStats SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', updated_at)
-WHERE updated_at NOT LIKE '%Z' AND julianday(updated_at) IS NOT NULL;
-UPDATE labelStats SET data = json_set(data, '$.updatedAt', strftime('%Y-%m-%dT%H:%M:%fZ', json_extract(data, '$.updatedAt')))
-WHERE json_valid(data) AND json_type(data, '$.updatedAt') = 'text'
-  AND json_extract(data, '$.updatedAt') NOT LIKE '%Z'
-  AND julianday(json_extract(data, '$.updatedAt')) IS NOT NULL;
+-- labelStats 不在此处理：0007 已删表，保留该段会让本迁移在 0007 之后无法重复执行。
 
 -- ============ 2. trainings.source 回填 ============
 UPDATE trainings

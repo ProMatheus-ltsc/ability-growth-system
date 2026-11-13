@@ -6,7 +6,6 @@ import {
   normalizePaperYear,
   normalizePositiveNumber,
   normalizeQuestionType,
-  normalizeTrainingScope,
 } from '../src/domain/paperStructure';
 import { PAPER_TYPE_LABEL } from '../src/domain/types';
 
@@ -32,13 +31,6 @@ describe('数据契约 · 卷面字段归一化', () => {
     expect(normalizePaperYear(2025.5)).toBeUndefined();
     expect(normalizePaperYear(1899)).toBeUndefined();
     expect(normalizePaperYear('2025' as unknown)).toBeUndefined();
-  });
-
-  it('粒度：显式值优先；有 examId 缺 scope 按 module；两者皆无则保持未标注', () => {
-    expect(normalizeTrainingScope('full')).toBe('full');
-    expect(normalizeTrainingScope('整卷')).toBe('full');
-    expect(normalizeTrainingScope(undefined, 'exam-1')).toBe('module');
-    expect(normalizeTrainingScope(undefined, undefined)).toBeUndefined();
   });
 
   it('满分/标准用时必须 > 0，题型为空不写键', () => {
@@ -85,9 +77,13 @@ describe('数据契约 · 记录检查只诊断不改写', () => {
         standardMinutes: 120,
         questionType: '数量关系',
         examId: 'exam-1',
-        scope: 'module',
       }),
     ).toEqual([]);
+  });
+
+  it('历史 scope 字段不再参与契约诊断（聚合只看 kind）', () => {
+    const fields = inspectTrainingRecord({ ...base, scope: '奇怪取值' }).map((issue) => issue.field);
+    expect(fields).not.toContain('scope');
   });
 
   it('缺失可选字段不报错（老记录兼容）', () => {

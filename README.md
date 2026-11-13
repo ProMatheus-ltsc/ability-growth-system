@@ -255,7 +255,17 @@ ability-growth-system/
 （旧代码的 `initSchema` 会把 labelStats 重建出来，必须等新代码上线后再删）。
 `0006_data_cleanup.sql` 只做数据订正与索引，已在新代码部署前执行，可重复执行。
 `0008_training_semantics.sql` 归一训练记录结构字段（`kind/examRef/attemptId/parentId/depth`），
-保留 `scope/aggregationRole` 供旧代码在线时读取，新旧代码均可运行，可重复执行。
+保留 `scope/aggregationRole` 供旧代码在线时读取，新旧代码均可运行，可重复执行
+（已于 2026-11-13 在旧代码在线时应用到线上 D1，执行前已导出全量备份）。
+
+**D1 迁移成本纪律**：D1 按读取/写入行数计费，迁移必须先估算再执行。
+
+- 禁止相关子查询逐行回扫大表（历史事故：单次迁移读取 3976 万行，打满免费额度）；
+  优先 `INSERT ... SELECT` 或按主键分块，每批 ≤ 50 行。
+- 执行前用 `EXPLAIN QUERY PLAN` 或 `SELECT COUNT(*)` 估算扫描行数，并先 `wrangler d1 export` 备份。
+- 迁移必须可重复执行：加列前查 `sqlite_master`，数据订正使用幂等条件（如 `WHERE kind IS NULL`）。
+- 先发兼容代码再迁移；新代码必须能在迁移前后运行，禁止让迁移成为上线前置条件。
+- 迁移后核对 26 张表行数与关键聚合口径，确认 no-op 时不改动线上数据。
 
 ```sql
 CREATE TABLE trainings (
@@ -270,7 +280,7 @@ CREATE INDEX idx_trainings_workspace_updated ON trainings(workspace, updated_at)
 
 | 表 | 实体 | 主要字段 |
 |-------|-------|---------|
-| `trainings` | 训练记录 | date · subject · module · kind · attemptId · examRef · parentId · depth · totalQuestions · errorCount · errorCategories · isUnfamiliar |
+| `trainings` | 训练记录 | date · subject · module · source · sourceId · kind · attemptId · examRef · parentId · depth · totalQuestions · errorCount · errorCategories · isUnfamiliar |
 | `gaps` | 能力缺口 | subject · abilityPath · severity · status · occurrenceCount |
 | `abilities` | 能力快照 | subject · abilityPath · score · level · confidence · source |
 | `students` | 学生档案 | name · gradeLevel · subjects · group · examDate |
@@ -324,12 +334,19 @@ CREATE INDEX idx_trainings_workspace_updated ON trainings(workspace, updated_at)
 **聚合口径**：学科题量同一棵树优先整卷 → 否则模块 → 否则独立记录，`label` 永不相加
 （一张 130 题卷的标签题量和为 330，直接加会虚增）；模块统计优先模块 → 否则整卷。
 `exams.moduleBreakdown` 是派生投影：存在模块行时由 `deriveExamModuleBreakdown` 计算，
-仅在没有模块行时回退到快照中的存量值。
+仅在没有模块行时回退到快照中的存量值；页面展示与修复任务生成统一走
+`resolveExamModuleBreakdown`，避免两处口径不一致。
 `validity='duplicate'` 只是数据质量标记（如 2026-11-07 卷手工模块行与粉笔模块行重复），
 不参与结构判定，也不参与求和。
 
+**0009 决策**：不新建数据重写迁移。线上 13 条测验均已有模块行，派生投影已能覆盖；
+存量 `moduleBreakdown` 保留为快照兜底，`scope/aggregationRole` 停止写入，仅读取兼容。
+
 写入边界（前端 `putRecord`、API `PUT/bulk/快照导入`）统一调用 `withTrainingSemantics`
 补全 `kind/examRef/attemptId/depth`；外部导入按 `(source, sourceId, kind)` 幂等去重。
+API 写入训练记录前还会查询库内同 `sourceId` 的旧行，由 `planTrainingWrite` 选择较新的
+`updatedAt` 胜出并删除被替代行，避免跨请求重复导入把同一份作答计两次；
+快照导入沿用 LWW 比较，不覆盖更新的库内记录。
 `migrations/0008_training_semantics.sql` 对存量数据做同样归一，可重复执行。
 
 ### 5.3 Pages Functions API

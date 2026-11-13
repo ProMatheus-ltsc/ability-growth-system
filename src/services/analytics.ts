@@ -270,6 +270,18 @@ export function deriveExamModuleBreakdown(
   });
 }
 
+/**
+ * 测验页唯一口径：模块行投影优先，录入时保存的快照兜底。
+ * 页面展示与修复任务生成都必须走这里，避免两处口径不一致。
+ */
+export function resolveExamModuleBreakdown(
+  records: TrainingRecord[],
+  examId: string,
+  stored?: readonly ExamModuleProjection[] | null,
+): ExamModuleProjection[] {
+  return deriveExamModuleBreakdown(records, examId) ?? (stored ? [...stored] : []);
+}
+
 export interface ModuleStatsItem {
   subject: Subject;
   module: string;

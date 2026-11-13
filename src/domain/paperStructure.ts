@@ -1,7 +1,7 @@
 /**
  * 公考卷面结构字段的数据契约（单一权威）
  *
- * 背景：云端 D1 的训练/模考记录正在补 `examId`、`scope`、`paperType`、`paperYear`、
+ * 背景：云端 D1 的训练/模考记录正在补 `examId`、`kind`、`paperType`、`paperYear`、
  * `fullMark`、`score`、`standardMinutes`、`questionType`、`sourceId`、`exerciseId`。
  * 历史记录大量为空，推断值（如按考纲推算的 `standardMinutes`）会显式标注。
  *
@@ -10,19 +10,17 @@
  * 2. 真实数据可能存在不规范写法（大小写、同义写法），因此写入前必须经过本模块的归一化函数；
  *    无法识别但有值的写法归为 `unknown`（界面显示「未标注」），而不是丢弃。
  * 3. 关联只用结构化键 `examId` / `sourceId` / `exerciseId` 精确匹配，**禁止按卷名模糊匹配**。
- * 4. `scope` 决定聚合口径：`full` 为整卷权威，`module` 为模块明细，`single` 为单条；
- *    有 `examId` 但缺 `scope` 时按 `module` 处理（与 A1 去重规则一致）。
+ * 4. 聚合口径只看 `kind`（exam / module / label / practice / review / summary，见 trainingSemantics）；
+ *    历史记录的 `scope` 只做读取兼容，不再写入、不再参与聚合决策。
  * 5. 推断标记优先读结构化布尔字段 `standardMinutesInferred`；历史记录缺该字段时，
  *    退回 `note` 文本含「推断」的判定（兼容路径，未来可移除）。
  *
  * 说明：本轮不改表结构、不跑迁移、不写线上 D1；类型只存在于 `data` JSON。
  */
-import type { PaperType, PaperTypeRecord, TrainingRecord, TrainingScope } from './types';
+import type { PaperType, PaperTypeRecord, TrainingRecord } from './types';
 
 /** `unknown` 保留位：字段有值但写法无法识别（含历史中文写法被转成无法匹配的值） */
 export const PAPER_TYPE_KNOWN = ['national', 'provincial', 'public-institution', 'military-transfer'] as const;
-
-export const TRAINING_SCOPE_VALUES: readonly TrainingScope[] = ['full', 'module', 'single'];
 
 /** 卷型同义写法映射（真实数据若出现新写法，只在这里加一行） */
 const PAPER_TYPE_ALIASES: Record<string, PaperTypeRecord> = {
@@ -72,22 +70,8 @@ export function normalizePaperYear(raw: unknown): number | undefined {
 }
 
 /**
- * 归一化粒度：显式 full/module/single 优先；
- * 有 examId 但缺 scope → module（与 A1 去重「有整卷行以整卷为准」配套）；
- * 无 examId 且无 scope → undefined（老记录保持未标注）。
+ * 归一化正数（满分 / 标准用时必须 > 0）；无效值视为缺失，不补 0
  */
-export function normalizeTrainingScope(raw: unknown, examId?: string): TrainingScope | undefined {
-  if (typeof raw === 'string') {
-    const key = raw.trim().toLowerCase();
-    if (key === 'full' || key === 'module' || key === 'single') return key;
-    if (key === '整卷') return 'full';
-    if (key === '模块') return 'module';
-    if (key === '单条' || key === '单项') return 'single';
-  }
-  return examId ? 'module' : undefined;
-}
-
-/** 归一化正数（满分 / 标准用时必须 > 0）；无效值视为缺失，不补 0 */
 export function normalizePositiveNumber(raw: unknown): number | undefined {
   if (typeof raw !== 'number' || !Number.isFinite(raw) || raw <= 0) return undefined;
   return raw;
@@ -156,11 +140,6 @@ export function inspectTrainingRecord(record: Record<string, unknown>): Contract
   }
   if (record.paperYear !== undefined && normalizePaperYear(record.paperYear) === undefined) {
     push('paperYear', record.paperYear, '非 1900-2100 的整数', '缺省（不写键）');
-  }
-  if (record.scope !== undefined) {
-    if (typeof record.scope !== 'string' || !/^(full|module|single|整卷|模块|单条|单项)$/i.test(record.scope.trim())) {
-      push('scope', record.scope, '取值不在 full/module/single', '缺省（有 examId 时按下 module 处理）');
-    }
   }
   if (record.examId !== undefined && (typeof record.examId !== 'string' || record.examId.trim() === '')) {
     push('examId', record.examId, '关联键必须为非空字符串（精确匹配）', '缺省');

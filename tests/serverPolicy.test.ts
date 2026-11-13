@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   backupIdsToPrune,
+  normalizeScopedRecords,
   scopeSnapshotForProfile,
+  validateScopedRecords,
   validateWriteScope,
 } from '../functions/api/[[path]]';
 
@@ -58,6 +60,56 @@ describe('服务端写入边界 · 学生按学段限制', () => {
         gradeLevel: 'adult',
       }),
     ).toBeNull();
+  });
+});
+
+describe('服务端归一化 · 测验记录数组字段', () => {
+  it('缺 moduleBreakdown / mainProblems / generatedTaskIds 时补空数组', () => {
+    const [exam] = normalizeScopedRecords('exams', [record('e1', { subject: 'xingce' })]);
+    expect(exam.moduleBreakdown).toEqual([]);
+    expect(exam.mainProblems).toEqual([]);
+    expect(exam.generatedTaskIds).toEqual([]);
+  });
+
+  it('非数组脏值被清成空数组，避免页面渲染崩溃', () => {
+    const [exam] = normalizeScopedRecords('exams', [
+      record('e1', { subject: 'xingce', moduleBreakdown: 'oops', mainProblems: null, generatedTaskIds: {} }),
+    ]);
+    expect(exam.moduleBreakdown).toEqual([]);
+    expect(exam.mainProblems).toEqual([]);
+    expect(exam.generatedTaskIds).toEqual([]);
+  });
+
+  it('已是数组的字段原样保留', () => {
+    const breakdown = [{ module: '资料分析', total: 20, errors: 4, score: 80, level: 'proficient' }];
+    const [exam] = normalizeScopedRecords('exams', [
+      record('e1', { subject: 'xingce', moduleBreakdown: breakdown, mainProblems: ['资料分析: 80%'] }),
+    ]);
+    expect(exam.moduleBreakdown).toEqual(breakdown);
+    expect(exam.mainProblems).toEqual(['资料分析: 80%']);
+  });
+
+  it('其他表不补测验字段', () => {
+    const [training] = normalizeScopedRecords('trainings', [record('t1', { totalQuestions: 10 })]);
+    expect(training).not.toHaveProperty('moduleBreakdown');
+  });
+});
+
+describe('服务端写入边界 · K12 专属表必须带学段', () => {
+  it('缺学段拒绝写入', () => {
+    expect(validateScopedRecords('collaborationEvents', [record('c1')])).toMatch(/学段/);
+  });
+
+  it('公考学段拒绝写入', () => {
+    expect(validateScopedRecords('collaborationEvents', [record('c1', { gradeLevel: 'adult' })])).toMatch(/学段/);
+  });
+
+  it('本学段记录放行', () => {
+    expect(validateScopedRecords('collaborationEvents', [record('c1', { gradeLevel: 'junior' })])).toBeNull();
+  });
+
+  it('非 K12 专属表不受额外要求影响', () => {
+    expect(validateScopedRecords('exams', [record('e1', { subject: 'xingce' })])).toBeNull();
   });
 });
 

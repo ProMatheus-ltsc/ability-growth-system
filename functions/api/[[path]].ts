@@ -27,6 +27,7 @@ import { STORE_NAMES, type ExportedSnapshot, type StoreName } from '../../src/se
 import { guardTrainingRecords } from '../../src/domains/public-exam';
 import {
   dedupeTrainingRecordsByIdempotencyKey,
+  planTrainingWrite,
   withTrainingSemantics,
 } from '../../src/domain/trainingSemantics';
 import type { TrainingRecord } from '../../src/domain/types';
@@ -36,7 +37,7 @@ import {
   isScopeManagedStore,
   isUserRole,
   normalizeRecordScope,
-  validateRecordScope,
+  validateStoreRecordScope,
   type ScopeAwareRecord,
   type UserProfile,
 } from '../../src/domains/shared/scope';
@@ -477,8 +478,21 @@ function validRecords(value: unknown): JsonRecord[] {
   );
 }
 
+const EXAM_ARRAY_FIELDS = ['moduleBreakdown', 'mainProblems', 'generatedTaskIds'] as const;
+
+/** 历史测验记录可能缺数组字段；读入口直接兜底，避免页面在 `.length` / `.map` 上崩溃 */
+function normalizeExamArrays(record: JsonRecord): JsonRecord {
+  let next = record;
+  for (const field of EXAM_ARRAY_FIELDS) {
+    if (Array.isArray(next[field])) continue;
+    if (next === record) next = { ...record };
+    next[field] = [];
+  }
+  return next;
+}
+
 /** 历史公考记录缺 gradeLevel 时补 adult；K12 记录缺学段保持原样，不做猜测 */
-function normalizeScopedRecords(store: StoreName, records: JsonRecord[]): JsonRecord[] {
+export function normalizeScopedRecords(store: StoreName, records: JsonRecord[]): JsonRecord[] {
   // 来源可追溯：训练记录缺 source 时按手工录入补齐，外部同步工具会显式写 fenbi。
   // 训练记录同时补 kind / examRef / attemptId / depth，并按 (source, sourceId, kind) 去重，
   // 保证未迁移的旧快照重新导入后也落到同一语义模型。
@@ -494,17 +508,18 @@ function normalizeScopedRecords(store: StoreName, records: JsonRecord[]): JsonRe
           ),
         ) as unknown as JsonRecord[])
       : records;
-  if (!isScopeManagedStore(store)) return withSource;
-  return withSource.map(
+  const shaped = store === 'exams' ? withSource.map(normalizeExamArrays) : withSource;
+  if (!isScopeManagedStore(store)) return shaped;
+  return shaped.map(
     (record) => normalizeRecordScope(record as unknown as ScopeAwareRecord) as unknown as JsonRecord,
   );
 }
 
-/** 学段与学科必须属于同一产品域；公考历史数据缺学段已由 normalizeScopedRecords 补 adult，K12 缺学段会被拦截 */
-function validateScopedRecords(store: StoreName, records: JsonRecord[]): string | null {
+/** 学段与学科必须属于同一产品域；K12 专属表还要求显式 K12 学段 */
+export function validateScopedRecords(store: StoreName, records: JsonRecord[]): string | null {
   if (!isScopeManagedStore(store)) return null;
   for (let index = 0; index < records.length; index += 1) {
-    const result = validateRecordScope(records[index] as unknown as ScopeAwareRecord);
+    const result = validateStoreRecordScope(store, records[index] as unknown as ScopeAwareRecord);
     if (!result.ok) return `第 ${index + 1} 条：${result.message ?? '学段与学科不匹配'}`;
   }
   return null;
@@ -523,6 +538,66 @@ async function listStore(
     .all<{ data: string }>();
   const records = (result.results ?? []).map((row) => parseRecord(row.data));
   return gradeLevel ? filterStoreRecordsForGrade(store, records, gradeLevel) : records;
+}
+
+/** 读取库里与本次写入可能同键的训练行（按 sourceId 预筛，source/kind 由纯函数精确比较） */
+async function loadTrainingSourceRows(
+  db: D1Database,
+  workspace: string,
+  records: TrainingRecord[],
+  gradeLevel?: GradeLevel,
+): Promise<TrainingRecord[]> {
+  const sourceIds = Array.from(
+    new Set(
+      records
+        .map((record) => (typeof record.sourceId === 'string' ? record.sourceId.trim() : ''))
+        .filter(Boolean),
+    ),
+  );
+  const rows: TrainingRecord[] = [];
+  for (let index = 0; index < sourceIds.length; index += BATCH_SIZE) {
+    const chunk = sourceIds.slice(index, index + BATCH_SIZE);
+    const placeholders = chunk.map(() => '?').join(', ');
+    const result = await db
+      .prepare(
+        `SELECT data FROM trainings WHERE workspace = ? AND json_extract(data, '$.sourceId') IN (${placeholders})`,
+      )
+      .bind(workspace, ...chunk)
+      .all<{ data: string }>();
+    rows.push(...(result.results ?? []).map((row) => parseRecord(row.data) as unknown as TrainingRecord));
+  }
+  // 学生只能替换本学段记录，避免同 sourceId 跨学段误删
+  return gradeLevel ? (filterStoreRecordsForGrade('trainings', rows, gradeLevel) as TrainingRecord[]) : rows;
+}
+
+/**
+ * 训练记录写入口：先按跨请求幂等键比较库内旧行，旧行被替代时删除，再写入胜出行。
+ * 删除必须先于写入，避免同一次请求中「先删后写」与批内顺序无关地互相覆盖。
+ */
+async function writeTrainingRecords(
+  db: D1Database,
+  workspace: string,
+  records: JsonRecord[],
+  lastWriteWins = false,
+  gradeLevel?: GradeLevel,
+): Promise<{ written: number; deleted: number }> {
+  const incoming = records as unknown as TrainingRecord[];
+  const plan = planTrainingWrite(
+    incoming,
+    await loadTrainingSourceRows(db, workspace, incoming, gradeLevel),
+  );
+  for (let index = 0; index < plan.deleteIds.length; index += BATCH_SIZE) {
+    const chunk = plan.deleteIds.slice(index, index + BATCH_SIZE);
+    const placeholders = chunk.map(() => '?').join(', ');
+    await db
+      .prepare(`DELETE FROM trainings WHERE workspace = ? AND id IN (${placeholders})`)
+      .bind(workspace, ...chunk)
+      .run();
+  }
+  if (plan.upserts.length > 0) {
+    await runBatches(db, upsertStatements(db, 'trainings', workspace, plan.upserts as unknown as JsonRecord[], lastWriteWins));
+  }
+  return { written: plan.upserts.length, deleted: plan.deleteIds.length };
 }
 
 /** 学生写入只能落在自己的学段；教师不受学段限制（仍受 workspace 隔离） */
@@ -634,9 +709,19 @@ async function importSnapshot(
   const counts: Record<string, number> = {};
   for (const [store, records] of prepared) {
     counts[store] = records.length;
-    if (records.length > 0) {
-      await runBatches(db, upsertStatements(db, store, workspace, records, true));
+    if (records.length === 0) continue;
+    if (store === 'trainings') {
+      const result = await writeTrainingRecords(
+        db,
+        workspace,
+        records,
+        true,
+        profile.role === 'student' ? profile.gradeLevel : undefined,
+      );
+      counts[store] = result.written;
+      continue;
     }
+    await runBatches(db, upsertStatements(db, store, workspace, records, true));
   }
   return counts;
 }
@@ -969,6 +1054,10 @@ async function handle(request: Request, env: Env): Promise<Response> {
       const writeScopeError = validateWriteScope(store, records, profile);
       if (writeScopeError) return fail(writeScopeError, 422);
       if (records.length > 0) {
+        if (store === 'trainings') {
+          const result = await writeTrainingRecords(env.DB, workspace, records, false, gradeFilter);
+          return json({ ok: true, count: result.written, deleted: result.deleted });
+        }
         await runBatches(env.DB, upsertStatements(env.DB, store, workspace, records, false));
       }
       return json({ ok: true, count: records.length });
@@ -1002,6 +1091,10 @@ async function handle(request: Request, env: Env): Promise<Response> {
       if (scopeError) return fail(scopeError, 422);
       const writeScopeError = validateWriteScope(store, [record], profile);
       if (writeScopeError) return fail(writeScopeError, 422);
+      if (store === 'trainings') {
+        const result = await writeTrainingRecords(env.DB, workspace, [record], false, gradeFilter);
+        return json({ ok: true, id, skipped: result.written === 0 });
+      }
       await runBatches(env.DB, upsertStatements(env.DB, store, workspace, [record], false));
       return json({ ok: true, id });
     }

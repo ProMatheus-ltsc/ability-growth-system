@@ -10,6 +10,7 @@ import {
   resolveRecordGradeLevel,
   stampRecordScope,
   validateRecordScope,
+  validateStoreRecordScope,
 } from '../src/domains/shared/scope';
 
 describe('产品域判定', () => {
@@ -117,16 +118,38 @@ describe('记录集合过滤', () => {
     ]);
   });
 
-  it('公考专属表在 K12 学段直接返回空，K12 专属表反之', () => {
+  it('公考专属表在 K12 学段直接返回空', () => {
     expect(filterStoreRecordsForGrade('registrations', records, 'primary')).toEqual([]);
     expect(filterStoreRecordsForGrade('registrations', records, 'adult')).toHaveLength(records.length);
-    expect(filterStoreRecordsForGrade('collaborationEvents', records, 'adult')).toEqual([]);
-    expect(filterStoreRecordsForGrade('collaborationEvents', records, 'junior')).toHaveLength(records.length);
   });
 
-  it('无学段语义的表不受影响', () => {
-    expect(filterStoreRecordsForGrade('students', records, 'primary')).toEqual(records);
-    expect(isScopeManagedStore('students')).toBe(false);
+  it('K12 专属表在公考学段直接返回空，K12 内部按显式学段隔离', () => {
+    const events = [
+      { id: 'primary-event', gradeLevel: 'primary' },
+      { id: 'junior-event', gradeLevel: 'junior' },
+      { id: 'legacy-event' },
+    ];
+    expect(filterStoreRecordsForGrade('collaborationEvents', events, 'adult')).toEqual([]);
+    expect(filterStoreRecordsForGrade('collaborationEvents', events, 'primary').map((r) => r.id)).toEqual([
+      'primary-event',
+    ]);
+    expect(filterStoreRecordsForGrade('collaborationEvents', events, 'junior').map((r) => r.id)).toEqual([
+      'junior-event',
+    ]);
+    // 缺学段的历史事件无法判断归属，不猜
+    expect(filterStoreRecordsForGrade('collaborationEvents', events, 'senior')).toEqual([]);
+  });
+
+  it('学生档案按学段隔离，成年人只看到公考学员', () => {
+    const students = [
+      { id: 'adult-student', gradeLevel: 'adult' },
+      { id: 'primary-student', gradeLevel: 'primary' },
+      { id: 'junior-student', gradeLevel: 'junior' },
+    ];
+    expect(filterStoreRecordsForGrade('students', students, 'adult').map((r) => r.id)).toEqual(['adult-student']);
+    expect(filterStoreRecordsForGrade('students', students, 'primary').map((r) => r.id)).toEqual(['primary-student']);
+    expect(filterStoreRecordsForGrade('students', students, 'junior').map((r) => r.id)).toEqual(['junior-student']);
+    expect(isScopeManagedStore('students')).toBe(true);
     expect(isScopeManagedStore('trainings')).toBe(true);
   });
 });
@@ -190,5 +213,17 @@ describe('写入边界校验', () => {
     expect(invalid.ok).toBe(false);
     expect(invalid.message).toContain('未知学段');
     expect(validateRecordScope({}).ok).toBe(true);
+  });
+
+  it('K12 专属表即使没有学科也必须显式带学段', () => {
+    expect(validateStoreRecordScope('collaborationEvents', {}).ok).toBe(false);
+    expect(validateStoreRecordScope('collaborationEvents', { gradeLevel: 'junior' }).ok).toBe(true);
+    expect(validateStoreRecordScope('collaborationEvents', { gradeLevel: 'adult' }).ok).toBe(false);
+    expect(validateStoreRecordScope('collaborationEvents', { gradeLevel: 'primary' }).ok).toBe(true);
+  });
+
+  it('非 K12 专属表不受额外学段要求影响', () => {
+    expect(validateStoreRecordScope('trainings', {}).ok).toBe(true);
+    expect(validateStoreRecordScope('exams', { subject: 'xingce' }).ok).toBe(true);
   });
 });

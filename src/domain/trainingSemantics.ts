@@ -114,10 +114,67 @@ export function withTrainingSemantics(record: TrainingRecord): TrainingRecord {
  * 只应存在一条记录。缺任一字段时返回 null，不做猜测归并。
  */
 export function trainingIdempotencyKey(record: TrainingRecord): string | null {
-  const source = (record.source ?? '').trim();
-  const sourceId = (record.sourceId ?? '').trim();
+  const source = trimmedString(record.source);
+  const sourceId = trimmedString(record.sourceId);
   if (!source || !sourceId) return null;
   return `${source}::${sourceId}::${resolveTrainingKind(record)}`;
+}
+
+/** 外部导入数据不保证字段类型，非字符串一律视为缺失，避免 `.trim()` 抛错中断写入 */
+function trimmedString(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function recordTimestampMs(record: TrainingRecord): number {
+  const ms = Date.parse(record.updatedAt ?? '');
+  return Number.isNaN(ms) ? 0 : ms;
+}
+
+export interface TrainingWritePlan {
+  upserts: TrainingRecord[];
+  deleteIds: string[];
+}
+
+/**
+ * 跨请求幂等决策：把库里同键的旧行一起纳入比较，较新的 updatedAt 胜出。
+ * 被替代的旧行必须删除，否则同一份外部作答会重复计入聚合。
+ * `incoming` 应已按批内幂等键去重（同键重复到达时只接受第一条）。
+ */
+export function planTrainingWrite(
+  incoming: readonly TrainingRecord[],
+  existing: readonly TrainingRecord[],
+): TrainingWritePlan {
+  const existingByKey = new Map<string, TrainingRecord[]>();
+  for (const record of existing) {
+    const key = trainingIdempotencyKey(record);
+    if (!key) continue;
+    const list = existingByKey.get(key);
+    if (list) list.push(record);
+    else existingByKey.set(key, [record]);
+  }
+
+  const upserts: TrainingRecord[] = [];
+  const deleteIds = new Set<string>();
+  const seenIncomingKeys = new Set<string>();
+  for (const record of incoming) {
+    const key = trainingIdempotencyKey(record);
+    if (!key) {
+      upserts.push(record);
+      continue;
+    }
+    if (seenIncomingKeys.has(key)) continue;
+    seenIncomingKeys.add(key);
+    const rivals = (existingByKey.get(key) ?? []).filter((rival) => rival.id !== record.id);
+    const newestRivalMs = rivals.reduce(
+      (latest, rival) => Math.max(latest, recordTimestampMs(rival)),
+      Number.NEGATIVE_INFINITY,
+    );
+    // 与 upsertSql 的 `>=` 保持一致：同时间戳按后写入优先
+    if (newestRivalMs > recordTimestampMs(record)) continue;
+    for (const rival of rivals) deleteIds.add(rival.id);
+    upserts.push(record);
+  }
+  return { upserts, deleteIds: [...deleteIds] };
 }
 
 /** 同幂等键只保留 updatedAt 最新一条（同位取靠后），无键记录原样保留 */

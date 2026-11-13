@@ -10,7 +10,7 @@ import { EmptyState } from '../components/EmptyState';
 import { MasteryBar } from '../components/MasteryBar';
 import { getModules } from '../domain/abilityTags';
 import { selectTrainingEntrySubjects } from '../domains/public-exam';
-import { deriveExamModuleBreakdown, deriveGapsFromTraining, findExamTrainings } from '../services/analytics';
+import { resolveExamModuleBreakdown, deriveGapsFromTraining, findExamTrainings } from '../services/analytics';
 import { normalizeExamRef, resolveTrainingKind } from '../domain/trainingSemantics';
 import { PAPER_TYPE_LABEL, PAPER_TYPE_OPTIONS, scoreToLevel, SUBJECT_LABEL } from '../domain/types';
 import type {
@@ -45,8 +45,10 @@ export function ExamDiagnosisPage() {
 
   const convertToFixTasks = async (exam: ExamRecord) => {
     const now = new Date().toISOString();
-    // 找出掌握度 <60% 的模块, 每个模块建能力缺口 + 修复任务
-    const weakModules = exam.moduleBreakdown.filter((m) => m.score < 60);
+    // 与页面展示同一口径：模块行投影优先，录入快照兜底，避免按过期快照生成任务
+    const weakModules = resolveExamModuleBreakdown(trainings, exam.id, exam.moduleBreakdown).filter(
+      (m) => m.score < 60,
+    );
     if (weakModules.length === 0) {
       showToast('本次模考没有明显薄弱模块 (掌握度 < 60%)', 'info');
       return;
@@ -76,7 +78,6 @@ export function ExamDiagnosisPage() {
         createdAt: now,
         updatedAt: now,
         examId: exam.id,
-        scope: 'module',
       };
       const derived = deriveGapsFromTraining(moduleRecord, known);
       for (const gap of derived) {
@@ -151,7 +152,7 @@ export function ExamDiagnosisPage() {
             const linkedTrainings = findExamTrainings(trainings, e.id);
             const fullTrainings = linkedTrainings.filter((t) => resolveTrainingKind(t) === 'exam');
             const moduleTrainings = linkedTrainings.filter((t) => resolveTrainingKind(t) === 'module');
-            const breakdown = deriveExamModuleBreakdown(trainings, e.id) ?? e.moduleBreakdown;
+            const breakdown = resolveExamModuleBreakdown(trainings, e.id, e.moduleBreakdown);
             return (
             <div key={e.id} className="card p-5">
               <div className="flex items-center justify-between mb-3">
@@ -249,13 +250,13 @@ export function ExamDiagnosisPage() {
                 </div>
               )}
 
-              {e.mainProblems.length > 0 && (
+              {(e.mainProblems ?? []).length > 0 && (
                 <div className="mt-3">
                   <div className="text-[11px] text-slate-400 uppercase tracking-wider mb-1">
                     Layer 3 · 主要能力短板
                   </div>
                   <ul className="text-sm text-slate-700 list-disc list-inside">
-                    {e.mainProblems.map((p) => (
+                    {(e.mainProblems ?? []).map((p) => (
                       <li key={p}>{p}</li>
                     ))}
                   </ul>
@@ -325,7 +326,6 @@ function ExamForm({
   const [fullMark, setFullMark] = useState('');
   const [totalScore, setTotalScore] = useState('');
   const [standardMinutes, setStandardMinutes] = useState('');
-  const [syncModule, setSyncModule] = useState(false);
   const [formErrors, setFormErrors] = useState<string[]>([]);
   const { prefs } = useAppSession();
 
@@ -407,66 +407,63 @@ function ExamForm({
     };
     await putRecord('exams', record);
 
-    if (syncModule) {
-      const examRef = normalizeExamRef(record.id);
-      const attemptId = `attempt:${record.id}`;
-      // 整卷权威行（kind=exam）：题量以它为准，模块行只做分解
-      const fullRow: TrainingRecord = {
+    // 整卷与模块行始终写入：分析口径只认训练记录，缺了它们这次模考不会进入聚合
+    const examRef = normalizeExamRef(record.id);
+    const attemptId = `attempt:${record.id}`;
+    // 整卷权威行（kind=exam）：题量以它为准，模块行只做分解
+    const fullRow: TrainingRecord = {
+      id: uuid(),
+      studentId,
+      date,
+      gradeLevel,
+      subject,
+      module: '整卷',
+      trainingType: 'exam',
+      totalQuestions,
+      correctCount: totalQuestions - totalErrors,
+      errorCount: totalErrors,
+      durationMinutes: duration,
+      errorCategories: [],
+      createdAt: now,
+      updatedAt: now,
+      examId: record.id,
+      examRef,
+      attemptId,
+      kind: 'exam',
+      depth: 0,
+      ...(paperType ? { paperType } : {}),
+      ...(yearValue !== undefined ? { paperYear: yearValue } : {}),
+      ...(fullMarkValue !== undefined ? { fullMark: fullMarkValue } : {}),
+      ...(totalScoreValue !== undefined ? { score: totalScoreValue } : {}),
+      ...(standardValue !== undefined ? { standardMinutes: standardValue } : {}),
+    };
+    await putRecord('trainings', fullRow);
+
+    for (const m of breakdown) {
+      const row: TrainingRecord = {
         id: uuid(),
         studentId,
         date,
         gradeLevel,
         subject,
-        module: '整卷',
+        module: m.module,
         trainingType: 'exam',
-        totalQuestions,
-        correctCount: totalQuestions - totalErrors,
-        errorCount: totalErrors,
-        durationMinutes: duration,
+        totalQuestions: m.total,
+        correctCount: m.total - m.errors,
+        errorCount: m.errors,
         errorCategories: [],
         createdAt: now,
         updatedAt: now,
         examId: record.id,
         examRef,
         attemptId,
-        kind: 'exam',
-        depth: 0,
-        scope: 'full',
+        parentId: fullRow.id,
+        kind: 'module',
+        depth: 1,
         ...(paperType ? { paperType } : {}),
         ...(yearValue !== undefined ? { paperYear: yearValue } : {}),
-        ...(fullMarkValue !== undefined ? { fullMark: fullMarkValue } : {}),
-        ...(totalScoreValue !== undefined ? { score: totalScoreValue } : {}),
-        ...(standardValue !== undefined ? { standardMinutes: standardValue } : {}),
       };
-      await putRecord('trainings', fullRow);
-
-      for (const m of breakdown) {
-        const row: TrainingRecord = {
-          id: uuid(),
-          studentId,
-          date,
-          gradeLevel,
-          subject,
-          module: m.module,
-          trainingType: 'exam',
-          totalQuestions: m.total,
-          correctCount: m.total - m.errors,
-          errorCount: m.errors,
-          errorCategories: [],
-          createdAt: now,
-          updatedAt: now,
-          examId: record.id,
-          examRef,
-          attemptId,
-          parentId: fullRow.id,
-          kind: 'module',
-          depth: 1,
-          scope: 'module',
-          ...(paperType ? { paperType } : {}),
-          ...(yearValue !== undefined ? { paperYear: yearValue } : {}),
-        };
-        await putRecord('trainings', row);
-      }
+      await putRecord('trainings', row);
     }
 
     onSaved();
@@ -558,17 +555,6 @@ function ExamForm({
           <div>
             <label className="label">标准用时(分钟)</label>
             <input className="input" type="number" value={standardMinutes} onChange={(e) => setStandardMinutes(e.target.value)} />
-          </div>
-          <div className="col-span-2 flex items-center gap-2">
-            <input
-              id="sync-module"
-              type="checkbox"
-              checked={syncModule}
-              onChange={(e) => setSyncModule(e.target.checked)}
-            />
-            <label htmlFor="sync-module" className="text-sm text-slate-600">
-              同步生成模块训练记录（整卷权威 + 模块明细，默认不勾选）
-            </label>
           </div>
         </div>
 

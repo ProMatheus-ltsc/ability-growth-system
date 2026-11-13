@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { aggregateBySubject, selectAggregationRecords, selectModuleLevelRecords } from '../src/services/analytics';
+import {
+  aggregateBySubject,
+  resolveExamModuleBreakdown,
+  selectAggregationRecords,
+  selectModuleLevelRecords,
+} from '../src/services/analytics';
+import type { ExamModuleProjection } from '../src/services/analytics';
 import type { TrainingRecord } from '../src/domain/types';
 import {
   fullAndModuleTrainings,
@@ -76,5 +82,37 @@ describe('标签拆分行与 examId 命名空间', () => {
     ];
     expect(selectAggregationRecords(records).map((r) => r.id)).toEqual(['fenbi-exam-42']);
     expect(selectModuleLevelRecords(records).map((r) => r.id)).toEqual(['fenbi-md-42-mod-资料分析']);
+  });
+});
+
+/**
+ * 验收缺陷 P1-1：修复任务生成必须与页面展示同源。
+ * 页面先按模块行投影、再回退快照；生成任务如果直接读 `exam.moduleBreakdown`，
+ * 会在模块行已修正后仍按旧快照生成任务。
+ */
+describe('测验诊断投影：模块行优先，快照兜底', () => {
+  const examId = 'exam-fenbi-exam-42';
+  const base = fullAndModuleTrainings[0];
+  const stored: ExamModuleProjection[] = [
+    { module: '过期快照', total: 10, errors: 9, score: 10, level: 'unmastered' },
+  ];
+
+  it('有模块行时用模块行覆盖已存快照', () => {
+    const records = [
+      { ...base, id: 'fenbi-exam-42', examId: 'fenbi-exam-42', aggregationRole: 'full_paper' as const, totalQuestions: 100, errorCount: 40 },
+      { ...base, id: 'fenbi-md-42-mod-资料分析', module: '资料分析', examId: '42', aggregationRole: 'module_detail' as const, totalQuestions: 20, errorCount: 4 },
+    ];
+    expect(resolveExamModuleBreakdown(records, examId, stored)).toEqual([
+      { module: '资料分析', total: 20, errors: 4, score: 80, level: 'proficient' },
+    ]);
+  });
+
+  it('没有模块行时回退已存快照', () => {
+    expect(resolveExamModuleBreakdown([], examId, stored)).toEqual(stored);
+  });
+
+  it('既无模块行也无快照时返回空数组，页面可直接渲染', () => {
+    expect(resolveExamModuleBreakdown([], examId)).toEqual([]);
+    expect(resolveExamModuleBreakdown([], examId, undefined)).toEqual([]);
   });
 });

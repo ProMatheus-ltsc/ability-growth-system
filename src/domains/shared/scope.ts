@@ -143,7 +143,7 @@ export const PUBLIC_EXAM_ONLY_STORES = new Set([
 export const K12_ONLY_STORES = new Set(['collaborationEvents']);
 
 /** 记录自带 gradeLevel 的数据表 */
-export const GRADE_SCOPED_STORES = new Set(['careerAssessments']);
+export const GRADE_SCOPED_STORES = new Set(['careerAssessments', 'students']);
 
 export function isScopeManagedStore(store: string): boolean {
   return (
@@ -161,7 +161,11 @@ export function filterStoreRecordsForGrade<T>(
 ): T[] {
   const domain = domainOfGradeLevel(gradeLevel);
   if (PUBLIC_EXAM_ONLY_STORES.has(store)) return domain === 'public-exam' ? [...records] : [];
-  if (K12_ONLY_STORES.has(store)) return domain === 'k12' ? [...records] : [];
+  if (K12_ONLY_STORES.has(store)) {
+    if (domain === 'public-exam') return [];
+    // K12 专属表（如家校协同事件）同样按显式学段隔离，缺学段的历史记录不猜归属
+    return filterByGradeLevel(records as readonly ScopeAwareRecord[], gradeLevel) as T[];
+  }
   if (SUBJECT_SCOPED_STORES.has(store) || GRADE_SCOPED_STORES.has(store)) {
     return filterByGradeLevel(records as readonly ScopeAwareRecord[], gradeLevel) as T[];
   }
@@ -230,4 +234,20 @@ export function validateRecordScope(record: ScopeAwareRecord): ScopeValidationRe
     ok: false,
     message: `学段与学科不匹配：${GRADE_LABEL_FOR_ERROR[record.gradeLevel]}不能使用「${subject}」，请切换对应学段后再录入`,
   };
+}
+
+/** 按表校验写入边界：K12 专属表即使没有学科，也必须显式落在 K12 学段 */
+export function validateStoreRecordScope(
+  store: string,
+  record: ScopeAwareRecord,
+): ScopeValidationResult {
+  if (K12_ONLY_STORES.has(store)) {
+    if (!isGradeLevel(record.gradeLevel)) {
+      return { ok: false, message: 'K12 记录必须指定学段（primary / junior / senior），否则会跨学段串数据' };
+    }
+    if (domainOfGradeLevel(record.gradeLevel) !== 'k12') {
+      return { ok: false, message: 'K12 专属数据只能写入小学 / 初中 / 高中学段' };
+    }
+  }
+  return validateRecordScope(record);
 }
