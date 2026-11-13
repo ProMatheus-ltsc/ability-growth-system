@@ -309,10 +309,65 @@ async function clientKey(request: Request, scope: string): Promise<string> {
 
 // ============ Schema ============
 
+const STORE_REQUIRED_COLUMNS = ['workspace', 'id', 'updated_at', 'data'];
+const TABLE_REQUIRED_COLUMNS: Record<string, string[]> = {
+  users: [
+    'id',
+    'username',
+    'username_normalized',
+    'password_hash',
+    'created_at',
+    'last_login_at',
+    'role',
+    'grade_level',
+    'profile_initialized',
+  ],
+  sessions: ['id', 'user_id', 'token_hash', 'expires_at', 'created_at'],
+  auth_attempts: ['id', 'client_key', 'succeeded', 'created_at'],
+  sync_backups: ['id', 'account_id', 'created_at', 'data'],
+};
+const REQUIRED_INDEXES = ['idx_sessions_expires', 'idx_auth_attempts_client_created'];
+
+/**
+ * 单次 batch 探活：确认所有表与关键列/索引都在。
+ * 冷启动不再逐表建表，避免上百次 D1 往返把请求拖过 30s 客户端超时。
+ */
+export async function schemaIsCurrent(db: D1Database): Promise<boolean> {
+  const tables = [...STORE_NAMES, ...Object.keys(TABLE_REQUIRED_COLUMNS)];
+  const probes = tables.map((table) => db.prepare(`PRAGMA table_info(${table})`));
+  probes.push(
+    db.prepare(
+      `SELECT name FROM sqlite_master WHERE type = 'index' AND name IN (${REQUIRED_INDEXES.map(() => '?').join(',')})`,
+    ).bind(...REQUIRED_INDEXES),
+  );
+
+  const results = await db.batch<{ name: string }>(probes);
+  const columnsOk = tables.every((table, index) => {
+    const required = TABLE_REQUIRED_COLUMNS[table] ?? STORE_REQUIRED_COLUMNS;
+    const present = new Set((results[index]?.results ?? []).map((row) => row.name));
+    return required.every((column) => present.has(column));
+  });
+  if (!columnsOk) return false;
+
+  const indexes = new Set((results[results.length - 1]?.results ?? []).map((row) => row.name));
+  return REQUIRED_INDEXES.every((name) => indexes.has(name));
+}
+
+export async function ensureSchemaReady(db: D1Database): Promise<void> {
+  let current = false;
+  try {
+    current = await schemaIsCurrent(db);
+  } catch {
+    // 探活失败时退回完整建表，避免把冷启动保护变成新的故障点
+  }
+  if (current) return;
+  await initSchema(db);
+}
+
 /** 首次冷启动时补齐 workspace 列与索引；旧同步库数据保留，workspace 默认为空串。 */
 function ensureSchema(db: D1Database): Promise<void> {
   if (!schemaPromise) {
-    schemaPromise = initSchema(db).catch((error) => {
+    schemaPromise = ensureSchemaReady(db).catch((error) => {
       schemaPromise = null;
       throw error;
     });
