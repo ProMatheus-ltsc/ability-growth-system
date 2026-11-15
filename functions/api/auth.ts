@@ -36,6 +36,7 @@ import {
   touchLastLogin as sharedTouchLastLogin,
   type D1Like,
 } from '@shared/core/server/authDb';
+import { toD1 } from '@shared/core/server/d1';
 
 /** 会话 Cookie 名 */
 export const SESSION_COOKIE = 'ability_growth_session';
@@ -51,7 +52,7 @@ const USER_EXTRA_COLUMNS = ['role', 'grade_level', 'profile_initialized'];
 
 /** 共享包的 D1Like 适配 */
 function asD1(db: D1Database): D1Like {
-  return db as unknown as D1Like;
+  return toD1(db);
 }
 
 // ==================== 会话 ====================

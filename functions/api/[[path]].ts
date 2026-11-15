@@ -40,6 +40,7 @@ import {
   touchLastLogin as sharedTouchLastLogin,
   SESSION_COOKIE,
 } from './auth';
+import { runBatches as sharedRunBatches, schemaIsSatisfiedBatched } from '@shared/core/server/d1';
 import { STORE_NAMES, type ExportedSnapshot, type StoreName } from '../../src/services/snapshot';
 import { guardTrainingRecords } from '../../src/domains/public-exam';
 import {
@@ -226,26 +227,16 @@ const REQUIRED_INDEXES = ['idx_sessions_expires', 'idx_auth_attempts_client_crea
 /**
  * 单次 batch 探活：确认所有表与关键列/索引都在。
  * 冷启动不再逐表建表，避免上百次 D1 往返把请求拖过 30s 客户端超时。
+ *
+ * 实现收归 @shared/core/server/d1 的 schemaIsSatisfiedBatched。
  */
 export async function schemaIsCurrent(db: D1Database): Promise<boolean> {
-  const tables = [...STORE_NAMES, ...Object.keys(TABLE_REQUIRED_COLUMNS)];
-  const probes = tables.map((table) => db.prepare(`PRAGMA table_info(${table})`));
-  probes.push(
-    db.prepare(
-      `SELECT name FROM sqlite_master WHERE type = 'index' AND name IN (${REQUIRED_INDEXES.map(() => '?').join(',')})`,
-    ).bind(...REQUIRED_INDEXES),
-  );
-
-  const results = await db.batch<{ name: string }>(probes);
-  const columnsOk = tables.every((table, index) => {
-    const required = TABLE_REQUIRED_COLUMNS[table] ?? STORE_REQUIRED_COLUMNS;
-    const present = new Set((results[index]?.results ?? []).map((row) => row.name));
-    return required.every((column) => present.has(column));
-  });
-  if (!columnsOk) return false;
-
-  const indexes = new Set((results[results.length - 1]?.results ?? []).map((row) => row.name));
-  return REQUIRED_INDEXES.every((name) => indexes.has(name));
+  const required: Record<string, string[]> = {};
+  for (const store of STORE_NAMES) required[store] = STORE_REQUIRED_COLUMNS;
+  for (const [table, columns] of Object.entries(TABLE_REQUIRED_COLUMNS)) {
+    required[table] = columns;
+  }
+  return schemaIsSatisfiedBatched(db, required, REQUIRED_INDEXES);
 }
 
 export async function ensureSchemaReady(db: D1Database): Promise<void> {
@@ -380,9 +371,12 @@ async function claimLegacyWorkspace(db: D1Database, workspace: string): Promise<
     .run();
 }
 
-async function runBatches(db: D1Database, statements: D1PreparedStatement[]): Promise<void> {  for (let index = 0; index < statements.length; index += BATCH_SIZE) {
-    await db.batch(statements.slice(index, index + BATCH_SIZE));
-  }
+/**
+ * 分批执行（D1 单次 batch 有语句数上限）。
+ * 实现收归 @shared/core/server/d1 的 runBatches。
+ */
+async function runBatches(db: D1Database, statements: D1PreparedStatement[]): Promise<void> {
+  await sharedRunBatches(db, statements, BATCH_SIZE);
 }
 
 /**
