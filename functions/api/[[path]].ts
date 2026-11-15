@@ -23,6 +23,23 @@
  *   POST   /api/backups/:id/restore          用备份覆盖当前工作空间
  */
 import type { D1Database, D1PreparedStatement, PagesFunction } from '@cloudflare/workers-types';
+import {
+  authAttemptsExceeded as sharedAuthAttemptsExceeded,
+  checkPassword,
+  clearSessionCookie as sharedClearSessionCookie,
+  createSession as sharedCreateSession,
+  deleteSession as sharedDeleteSession,
+  dummyPasswordHash,
+  findUser as sharedFindUser,
+  insertUser as sharedInsertUser,
+  isSecure as sharedIsSecure,
+  makePasswordHash,
+  readCookie as sharedReadCookie,
+  recordAuthAttempt as sharedRecordAuthAttempt,
+  resolveSession as sharedResolveSession,
+  touchLastLogin as sharedTouchLastLogin,
+  SESSION_COOKIE,
+} from './auth';
 import { STORE_NAMES, type ExportedSnapshot, type StoreName } from '../../src/services/snapshot';
 import { guardTrainingRecords } from '../../src/domains/public-exam';
 import {
@@ -53,13 +70,8 @@ const MAX_BACKUP_BYTES = 6 * 1024 * 1024;
 const BATCH_SIZE = 50;
 const SNAPSHOT_VERSION = '2.2.0';
 
-const SESSION_COOKIE = 'ability_growth_session';
-const SESSION_DAYS = 30;
-const MAX_SESSIONS_PER_USER = 20;
-const AUTH_ATTEMPT_RETENTION_MS = 2 * 86_400_000;
-// Workers WebCrypto 对 PBKDF2 迭代次数有上限，100000 是两者兼容的安全值
-const PASSWORD_ITERATIONS = 100_000;
-const AUTH_WINDOW_MS = 10 * 60_000;
+// 会话 Cookie 名、有效期、每用户会话数上限、限流窗口等认证常量
+// 统一由 functions/api/auth.ts（@shared/core 统一认证）提供。
 
 type JsonRecord = Record<string, unknown> & { id: string };
 
@@ -137,9 +149,12 @@ function parseRecord(data: string): JsonRecord {
 }
 
 // ============ 密码与会话 ============
+// 认证实现见 functions/api/auth.ts —— 已收归 @shared/core 的统一认证。
+// 这里只保留本项目特有的部分：登录名规范、用户档案（role/grade_level）。
 
 const encoder = new TextEncoder();
 
+/** base64 编解码：业务侧（分享码/校验）仍在用，与认证实现无关 */
 function toBase64(bytes: Uint8Array): string {
   let text = '';
   for (const byte of bytes) text += String.fromCharCode(byte);
@@ -151,72 +166,10 @@ function fromBase64(value: string): Uint8Array {
   return Uint8Array.from(raw, (char) => char.charCodeAt(0));
 }
 
+/** SHA-256 摘要（hex）：会话 token 的哈希 */
 async function sha256(value: string): Promise<string> {
   const bytes = await crypto.subtle.digest('SHA-256', encoder.encode(value));
   return [...new Uint8Array(bytes)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
-}
-
-async function derivePassword(password: string, salt: Uint8Array, iterations: number): Promise<Uint8Array> {
-  const key = await crypto.subtle.importKey('raw', encoder.encode(password), 'PBKDF2', false, ['deriveBits']);
-  const bits = await crypto.subtle.deriveBits(
-    { name: 'PBKDF2', hash: 'SHA-256', salt: salt as BufferSource, iterations },
-    key,
-    256,
-  );
-  return new Uint8Array(bits);
-}
-
-async function hashPassword(password: string): Promise<string> {
-  const salt = crypto.getRandomValues(new Uint8Array(16));
-  const hash = await derivePassword(password, salt, PASSWORD_ITERATIONS);
-  return `pbkdf2-sha256$${PASSWORD_ITERATIONS}$${toBase64(salt)}$${toBase64(hash)}`;
-}
-
-async function verifyPassword(password: string, stored: string | null): Promise<boolean> {
-  if (!stored) return false;
-  const [scheme, iterationsRaw, saltBase64, hashBase64] = stored.split('$');
-  const iterations = Number(iterationsRaw);
-  if (scheme !== 'pbkdf2-sha256' || !Number.isInteger(iterations) || iterations < 1000 || !saltBase64 || !hashBase64) {
-    return false;
-  }
-  const expected = fromBase64(hashBase64);
-  const actual = await derivePassword(password, fromBase64(saltBase64), iterations);
-  if (actual.length !== expected.length) return false;
-  let diff = 0;
-  for (let index = 0; index < actual.length; index += 1) diff |= actual[index] ^ expected[index];
-  return diff === 0;
-}
-
-/** 账户不存在时也跑一次 PBKDF2，让失败响应耗时接近，降低用户名枚举价值 */
-let dummyPasswordHash: Promise<string> | null = null;
-function getDummyPasswordHash(): Promise<string> {
-  dummyPasswordHash ??= hashPassword('dummy-password-not-used');
-  return dummyPasswordHash;
-}
-
-function readCookie(request: Request, name: string): string | null {
-  const header = request.headers.get('Cookie') ?? '';
-  for (const part of header.split(';')) {
-    const index = part.indexOf('=');
-    if (index < 0) continue;
-    if (part.slice(0, index).trim() !== name) continue;
-    return decodeURIComponent(part.slice(index + 1).trim());
-  }
-  return null;
-}
-
-function sessionCookie(token: string, maxAge: number, secure: boolean): string {
-  return `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${
-    secure ? '; Secure' : ''
-  }`;
-}
-
-function clearSessionCookie(secure: boolean): string {
-  return `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${secure ? '; Secure' : ''}`;
-}
-
-function isSecure(request: Request): boolean {
-  return new URL(request.url).protocol === 'https:';
 }
 
 function normalizeUsername(value: unknown): { username: string; normalized: string } | null {
@@ -233,94 +186,16 @@ function validPassword(value: unknown): value is string {
 }
 
 async function resolveSession(db: D1Database, request: Request): Promise<SessionUser | null> {
-  const token = readCookie(request, SESSION_COOKIE);
-  if (!token) return null;
-  const tokenHash = await sha256(token);
-  const row = await db
-    .prepare(
-      `SELECT s.user_id AS userId, s.expires_at AS expiresAt, u.username AS username,
-              u.role AS role, u.grade_level AS gradeLevel, u.profile_initialized AS profileInitialized
-       FROM sessions s JOIN users u ON u.id = s.user_id
-       WHERE s.token_hash = ?`,
-    )
-    .bind(tokenHash)
-    .first<{
-      userId: string;
-      expiresAt: string;
-      username: string;
-      role: string;
-      gradeLevel: string;
-      profileInitialized: number;
-    }>();
-  if (!row) return null;
-  const expiresMs = Date.parse(row.expiresAt);
-  if (!Number.isFinite(expiresMs) || expiresMs <= Date.now()) {
-    // 过期令牌只在被访问时顺手删掉，避免每次请求都全表清理
-    await db.prepare('DELETE FROM sessions WHERE token_hash = ?').bind(tokenHash).run();
-    return null;
-  }
+  const session = await sharedResolveSession(db, request);
+  if (!session) return null;
   return {
-    userId: row.userId,
-    username: row.username,
-    workspace: row.username.toLowerCase(),
-    tokenHash,
-    expiresAt: row.expiresAt,
-    profile: profileFromRow(row),
+    userId: session.userId,
+    username: session.username,
+    workspace: session.username.toLowerCase(),
+    tokenHash: session.tokenHash,
+    expiresAt: session.expiresAt,
+    profile: profileFromRow(session),
   };
-}
-
-async function createSession(db: D1Database, request: Request, userId: string): Promise<string> {
-  const token = `${crypto.randomUUID()}${crypto.randomUUID()}`.replaceAll('-', '');
-  const now = new Date();
-  const expiresAt = new Date(now.getTime() + SESSION_DAYS * 86_400_000).toISOString();
-  // 登录/注册是低频写，顺手清掉全库过期会话；索引 idx_sessions_expires 保证成本可控
-  await db.prepare('DELETE FROM sessions WHERE expires_at <= ?').bind(now.toISOString()).run();
-  await db
-    .prepare('INSERT INTO sessions (id, user_id, token_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?)')
-    .bind(`ses_${crypto.randomUUID()}`, userId, await sha256(token), expiresAt, now.toISOString())
-    .run();
-  await pruneSessionsForUser(db, userId);
-  return sessionCookie(token, SESSION_DAYS * 86_400, isSecure(request));
-}
-
-/** 每用户只保留最近 MAX_SESSIONS_PER_USER 个会话，避免登录测试把会话表堆到几百行 */
-export async function pruneSessionsForUser(db: D1Database, userId: string): Promise<void> {
-  await db
-    .prepare(
-      `DELETE FROM sessions WHERE user_id = ? AND id NOT IN (
-         SELECT id FROM sessions WHERE user_id = ? ORDER BY created_at DESC, id DESC LIMIT ?
-       )`,
-    )
-    .bind(userId, userId, MAX_SESSIONS_PER_USER)
-    .run();
-}
-
-async function authAttemptsExceeded(
-  db: D1Database,
-  key: string,
-  limit: number,
-  failuresOnly = false,
-): Promise<boolean> {
-  const row = await db
-    .prepare(
-      `SELECT COUNT(*) AS count FROM auth_attempts
-       WHERE client_key = ? AND created_at > ?${failuresOnly ? ' AND succeeded = 0' : ''}`,
-    )
-    .bind(key, new Date(Date.now() - AUTH_WINDOW_MS).toISOString())
-    .first<{ count: number }>();
-  return Number(row?.count ?? 0) >= limit;
-}
-
-async function recordAuthAttempt(db: D1Database, key: string, succeeded: boolean): Promise<void> {
-  // 登录是低频写，顺手清掉窗口外的历史尝试，避免表无限增长
-  await db
-    .prepare('DELETE FROM auth_attempts WHERE created_at <= ?')
-    .bind(new Date(Date.now() - AUTH_ATTEMPT_RETENTION_MS).toISOString())
-    .run();
-  await db
-    .prepare('INSERT INTO auth_attempts (client_key, succeeded, created_at) VALUES (?, ?, ?)')
-    .bind(key, succeeded ? 1 : 0, new Date().toISOString())
-    .run();
 }
 
 async function clientKey(request: Request, scope: string): Promise<string> {
@@ -894,14 +769,15 @@ async function handle(request: Request, env: Env): Promise<Response> {
   if (segments[0] === 'auth') {
     if (segments.length === 2 && segments[1] === 'register' && method === 'POST') {
       const key = await clientKey(request, 'register');
-      if (await authAttemptsExceeded(env.DB, key, 8)) return fail('注册过于频繁，请稍后再试', 429);
+      if (await sharedAuthAttemptsExceeded(env.DB, key, 8, false))
+        return fail('注册过于频繁，请稍后再试', 429);
 
       const body = (await request.json().catch(() => null)) as
         | { username?: unknown; password?: unknown }
         | null;
       const name = normalizeUsername(body?.username);
       if (!name || !validPassword(body?.password)) {
-        await recordAuthAttempt(env.DB, key, false);
+        await sharedRecordAuthAttempt(env.DB, key, false);
         return fail('用户名需 3-32 位且不含空白，密码需 8-72 位');
       }
 
@@ -909,29 +785,28 @@ async function handle(request: Request, env: Env): Promise<Response> {
         .bind(name.normalized)
         .first<{ id: string }>();
       if (existing) {
-        await recordAuthAttempt(env.DB, key, false);
+        await sharedRecordAuthAttempt(env.DB, key, false);
         return fail('该用户名已注册，请直接登录', 409);
       }
 
       const userId = `usr_${crypto.randomUUID()}`;
-      const now = new Date().toISOString();
       try {
-        await env.DB.prepare(
-          `INSERT INTO users (id, username, username_normalized, password_hash, created_at, last_login_at)
-           VALUES (?, ?, ?, ?, ?, ?)`,
-        )
-          .bind(userId, name.username, name.normalized, await hashPassword(body!.password as string), now, now)
-          .run();
+        await sharedInsertUser(env.DB, {
+          id: userId,
+          username: name.username,
+          normalized: name.normalized,
+          passwordHash: await makePasswordHash(body!.password as string),
+        });
       } catch (error) {
-        await recordAuthAttempt(env.DB, key, false);
+        await sharedRecordAuthAttempt(env.DB, key, false);
         if (String(error).includes('UNIQUE constraint failed')) return fail('该用户名已注册，请直接登录', 409);
         throw error;
       }
-      await recordAuthAttempt(env.DB, key, true);
+      await sharedRecordAuthAttempt(env.DB, key, true);
       // 旧版同步库的业务行 workspace 为空；首个账号注册时把它们归入该账号，避免历史数据不可见
       const userCount = await env.DB.prepare('SELECT COUNT(*) AS n FROM users').first<{ n: number }>();
       if (Number(userCount?.n ?? 0) === 1) await claimLegacyWorkspace(env.DB, name.normalized);
-      const cookie = await createSession(env.DB, request, userId);
+      const { cookie } = await sharedCreateSession(env.DB, request, userId);
       return json(
         {
           user: { id: userId, username: name.username },
@@ -945,40 +820,36 @@ async function handle(request: Request, env: Env): Promise<Response> {
 
     if (segments.length === 2 && segments[1] === 'login' && method === 'POST') {
       const key = await clientKey(request, 'login');
-      if (await authAttemptsExceeded(env.DB, key, 10, true)) return fail('登录尝试过于频繁，请稍后再试', 429);
+      if (await sharedAuthAttemptsExceeded(env.DB, key, 10, true)) return fail('登录尝试过于频繁，请稍后再试', 429);
 
       const body = (await request.json().catch(() => null)) as
         | { username?: unknown; password?: unknown }
         | null;
       const name = normalizeUsername(body?.username);
       if (!name || !validPassword(body?.password)) {
-        await recordAuthAttempt(env.DB, key, false);
+        await sharedRecordAuthAttempt(env.DB, key, false);
         return fail('用户名或密码不正确', 401);
       }
 
-      const user = await env.DB.prepare(
-        `SELECT id, username, username_normalized AS usernameNormalized, password_hash AS passwordHash,
-                role, grade_level AS gradeLevel, profile_initialized AS profileInitialized
-         FROM users WHERE username_normalized = ?`,
-      )
-        .bind(name.normalized)
-        .first<UserRow>();
-      const valid = await verifyPassword(body!.password as string, user?.passwordHash ?? (await getDummyPasswordHash()));
-      await recordAuthAttempt(env.DB, key, Boolean(user) && valid);
+      const user = await sharedFindUser(env.DB, name.normalized);
+      const valid = await checkPassword(
+        body!.password as string,
+        user?.password_hash ?? (await dummyPasswordHash()),
+      );
+      await sharedRecordAuthAttempt(env.DB, key, Boolean(user) && valid);
       if (!user || !valid) return fail('用户名或密码不正确', 401);
 
-      await env.DB.prepare('UPDATE users SET last_login_at = ? WHERE id = ?')
-        .bind(new Date().toISOString(), user.id)
-        .run();
-      await env.DB.prepare('DELETE FROM sessions WHERE user_id = ? AND expires_at <= ?')
-        .bind(user.id, new Date().toISOString())
-        .run();
-      const cookie = await createSession(env.DB, request, user.id);
+      await sharedTouchLastLogin(env.DB, user.id);
+      const { cookie } = await sharedCreateSession(env.DB, request, user.id);
       return json(
         {
           user: { id: user.id, username: user.username },
-          workspace: user.usernameNormalized,
-          profile: profileFromRow(user),
+          workspace: user.username_normalized,
+          profile: profileFromRow({
+            role: String(user.role ?? 'student'),
+            gradeLevel: String(user.grade_level ?? 'adult'),
+            profileInitialized: Number(user.profile_initialized ?? 0),
+          }),
         },
         200,
         { 'Set-Cookie': cookie },
@@ -986,11 +857,11 @@ async function handle(request: Request, env: Env): Promise<Response> {
     }
 
     if (segments.length === 2 && segments[1] === 'logout' && method === 'POST') {
-      const token = readCookie(request, SESSION_COOKIE);
+      const token = sharedReadCookie(request, SESSION_COOKIE);
       if (token) {
-        await env.DB.prepare('DELETE FROM sessions WHERE token_hash = ?').bind(await sha256(token)).run();
+        await sharedDeleteSession(env.DB, await sha256(token));
       }
-      return json({ ok: true }, 200, { 'Set-Cookie': clearSessionCookie(isSecure(request)) });
+      return json({ ok: true }, 200, { 'Set-Cookie': sharedClearSessionCookie(sharedIsSecure(request)) });
     }
 
     if (segments.length === 2 && segments[1] === 'me' && method === 'GET') {

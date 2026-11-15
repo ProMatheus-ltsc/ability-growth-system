@@ -1,117 +1,69 @@
 /**
- * 服务端账户会话
- * 登录状态由 HttpOnly Cookie 承载，前端只保存内存中的用户信息。
+ * 服务端账户会话 —— 转发到 shared-core 的统一认证。
+ *
+ * 本项目原先自建了一整套认证 Provider（会话探测、登录、注册、登出、
+ * 401 全局事件监听），与 @shared/core 的实现重复。这次把认证收归共享包：
+ * - 认证状态机、错误语义：shared-core 的 `AuthProvider` / `useAuth`
+ * - 传输与 401 处理：本项目的 `services/authDriver` + `services/d1Client`
+ *
+ * 对外形状保持不变（调用方无须改写）：
+ *   state: 'loading' | 'authenticated' | 'unauthenticated'
+ *   account / error / login / register / logout
+ *
+ * 与共享包的差异（在本文件消化）：共享包是四态（多一个 'login' /
+ * 'firstTime'），本项目把「未登录」统一映射成 'unauthenticated'。
  */
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useRef,
-  useState,
-  type ReactNode,
-} from 'react';
-import {
-  D1ApiError,
-  UNAUTHORIZED_EVENT_NAME,
-  fetchMe,
-  loginAccount,
-  logoutAccount,
-  registerAccount,
-  type AuthUser,
-} from '../services/d1Client';
+import { useEffect, type ReactNode } from 'react';
+import { AuthProvider as SharedAuthProvider, useAuth as useSharedAuth } from '@shared/core/auth';
+import { UNAUTHORIZED_EVENT_NAME } from '../services/d1Client';
+import { restAuthDriver } from '../services/authDriver';
 
-type AuthState = 'loading' | 'authenticated' | 'unauthenticated';
+/** 本项目的认证状态：未登录统一是 'unauthenticated' */
+export type AuthState = 'loading' | 'authenticated' | 'unauthenticated';
 
-interface AuthContextValue {
+/** 对外暴露的认证上下文 */
+export interface AuthContextValue {
   state: AuthState;
-  account: AuthUser | null;
+  account: { id: string; username: string } | null;
   error: string | null;
   login: (username: string, password: string) => Promise<boolean>;
   register: (username: string, password: string) => Promise<boolean>;
   logout: () => Promise<void>;
 }
 
-const Ctx = createContext<AuthContextValue | null>(null);
-
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [state, setState] = useState<AuthState>('loading');
-  const [account, setAccount] = useState<AuthUser | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const mounted = useRef(true);
-
-  useEffect(() => {
-    mounted.current = true;
-    void (async () => {
-      try {
-        const me = await fetchMe();
-        if (!mounted.current) return;
-        setAccount(me.user);
-        setState('authenticated');
-      } catch (err) {
-        if (!mounted.current) return;
-        if (!(err instanceof D1ApiError && err.status === 401)) {
-          setError(err instanceof Error ? err.message : '无法连接服务器');
-        }
-        setState('unauthenticated');
-      }
-    })();
-    return () => {
-      mounted.current = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    const handler = () => {
-      setAccount(null);
-      setState('unauthenticated');
-    };
-    window.addEventListener(UNAUTHORIZED_EVENT_NAME, handler);
-    return () => window.removeEventListener(UNAUTHORIZED_EVENT_NAME, handler);
-  }, []);
-
-  const authenticate = useCallback(
-    async (action: () => Promise<{ user: AuthUser }>): Promise<boolean> => {
-      setError(null);
-      try {
-        const result = await action();
-        setAccount(result.user);
-        setState('authenticated');
-        return true;
-      } catch (err) {
-        setError(err instanceof Error ? err.message : '操作失败');
-        return false;
-      }
-    },
-    [],
+  return (
+    <SharedAuthProvider driver={restAuthDriver} errorMode="boolean">
+      {children}
+    </SharedAuthProvider>
   );
-
-  const login = useCallback(
-    (username: string, password: string) => authenticate(() => loginAccount(username, password)),
-    [authenticate],
-  );
-
-  const register = useCallback(
-    (username: string, password: string) => authenticate(() => registerAccount(username, password)),
-    [authenticate],
-  );
-
-  const logout = useCallback(async () => {
-    try {
-      await logoutAccount();
-    } catch {
-      // 会话可能已过期，本地状态照常清理
-    }
-    setAccount(null);
-    setState('unauthenticated');
-    setError(null);
-  }, []);
-
-  return <Ctx.Provider value={{ state, account, error, login, register, logout }}>{children}</Ctx.Provider>;
 }
 
 export function useAuth(): AuthContextValue {
-  const value = useContext(Ctx);
-  if (!value) throw new Error('useAuth 必须在 AuthProvider 内使用');
-  return value;
+  const shared = useSharedAuth();
+
+  // 后端返回 401 时 d1Client 会派发全局事件，登录态随之失效
+  useEffect(() => {
+    const handler = () => {
+      void shared.logout();
+    };
+    window.addEventListener(UNAUTHORIZED_EVENT_NAME, handler);
+    return () => window.removeEventListener(UNAUTHORIZED_EVENT_NAME, handler);
+  }, [shared]);
+
+  const state: AuthState =
+    shared.state === 'loading'
+      ? 'loading'
+      : shared.state === 'authenticated'
+        ? 'authenticated'
+        : 'unauthenticated';
+
+  return {
+    state,
+    account: shared.user ? { id: shared.user.id, username: shared.user.username } : null,
+    error: shared.error,
+    login: shared.login,
+    register: shared.register,
+    logout: shared.logout,
+  };
 }
