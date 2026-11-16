@@ -10,7 +10,11 @@ import { describe, expect, it } from 'vitest';
 import { listStoreDelta, normalizeSince } from '../functions/api/[[path]]';
 import { STORE_RESET_TOMBSTONE, SYNC_EPOCH } from '../src/services/syncMirror';
 
-function fakeDb(rows: { data: string; updated_at: string }[], tombstones: { id: string; deleted_at: string }[]) {
+function fakeDb(
+  rows: { data: string; updated_at: string }[],
+  tombstones: { id: string; deleted_at: string }[],
+  options: { tombstoneTableFails?: boolean } = {},
+) {
   const sqls: string[] = [];
   const db = {
     prepare(sql: string) {
@@ -18,6 +22,12 @@ function fakeDb(rows: { data: string; updated_at: string }[], tombstones: { id: 
       return {
         bind() {
           return this;
+        },
+        async run() {
+          if (options.tombstoneTableFails && sql.includes('store_deletions')) {
+            throw new Error('D1_ERROR: no such table');
+          }
+          return { success: true, results: [] };
         },
         async all() {
           return { success: true, results: sql.includes('store_deletions') ? tombstones : rows };

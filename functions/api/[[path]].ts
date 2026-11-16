@@ -227,13 +227,8 @@ const TABLE_REQUIRED_COLUMNS: Record<string, string[]> = {
   sessions: ['id', 'user_id', 'token_hash', 'expires_at', 'created_at'],
   auth_attempts: ['id', 'client_key', 'succeeded', 'created_at'],
   sync_backups: ['id', 'account_id', 'created_at', 'data'],
-  store_deletions: ['workspace', 'store', 'id', 'deleted_at'],
 };
-const REQUIRED_INDEXES = [
-  'idx_sessions_expires',
-  'idx_auth_attempts_client_created',
-  'idx_store_deletions_ws_store_time',
-];
+const REQUIRED_INDEXES = ['idx_sessions_expires', 'idx_auth_attempts_client_created'];
 
 /**
  * 单次 batch 探活：确认所有表与关键列/索引都在。
@@ -522,10 +517,48 @@ async function listStore(
 //   id = '*'        整个 store 被清空/重建（清空、备份恢复 replace 模式）
 //   id = 具体记录    单条删除
 // 客户端先应用墓碑再应用 upserts，因此「删了又重建同一个 id」不会被误删。
+//
+// ⚠️ 墓碑表**不进冷启动探活清单**（见 TABLE_REQUIRED_COLUMNS）。
+// 曾把它加进探活，结果线上库还没这张表 → 探活恒失败 → 每个请求都跑一遍完整建表
+// （90+ 次串行 D1 往返）→ 登录/刷新直接撞 30s 客户端超时。
+// 现在改为「按需建表 + 建不出来就降级」，能力缺失不能再拖垮主流程。
+
+let tombstoneTable: Promise<boolean> | null = null;
+
+/** 按需建墓碑表（每个 isolate 只试一次；失败降级为「无墓碑」） */
+function ensureTombstoneTable(db: D1Database): Promise<boolean> {
+  if (!tombstoneTable) {
+    tombstoneTable = (async () => {
+      try {
+        await db
+          .prepare(
+            `CREATE TABLE IF NOT EXISTS store_deletions (
+              workspace TEXT NOT NULL,
+              store TEXT NOT NULL,
+              id TEXT NOT NULL,
+              deleted_at TEXT NOT NULL,
+              PRIMARY KEY (workspace, store, id)
+            )`,
+          )
+          .run();
+        await db
+          .prepare(
+            'CREATE INDEX IF NOT EXISTS idx_store_deletions_ws_store_time ON store_deletions(workspace, store, deleted_at)',
+          )
+          .run();
+        return true;
+      } catch {
+        // 建不出来就退回「全量读」语义，绝不能因此让请求变慢或失败
+        return false;
+      }
+    })().catch(() => false);
+  }
+  return tombstoneTable;
+}
 
 /** 清空/重建标记（墓碑 id，见 src/services/syncMirror.ts） */
 
-/** 记录删除墓碑（批量写入，单次 batch） */
+/** 记录删除墓碑（批量写入，单次 batch）；墓碑表不可用时静默跳过 */
 async function recordDeletions(
   db: D1Database,
   store: StoreName,
@@ -534,6 +567,8 @@ async function recordDeletions(
   at = new Date().toISOString(),
 ): Promise<void> {
   const unique = Array.from(new Set(ids.filter(Boolean)));
+  if (unique.length === 0) return;
+  if (!(await ensureTombstoneTable(db))) return;
   for (let index = 0; index < unique.length; index += BATCH_SIZE) {
     const chunk = unique.slice(index, index + BATCH_SIZE);
     await db.batch(
@@ -575,10 +610,13 @@ export async function listStoreDelta(
     .all<{ data: string; updated_at: string }>();
   const records = (rows.results ?? []).map((row) => parseRecord(row.data));
 
-  const tombstones = await db
-    .prepare('SELECT id, deleted_at FROM store_deletions WHERE workspace = ? AND store = ? AND deleted_at >= ?')
-    .bind(workspace, store, since)
-    .all<{ id: string; deleted_at: string }>();
+  // 墓碑表还不可用（老库、迁移未执行）时降级为「无墓碑」，增量照常工作
+  const tombstones = (await ensureTombstoneTable(db))
+    ? await db
+        .prepare('SELECT id, deleted_at FROM store_deletions WHERE workspace = ? AND store = ? AND deleted_at >= ?')
+        .bind(workspace, store, since)
+        .all<{ id: string; deleted_at: string }>()
+    : { results: [] as { id: string; deleted_at: string }[] };
   const deleted = (tombstones.results ?? []).map((row) => row.id);
 
   // 水位取「本次返回的行列值」与「墓碑时间」的最大值；没有任何变化时保持原水位

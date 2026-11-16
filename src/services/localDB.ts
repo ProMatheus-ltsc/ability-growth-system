@@ -234,6 +234,7 @@ export function setBusinessAccount(accountId: string | undefined): void {
   currentAccountId = accountId;
   dbPromise = undefined;
   syncDoneAt = new Map();
+  memoryCache.clear();
 }
 
 export function getBusinessAccount(): string | undefined {
@@ -359,6 +360,14 @@ interface MirrorMeta {
 const syncInflight = new Map<StoreName, Promise<void>>();
 let syncDoneAt = new Map<StoreName, number>();
 
+/**
+ * 进程内读缓存：一个页面会读同一张表七八次（37 处 trainings 调用点），
+ * 每次回 IndexedDB 取 3.5k 行 + 反序列化会明显拖慢首屏，这里给个短窗口直接命中内存。
+ * 写入/删除（`markStoreStale`）会清掉对应条目，本端写入立刻可见。
+ */
+const memoryCache = new Map<StoreName, { rows: unknown[]; at: number }>();
+const MEMORY_TTL_MS = 5000;
+
 /** 无 IndexedDB 的环境（node 测试、隐私模式）退回整表拉取 */
 function mirrorSupported(): boolean {
   return typeof indexedDB !== 'undefined';
@@ -462,14 +471,24 @@ async function syncMirrorStore<S extends StoreName>(store: S): Promise<void> {
   }
 }
 
-/** 读表：镜像优先，失败退回整表拉取 */
+/** 读表：内存 → 镜像 → 整表拉取（逐级降级，任何一级都不阻塞主流程） */
 async function readStore<S extends StoreName>(store: S): Promise<StoreValue<S>[]> {
-  if (!mirrorSupported()) return d1.listRecords<StoreValue<S>>(store);
+  const cached = memoryCache.get(store);
+  if (cached && Date.now() - cached.at < MEMORY_TTL_MS) return cached.rows as StoreValue<S>[];
+  if (!mirrorSupported()) {
+    const rows = await d1.listRecords<StoreValue<S>>(store);
+    memoryCache.set(store, { rows, at: Date.now() });
+    return rows;
+  }
   try {
     await syncMirrorStore(store);
-    return await readMirrorRows(store);
+    const rows = await readMirrorRows(store);
+    memoryCache.set(store, { rows, at: Date.now() });
+    return rows;
   } catch {
-    return d1.listRecords<StoreValue<S>>(store);
+    const rows = await d1.listRecords<StoreValue<S>>(store);
+    memoryCache.set(store, { rows, at: Date.now() });
+    return rows;
   }
 }
 
@@ -482,6 +501,7 @@ async function readStore<S extends StoreName>(store: S): Promise<StoreValue<S>[]
  */
 function markStoreStale(store: StoreName): void {
   syncDoneAt.delete(store);
+  memoryCache.delete(store);
 }
 
 /**
@@ -492,6 +512,7 @@ function markStoreStale(store: StoreName): void {
  */
 export async function invalidateSyncedData(): Promise<void> {
   syncDoneAt = new Map();
+  memoryCache.clear();
   if (!mirrorSupported()) return;
   try {
     const dbi = await db();
