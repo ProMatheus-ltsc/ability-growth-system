@@ -4,16 +4,22 @@
  * - 认证状态机、错误语义：shared-core（`@shared/core/auth`）
  * - 传输：本项目的 `services/d1Client`（credentials:"same-origin" + 401 全局事件）
  *
- * 本项目的差异：
- * - 后端返回的是裸对象（没有 shared-core 那套 `{ success, data }` 信封），
- *   所以这里给 request 适配一层：把裸响应包成信封再交给共享包解。
- * - `/auth/me` 返回 `{ user, workspace, expiresAt, profile }`，
- *   用户载荷里没有 username，需要从 workspace（= 用户名小写）补。
+ * 本项目后端把用户包在 `{ user, workspace, profile }` 里再返回，**解包由基座
+ * `restDriver` 承担**（见 shared-core `pickUserPayload`：裸对象 / `{ user }` /
+ * `{ data }` 三种形状都认），所以这里只做「客户端 → 统一契约」的薄适配，
+ * 不再自己解包、也不再自己映射用户字段。
+ *
+ * 历史坑（写在这里防止再犯）：本项目曾在适配层包装成 `{ user: mapUser(...) }`，
+ * 等于把已经映射过的用户又包一层，基座再拿 `raw.id` 就取不到 →
+ * `restore()` 静默判未登录（每次刷新被弹回登录页）、
+ * `login()` 得到 `id: undefined`（业务库名变成 `...-undefined`，
+ * 本地 meta 读不到 → 每次登录都强制走引导页）。
+ * 结论：**形状差异归基座，项目侧只做字段翻译。**
  */
 import {
+  AuthError,
   createRestAuthDriver,
   type AuthDriver,
-  type AuthUser,
 } from '@shared/core/auth';
 import {
   D1ApiError,
@@ -21,75 +27,51 @@ import {
   loginAccount,
   logoutAccount,
   registerAccount,
-  type AuthUser as ProjectAuthUser,
 } from './d1Client';
 
-/** 后端返回的用户载荷 */
-interface AuthUserPayload {
-  id: string;
-  username?: string;
-  nickname?: string;
-  displayName?: string;
-  email?: string;
-  [key: string]: unknown;
-}
-
 /**
- * 共享包的默认映射要求 raw.id 存在，且把非标准字段塞进 extra。
- * 本项目的用户载荷没有 username（用 workspace 承载），映射如下。
+ * 把 d1Client 的 401 转成统一 AuthError：
+ * 基座靠 `AuthError.status === 401` 判断「未登录是正常态」，
+ * 不转换的话会被当成服务端故障（错误码也统一不了）。
  */
-function mapUser(raw: AuthUserPayload): AuthUser {
-  const extra: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(raw)) {
-    if (['id', 'username', 'nickname', 'displayName', 'email'].includes(key)) continue;
-    extra[key] = value;
+function rethrowAsAuthError(error: unknown): never {
+  if (error instanceof D1ApiError && error.status === 401) {
+    throw new AuthError('UNAUTHORIZED', error.message, 401);
   }
-  return {
-    id: raw.id,
-    username: raw.username ?? raw.id,
-    displayName: raw.displayName ?? raw.nickname,
-    email: raw.email,
-    extra: Object.keys(extra).length > 0 ? extra : undefined,
-  };
+  throw error;
 }
 
 /**
- * 请求适配：把共享包统一契约的路径与字段翻译成本项目后端认的形式。
+ * 请求适配：把基座统一契约的路径翻译成本项目客户端的调用。
  *
  * 本项目后端：
  *   POST /api/auth/login    { username, password } → { user, workspace, profile }
  *   POST /api/auth/register { username, password } → 同上
- *   GET  /api/auth/me                            → { user, workspace, expiresAt, profile }
- *   POST /api/auth/logout                        → { ok: true }
+ *   GET  /api/auth/me                              → { user, workspace, expiresAt, profile }
+ *   POST /api/auth/logout                          → { ok: true }
  *
- * 共享包 REST 驱动默认：
- *   POST {base}/login    { username, password } → 用户载荷
- *   POST {base}/register { username, password, email, nickname } → 用户载荷
- *   GET  {base}/me       → 用户载荷
- *   POST {base}/logout   → 用户载荷
- *
- * 差异只在响应形状（后端把用户包在 { user } 里）与 logout 的返回值，
- * 这里统一处理。
+ * 返回值原样交给驱动，由驱动自己拆到用户层。
  */
 async function authRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const method = init?.method ?? 'GET';
   const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : undefined;
 
-  if (method === 'POST' && path.endsWith('/login')) {
-    const result = await loginAccount(String(body?.username ?? ''), String(body?.password ?? ''));
-    return { user: mapUser(result.user as AuthUserPayload) } as T;
-  }
-  if (method === 'POST' && path.endsWith('/register')) {
-    const result = await registerAccount(String(body?.username ?? ''), String(body?.password ?? ''));
-    return { user: mapUser(result.user as AuthUserPayload) } as T;
-  }
-  if (method === 'GET' && path.endsWith('/me')) {
-    const result = await fetchMe();
-    return { user: mapUser(result.user as AuthUserPayload) } as T;
-  }
-  if (method === 'POST' && path.endsWith('/logout')) {
-    await logoutAccount();
-    return {} as T;
+  try {
+    if (method === 'POST' && path.endsWith('/login')) {
+      return (await loginAccount(String(body?.username ?? ''), String(body?.password ?? ''))) as T;
+    }
+    if (method === 'POST' && path.endsWith('/register')) {
+      return (await registerAccount(String(body?.username ?? ''), String(body?.password ?? ''))) as T;
+    }
+    if (method === 'GET' && path.endsWith('/me')) {
+      return (await fetchMe()) as T;
+    }
+    if (method === 'POST' && path.endsWith('/logout')) {
+      await logoutAccount();
+      return { ok: true } as T;
+    }
+  } catch (error) {
+    rethrowAsAuthError(error);
   }
   throw new D1ApiError(`未预期的认证请求：${method} ${path}`, 0);
 }
@@ -98,5 +80,4 @@ async function authRequest<T>(path: string, init?: RequestInit): Promise<T> {
 export const restAuthDriver: AuthDriver = createRestAuthDriver({
   basePath: '/api/auth',
   request: authRequest,
-  mapUser,
 });
