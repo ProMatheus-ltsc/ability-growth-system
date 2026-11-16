@@ -5,6 +5,7 @@ import { PageHeader } from '../components/PageHeader';
 import { useAuth } from '../hooks/useAuth';
 import { useSyncStatus } from '../hooks/useSyncStatus';
 import { createBackup, listBackups, restoreBackup, type BackupPoint } from '../services/d1Client';
+import { invalidateSyncedData } from '../services/localDB';
 
 export function StoragePage() {
   const { showToast } = useToast();
@@ -49,6 +50,8 @@ export function StoragePage() {
     if (!window.confirm(`确认用 ${timestamp.slice(0, 19).replace('T', ' ')} 的备份覆盖当前账户云端数据？`)) return;
     void run('恢复备份', async () => {
       await restoreBackup(timestamp);
+      // 备份恢复改的是整个结果集，本地镜像的增量水位表达不了 → 直接失效重拉
+      await invalidateSyncedData();
       showToast('已恢复到该备份点', 'success');
     });
   };

@@ -42,6 +42,7 @@ import {
 } from './auth';
 import { runBatches as sharedRunBatches, schemaIsSatisfiedBatched } from '@shared/core/server/d1';
 import { STORE_NAMES, type ExportedSnapshot, type StoreName } from '../../src/services/snapshot';
+import { STORE_RESET_TOMBSTONE, SYNC_EPOCH } from '../../src/services/syncMirror';
 import { guardTrainingRecords } from '../../src/domains/public-exam';
 import {
   dedupeTrainingRecordsByIdempotencyKey,
@@ -119,6 +120,11 @@ export function normalizeTimestamp(value: unknown): string | null {
   if (typeof value !== 'string' || !value.trim()) return null;
   const ms = Date.parse(value);
   return Number.isNaN(ms) ? null : new Date(ms).toISOString();
+}
+
+/** 增量同步的 since 参数：非法或缺失时退回 epoch（等价于全量） */
+export function normalizeSince(value: string | null): string {
+  return normalizeTimestamp(value) ?? SYNC_EPOCH;
 }
 
 function entityTimestamp(record: JsonRecord): string {
@@ -221,8 +227,13 @@ const TABLE_REQUIRED_COLUMNS: Record<string, string[]> = {
   sessions: ['id', 'user_id', 'token_hash', 'expires_at', 'created_at'],
   auth_attempts: ['id', 'client_key', 'succeeded', 'created_at'],
   sync_backups: ['id', 'account_id', 'created_at', 'data'],
+  store_deletions: ['workspace', 'store', 'id', 'deleted_at'],
 };
-const REQUIRED_INDEXES = ['idx_sessions_expires', 'idx_auth_attempts_client_created'];
+const REQUIRED_INDEXES = [
+  'idx_sessions_expires',
+  'idx_auth_attempts_client_created',
+  'idx_store_deletions_ws_store_time',
+];
 
 /**
  * 单次 batch 探活：确认所有表与关键列/索引都在。
@@ -301,6 +312,24 @@ async function initSchema(db: D1Database): Promise<void> {
     )
     .run();
   await db.prepare('CREATE INDEX IF NOT EXISTS idx_backups_account ON sync_backups(account_id, created_at)').run();
+
+  // 增量同步的删除墓碑（见 migrations/0009_store_deletions.sql）
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS store_deletions (
+        workspace TEXT NOT NULL,
+        store TEXT NOT NULL,
+        id TEXT NOT NULL,
+        deleted_at TEXT NOT NULL,
+        PRIMARY KEY (workspace, store, id)
+      )`,
+    )
+    .run();
+  await db
+    .prepare(
+      'CREATE INDEX IF NOT EXISTS idx_store_deletions_ws_store_time ON store_deletions(workspace, store, deleted_at)',
+    )
+    .run();
 
   await db
     .prepare(
@@ -484,6 +513,90 @@ async function listStore(
   return gradeLevel ? filterStoreRecordsForGrade(store, records, gradeLevel) : records;
 }
 
+// ============ 增量同步（updated_at 水位 + 删除墓碑） ============
+//
+// 前端每次读表都全量拉一遍（trainings 3.5k 行）既慢又费 D1 读配额。
+// 改成「首次全量 + 之后只拉水位之后的行」，水位取 updated_at 列（入库时已归一化）。
+//
+// 纯增量拉不到「被删掉的 id」，所以删除时打墓碑：
+//   id = '*'        整个 store 被清空/重建（清空、备份恢复 replace 模式）
+//   id = 具体记录    单条删除
+// 客户端先应用墓碑再应用 upserts，因此「删了又重建同一个 id」不会被误删。
+
+/** 清空/重建标记（墓碑 id，见 src/services/syncMirror.ts） */
+
+/** 记录删除墓碑（批量写入，单次 batch） */
+async function recordDeletions(
+  db: D1Database,
+  store: StoreName,
+  workspace: string,
+  ids: string[],
+  at = new Date().toISOString(),
+): Promise<void> {
+  const unique = Array.from(new Set(ids.filter(Boolean)));
+  for (let index = 0; index < unique.length; index += BATCH_SIZE) {
+    const chunk = unique.slice(index, index + BATCH_SIZE);
+    await db.batch(
+      chunk.map((id) =>
+        db
+          .prepare('INSERT OR REPLACE INTO store_deletions (workspace, store, id, deleted_at) VALUES (?, ?, ?, ?)')
+          .bind(workspace, store, id, at),
+      ),
+    );
+  }
+}
+
+/** 整个 store 被清空/重建：打一条 '*' 墓碑，客户端据此清镜像并重新全量 */
+async function recordStoreReset(
+  db: D1Database,
+  store: StoreName,
+  workspace: string,
+  at = new Date().toISOString(),
+): Promise<void> {
+  await recordDeletions(db, store, workspace, [STORE_RESET_TOMBSTONE], at);
+}
+
+/**
+ * 增量列表：返回水位之后被写入的行、被删除的 id，以及新的水位。
+ *
+ * `since` 用 `>=` 而不是 `>`：同毫秒写入的多行不会因为边界被漏掉。
+ * 代价是水位处那一批会被重复下发一次，客户端按 id upsert 是幂等的。
+ */
+export async function listStoreDelta(
+  db: D1Database,
+  store: StoreName,
+  workspace: string,
+  since: string,
+  gradeLevel?: GradeLevel,
+): Promise<{ records: JsonRecord[]; deleted: string[]; watermark: string }> {
+  const rows = await db
+    .prepare(`SELECT data, updated_at FROM ${store} WHERE workspace = ? AND updated_at >= ? ORDER BY updated_at DESC`)
+    .bind(workspace, since)
+    .all<{ data: string; updated_at: string }>();
+  const records = (rows.results ?? []).map((row) => parseRecord(row.data));
+
+  const tombstones = await db
+    .prepare('SELECT id, deleted_at FROM store_deletions WHERE workspace = ? AND store = ? AND deleted_at >= ?')
+    .bind(workspace, store, since)
+    .all<{ id: string; deleted_at: string }>();
+  const deleted = (tombstones.results ?? []).map((row) => row.id);
+
+  // 水位取「本次返回的行列值」与「墓碑时间」的最大值；没有任何变化时保持原水位
+  let watermark = since;
+  for (const row of rows.results ?? []) {
+    if (row.updated_at > watermark) watermark = row.updated_at;
+  }
+  for (const row of tombstones.results ?? []) {
+    if (row.deleted_at > watermark) watermark = row.deleted_at;
+  }
+
+  return {
+    records: gradeLevel ? filterStoreRecordsForGrade(store, records, gradeLevel) : records,
+    deleted,
+    watermark,
+  };
+}
+
 /** 读取库里与本次写入可能同键的训练行（按 sourceId 预筛，source/kind 由纯函数精确比较） */
 async function loadTrainingSourceRows(
   db: D1Database,
@@ -580,6 +693,7 @@ async function deleteStoreForProfile(
 ): Promise<void> {
   if (profile.role === 'teacher') {
     await db.prepare(`DELETE FROM ${store} WHERE workspace = ?`).bind(workspace).run();
+    await recordStoreReset(db, store, workspace);
     return;
   }
   const ids = (await listStore(db, store, workspace, profile.gradeLevel)).map((record) => record.id);
@@ -591,6 +705,7 @@ async function deleteStoreForProfile(
       .bind(workspace, ...chunk)
       .run();
   }
+  if (ids.length > 0) await recordDeletions(db, store, workspace, ids);
 }
 
 async function exportSnapshot(db: D1Database, workspace: string): Promise<ExportedSnapshot> {
@@ -654,6 +769,10 @@ async function importSnapshot(
   for (const [store, records] of prepared) {
     counts[store] = records.length;
     if (records.length === 0) continue;
+    // 恢复/导入改的是「结果集」而不只是「新行」：导入的行可能带着更旧的 updatedAt，
+    // 增量水位看不到它们，所以给每个被导入的 store 打一条 '*' 墓碑，
+    // 让各端清镜像后重新全量拉取（导入是低频重操作，这次全量可接受）。
+    await recordStoreReset(db, store, workspace);
     if (store === 'trainings') {
       const result = await writeTrainingRecords(
         db,
@@ -1008,6 +1127,11 @@ async function handle(request: Request, env: Env): Promise<Response> {
     const store = segments[1];
 
     if (segments.length === 2 && method === 'GET') {
+      // 带 since = 增量（首屏全量用 since=1970-01-01，走同一条路径拿水位）
+      const since = url.searchParams.get('since');
+      if (since) {
+        return json(await listStoreDelta(env.DB, store, workspace, normalizeSince(since), gradeFilter));
+      }
       return json(await listStore(env.DB, store, workspace, gradeFilter));
     }
 
@@ -1086,6 +1210,8 @@ async function handle(request: Request, env: Env): Promise<Response> {
         }
       }
       await env.DB.prepare(`DELETE FROM ${store} WHERE workspace = ? AND id = ?`).bind(workspace, id).run();
+      // 墓碑：其他设备的镜像靠它清掉这条已删记录（增量拉取看不到删除）
+      await recordDeletions(env.DB, store, workspace, [id]);
       return json({ ok: true });
     }
   }

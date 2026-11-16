@@ -363,14 +363,26 @@ API 写入训练记录前还会查询库内同 `sourceId` 的旧行，由 `planT
 | `GET  /api/profile` | 当前角色 / 学段 / 是否已完成初始化 |
 | `PUT  /api/profile` | 更新角色与学段（写入 `users.role / grade_level`） |
 | `GET  /api/stats` | 当前工作空间各表记录数（学生按本学段统计） |
-| `GET  /api/stores/:store` | 列出记录 |
+| `GET  /api/stores/:store` | 列出记录（**带 `?since=<ISO>` 时走增量**：返回 `{ records, deleted, watermark }`） |
 | `GET  /api/stores/:store/:id` | 读取单条 |
 | `PUT  /api/stores/:store/:id` | 新增/覆盖单条 |
-| `DELETE /api/stores/:store/:id` | 删除单条 |
+| `DELETE /api/stores/:store/:id` | 删除单条（同时打删除墓碑） |
 | `POST   /api/stores/:store/bulk` | 批量 upsert |
-| `DELETE /api/stores` | 清空当前工作空间 |
+| `DELETE /api/stores` | 清空当前工作空间（打 `*` 整体重建墓碑） |
 | `GET/POST /api/backups` | 备份列表 / 创建备份 |
-| `POST   /api/backups/:id/restore` | 用备份覆盖当前工作空间 |
+| `POST   /api/backups/:id/restore` | 用备份覆盖当前工作空间（打 `*` 整体重建墓碑） |
+
+#### 增量同步（前端读表不再每次全量）
+
+`trainings` 这类表到 3.5k 行后，每次读表都整表拉一遍既慢又费 D1 读配额。改造后：
+
+- 浏览器 IndexedDB 留一份镜像（`mirror` store，v3 起），首次按 `since=1970-01-01` 全量灌入，之后只拉水位之后的行
+- 水位 = 表的 `updated_at` 列（入库已归一化），服务端按 `updated_at >= since` 过滤并回传新水位；同毫秒批量写入不会漏
+- 增量看不到删除，因此删除时写墓碑 `store_deletions`（见 `migrations/0009_store_deletions.sql`）：
+  单条删除 → 记该 id；清空/备份恢复 → 记 `*`，客户端见 `*` 清镜像后重新全量
+- 写操作不走乐观镜像（服务端 PUT/bulk 是 lastWriteWins，更旧的不覆盖），只把该表标记为待同步，下次读立即增量
+- 镜像异常（隐私模式、配额、旧库版本）时自动退回整表拉取，不影响主流程
+- 前后端共用 `src/services/syncMirror.ts` 里的常量与合并规则，避免两边对水位/reset 语义理解不一致
 
 **角色与学段过滤**: 角色是服务端概念（`users.role`），不是前端视图。
 `student` 账号的读写、统计、备份恢复与清空都只作用于 `users.grade_level` 对应的学段；

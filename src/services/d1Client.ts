@@ -4,6 +4,7 @@
  * 账户由服务端校验，会话放在 HttpOnly Cookie 中，前端不接触令牌。
  */
 import type { StoreName } from './snapshot';
+import type { StoreDelta } from './syncMirror';
 import type { UserProfile } from '../domains/shared/scope';
 
 const ERROR_EVENT = 'ability-growth:data-error';
@@ -161,6 +162,16 @@ export async function getStats(): Promise<StorageStats> {
 
 export async function listRecords<T>(store: StoreName): Promise<T[]> {
   return request<T[]>(`/api/stores/${store}`);
+}
+
+/**
+ * 增量列表：只取 `since` 水位之后被写入的行 + 被删除的 id。
+ *
+ * 首次同步传 {@link SYNC_EPOCH}，与服务端走同一条路径，顺带拿到服务端水位，
+ * 不需要「全量接口 + 客户端自己算水位」那套两套口径。
+ */
+export async function listStoreDelta<T>(store: StoreName, since: string): Promise<StoreDelta<T>> {
+  return request<StoreDelta<T>>(`/api/stores/${store}?since=${encodeURIComponent(since)}`);
 }
 
 export async function getRecord<T>(store: StoreName, id: string): Promise<T | undefined> {

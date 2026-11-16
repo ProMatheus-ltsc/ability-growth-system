@@ -46,12 +46,18 @@ import {
   type ScopeAwareRecord,
 } from '../domains/shared/scope';
 import * as d1 from './d1Client';
+import {
+  nextWatermark,
+  planDeltaApply,
+  SYNC_EPOCH,
+  type StoreDelta,
+} from './syncMirror';
 
 export const APP_DB_PREFIX = 'ability-growth';
 configureDB(APP_DB_PREFIX);
 
 /** 数据库版本 - 每次新增 store 必须递增 */
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 interface AGSchema extends DBSchema {
   trainings: {
@@ -188,6 +194,17 @@ interface AGSchema extends DBSchema {
     key: string;
     value: { key: string; value: unknown };
   };
+  /**
+   * 业务表增量镜像（v3 起）。
+   *
+   * 目的：把「每次读表都全量拉一遍」换成「首次全量 + 之后按 updated_at 水位增量」，
+   * trainings 这类 3.5k 行的表不再每次刷新都整表搬运。
+   * 仅镜像**服务端可见集合**（学生已按学段过滤），与接口返回口径一致。
+   */
+  mirror: {
+    key: [string, string];
+    value: { store: string; id: string; value: unknown };
+  };
 }
 
 let currentAccountId: string | undefined;
@@ -216,6 +233,7 @@ export function getActiveDataScope(): DataScope | undefined {
 export function setBusinessAccount(accountId: string | undefined): void {
   currentAccountId = accountId;
   dbPromise = undefined;
+  syncDoneAt = new Map();
 }
 
 export function getBusinessAccount(): string | undefined {
@@ -304,13 +322,194 @@ function db(): Promise<IDBPDatabase<AGSchema>> {
           spacedReviews.createIndex('nextDueDate', 'nextDueDate');
           spacedReviews.createIndex('status', 'status');
         }
+
+        if (oldVersion < 3) {
+          // 增量镜像：老库直接建空表，首次读取时按 epoch 全量灌入
+          dbi.createObjectStore('mirror', { keyPath: ['store', 'id'] });
+        }
       },
     });
   }
   return dbPromise;
 }
 
-// ============ 通用 CRUD（D1 直连） ============
+// ============ 增量镜像（IndexedDB） ============
+//
+// 改造前：每次 `getAllRecords` 都把整表拉一遍（trainings 3.5k 行），
+// 一个页面有七八处读取就是七八次整表传输，既慢又烧 D1 读配额。
+// 改造后：本地留一份镜像，之后每次读只拉「水位之后的行 + 删除墓碑」。
+//
+// 一致性保障：
+// - 写入/删除成功后同步更新镜像，本端不会被自己的旧数据覆盖
+// - 其他设备删记录 → 服务端墓碑 → 增量下发（见 migrations/0009）
+// - 整体清空/备份恢复 → 服务端 '*' 墓碑 → 客户端清镜像后从 epoch 全量
+// - 同步失败（隐私模式、配额、旧库）不影响主流程：直接退回整表拉取
+
+const SYNC_TTL_MS = 2000;
+const MIRROR_META_PREFIX = 'mirror-meta:';
+const mirrorMetaKey = (store: StoreName): string => `${MIRROR_META_PREFIX}${store}`;
+
+interface MirrorMeta {
+  /** 已同步到的时间水位（store 的 updated_at 列） */
+  watermark: string;
+  /** 本端上次成功同步的时刻，用于 TTL 合并同一轮渲染的多次读取 */
+  syncedAt: number;
+}
+
+const syncInflight = new Map<StoreName, Promise<void>>();
+let syncDoneAt = new Map<StoreName, number>();
+
+/** 无 IndexedDB 的环境（node 测试、隐私模式）退回整表拉取 */
+function mirrorSupported(): boolean {
+  return typeof indexedDB !== 'undefined';
+}
+
+/** 复合主键 [store, id] 的区间：'store' 下所有行 */
+function mirrorRange(store: StoreName): IDBKeyRange {
+  return IDBKeyRange.bound([store, ''], [store, '\uffff']);
+}
+
+async function readMirrorMeta(store: StoreName): Promise<MirrorMeta | undefined> {
+  const dbi = await db();
+  const row = await dbi.get('meta', mirrorMetaKey(store));
+  const value = row?.value as MirrorMeta | undefined;
+  return value && typeof value.watermark === 'string' ? value : undefined;
+}
+
+async function readMirrorRows<S extends StoreName>(store: S): Promise<StoreValue<S>[]> {
+  const dbi = await db();
+  const rows = await dbi.getAll('mirror', mirrorRange(store));
+  return rows.map((row) => row.value as StoreValue<S>);
+}
+
+function recordId(row: unknown): string | undefined {
+  const id = (row as { id?: unknown } | null)?.id;
+  return typeof id === 'string' && id.length > 0 ? id : undefined;
+}
+
+/** 整表替换（首次同步 / 服务端整体重建） */
+async function replaceMirror<S extends StoreName>(
+  store: S,
+  rows: StoreValue<S>[],
+  watermark: string,
+): Promise<void> {
+  const dbi = await db();
+  const tx = dbi.transaction(['mirror', 'meta'], 'readwrite');
+  const mirror = tx.objectStore('mirror');
+  await mirror.delete(mirrorRange(store));
+  const puts = rows.flatMap((row) => {
+    const id = recordId(row);
+    return id ? [mirror.put({ store, id, value: row })] : [];
+  });
+  await Promise.all(puts);
+  await tx.objectStore('meta').put({
+    key: mirrorMetaKey(store),
+    value: { watermark, syncedAt: Date.now() } satisfies MirrorMeta,
+  });
+  await tx.done;
+}
+
+/** 增量应用：先删后写（见 syncMirror.planDeltaApply 的顺序约定） */
+async function applyMirrorDelta<S extends StoreName>(
+  store: S,
+  delta: StoreDelta<StoreValue<S>>,
+  previousWatermark: string,
+): Promise<void> {
+  const plan = planDeltaApply(delta);
+  const watermark = nextWatermark(previousWatermark, delta.watermark, false);
+  const dbi = await db();
+  const tx = dbi.transaction(['mirror', 'meta'], 'readwrite');
+  const mirror = tx.objectStore('mirror');
+  await Promise.all([
+    ...plan.deleteIds.map((id) => mirror.delete([store, id])),
+    ...plan.upserts.flatMap((row) => {
+      const id = recordId(row);
+      return id ? [mirror.put({ store, id, value: row })] : [];
+    }),
+  ]);
+  await tx.objectStore('meta').put({
+    key: mirrorMetaKey(store),
+    value: { watermark, syncedAt: Date.now() } satisfies MirrorMeta,
+  });
+  await tx.done;
+}
+
+/** 把某张表同步到最新（首次全量 / 水位增量） */
+async function syncMirrorStore<S extends StoreName>(store: S): Promise<void> {
+  if (Date.now() - (syncDoneAt.get(store) ?? 0) < SYNC_TTL_MS) return;
+  const inflight = syncInflight.get(store);
+  if (inflight) return inflight;
+
+  const run = (async () => {
+    const meta = await readMirrorMeta(store);
+    const delta = await d1.listStoreDelta<StoreValue<S>>(store, meta?.watermark ?? SYNC_EPOCH);
+    const plan = planDeltaApply(delta);
+    if (!meta || plan.reset) {
+      // 首次同步，或服务端告知「整表被清空/重建」→ 从 epoch 重新全量
+      const full = meta ? await d1.listStoreDelta<StoreValue<S>>(store, SYNC_EPOCH) : delta;
+      await replaceMirror(store, full.records, full.watermark);
+      return;
+    }
+    await applyMirrorDelta(store, delta, meta.watermark);
+  })();
+
+  syncInflight.set(store, run);
+  try {
+    await run;
+    syncDoneAt.set(store, Date.now());
+  } finally {
+    syncInflight.delete(store);
+  }
+}
+
+/** 读表：镜像优先，失败退回整表拉取 */
+async function readStore<S extends StoreName>(store: S): Promise<StoreValue<S>[]> {
+  if (!mirrorSupported()) return d1.listRecords<StoreValue<S>>(store);
+  try {
+    await syncMirrorStore(store);
+    return await readMirrorRows(store);
+  } catch {
+    return d1.listRecords<StoreValue<S>>(store);
+  }
+}
+
+/**
+ * 本端写完把该表标记为「待同步」，下次读取立即做一次增量。
+ *
+ * 这里**不做乐观写入镜像**：服务端对 PUT/bulk 是 lastWriteWins（updated_at 更旧的不覆盖），
+ * 乐观写会让镜像留下服务端并未接受的版本，而增量水位再也纠正不回来。
+ * 直接让下次读取走增量，拿到的就是服务端真相，代价只是一次很小的请求。
+ */
+function markStoreStale(store: StoreName): void {
+  syncDoneAt.delete(store);
+}
+
+/**
+ * 丢弃本地镜像（备份恢复、整库清空、导入之后调用）。
+ *
+ * 这些操作改的是「整个结果集」，增量水位无法表达（导入的行可能带更旧的 updatedAt），
+ * 所以直接让镜像失效，下次读取从 epoch 重新全量。
+ */
+export async function invalidateSyncedData(): Promise<void> {
+  syncDoneAt = new Map();
+  if (!mirrorSupported()) return;
+  try {
+    const dbi = await db();
+    const tx = dbi.transaction(['mirror', 'meta'], 'readwrite');
+    await tx.objectStore('mirror').clear();
+    const metaStore = tx.objectStore('meta');
+    let cursor = await metaStore.openCursor();
+    while (cursor) {
+      if (String(cursor.key).startsWith(MIRROR_META_PREFIX)) await cursor.delete();
+      cursor = await cursor.continue();
+    }
+    await tx.done;
+  } catch {
+    // 清不掉也只是下次多拉一次全量
+  }
+}
+
+// ============ 通用 CRUD（D1 直连 + 本地镜像） ============
 
 type StoreValue<S extends StoreName> = AGSchema[S]['value'];
 
@@ -337,6 +536,7 @@ function filterForActiveScope<S extends StoreName>(store: S, list: StoreValue<S>
 
 export async function putRecord<S extends StoreName>(store: S, value: StoreValue<S>): Promise<void> {
   await d1.putRecord(store, stampForActiveScope(store, value) as StoreValue<S> & { id: string });
+  markStoreStale(store);
 }
 
 export async function getRecord<S extends StoreName>(store: S, id: string): Promise<StoreValue<S> | undefined> {
@@ -346,17 +546,19 @@ export async function getRecord<S extends StoreName>(store: S, id: string): Prom
 }
 
 export async function getAllRecords<S extends StoreName>(store: S): Promise<StoreValue<S>[]> {
-  const list = await d1.listRecords<StoreValue<S>>(store);
+  const list = await readStore(store);
   return filterForActiveScope(store, list);
 }
 
 export async function deleteRecord<S extends StoreName>(store: S, id: string): Promise<void> {
   await d1.deleteRecord(store, id);
+  markStoreStale(store);
 }
 
 export async function bulkPut<S extends StoreName>(store: S, records: StoreValue<S>[]): Promise<void> {
   const stamped = records.map((record) => stampForActiveScope(store, record));
   await d1.bulkPut(store, stamped as (StoreValue<S> & { id: string })[]);
+  markStoreStale(store);
 }
 
 // ============ 领域查询辅助 ============
@@ -445,4 +647,5 @@ export async function setMeta(key: string, value: unknown): Promise<void> {
 
 export async function clearAllBusinessData(): Promise<void> {
   await d1.clearWorkspace();
+  await invalidateSyncedData();
 }

@@ -18,6 +18,7 @@ const USERS_COLUMNS = [
 const SESSIONS_COLUMNS = ['id', 'user_id', 'token_hash', 'expires_at', 'created_at'];
 const ATTEMPTS_COLUMNS = ['id', 'client_key', 'succeeded', 'created_at'];
 const BACKUP_COLUMNS = ['id', 'account_id', 'created_at', 'data'];
+const STORE_DELETIONS_COLUMNS = ['workspace', 'store', 'id', 'deleted_at'];
 
 function fakeDb(options: { current: boolean; batchError?: boolean }) {
   const writes: string[] = [];
@@ -56,12 +57,18 @@ function fakeDb(options: { current: boolean; batchError?: boolean }) {
                   ? ATTEMPTS_COLUMNS
                   : table === 'sync_backups'
                     ? BACKUP_COLUMNS
-                    : STORE_COLUMNS;
+                    : table === 'store_deletions'
+                      ? STORE_DELETIONS_COLUMNS
+                      : STORE_COLUMNS;
           return { success: true, results: columns.map((name) => ({ name })) };
         }
         return {
           success: true,
-          results: [{ name: 'idx_sessions_expires' }, { name: 'idx_auth_attempts_client_created' }],
+          results: [
+            { name: 'idx_sessions_expires' },
+            { name: 'idx_auth_attempts_client_created' },
+            { name: 'idx_store_deletions_ws_store_time' },
+          ],
         };
       });
     },
