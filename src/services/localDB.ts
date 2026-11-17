@@ -46,6 +46,7 @@ import {
   type ScopeAwareRecord,
 } from '../domains/shared/scope';
 import * as d1 from './d1Client';
+import { normalizeStoreRecord, normalizeStoreRecords } from './recordNormalize';
 import {
   nextWatermark,
   planDeltaApply,
@@ -563,12 +564,14 @@ export async function putRecord<S extends StoreName>(store: S, value: StoreValue
 export async function getRecord<S extends StoreName>(store: S, id: string): Promise<StoreValue<S> | undefined> {
   const record = await d1.getRecord<StoreValue<S>>(store, id);
   if (!record) return record;
-  return filterForActiveScope(store, [record])[0];
+  const [scoped] = filterForActiveScope(store, [record]);
+  if (!scoped) return undefined;
+  return normalizeStoreRecord(store, scoped) as StoreValue<S>;
 }
 
 export async function getAllRecords<S extends StoreName>(store: S): Promise<StoreValue<S>[]> {
-  const list = await readStore(store);
-  return filterForActiveScope(store, list);
+  const list = filterForActiveScope(store, await readStore(store));
+  return normalizeStoreRecords(store, list);
 }
 
 export async function deleteRecord<S extends StoreName>(store: S, id: string): Promise<void> {

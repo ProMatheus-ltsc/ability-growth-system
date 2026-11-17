@@ -28,6 +28,19 @@ import { INTERVIEW_QUESTION_TYPES, SHENLUN_QUESTION_TYPES, scoreToLevel, TRAININ
 import { displayQuestionType, isClassifiedType } from '../domain/subjectiveQuestion';
 import { buildAbilityPath, inferErrorCategories } from '../domain/abilityPath';
 import { validateAbilityPath } from '../domain/abilityPathGuard';
+
+/**
+ * 错因数组安全访问。
+ *
+ * 历史训练记录里 `errorCategories` 可能整个字段缺失（类型上却是必填数组），
+ * 统计函数直接 `for (const c of r.errorCategories)` 会抛
+ * `undefined is not an object` → 首页渲染期崩溃 → 整页白屏（2026-11-17 事故）。
+ * 读出口已在 localDB 统一补齐，这里再做一层兜底：统计函数是纯函数，
+ * 也可能被导入、备份恢复、测试直接喂未归一化的数据。
+ */
+function categoriesOf(record: { errorCategories?: ErrorCategory[] } | null | undefined): ErrorCategory[] {
+  return Array.isArray(record?.errorCategories) ? record.errorCategories : [];
+}
 import { getRadarDimensions } from '../domain/abilityTags';
 import { normalizeAbilityPath, normalizeModule, pathBelongsToModule } from '../domain/moduleNormalize';
 import { isStandardMinutesInferred } from '../domain/paperStructure';
@@ -119,7 +132,7 @@ export function aggregateBySubject(rawRecords: TrainingRecord[]): SubjectStats[]
 
     const errorCounter = new Map<ErrorCategory, number>();
     for (const r of list) {
-      for (const cat of r.errorCategories) {
+      for (const cat of categoriesOf(r)) {
         errorCounter.set(cat, (errorCounter.get(cat) ?? 0) + 1);
       }
     }
@@ -811,9 +824,10 @@ export function flattenSubjectiveQuestions(records: SubjectiveAnswer[]): Subject
     const answeredAt = r.answeredAt ?? r.createdAt ?? `${r.date}T00:00:00.000Z`;
     if (r.mode === 'paper') {
       const source = r.paperSource ?? r.paperTitle;
-      const recordErrors = r.errorCategories ?? [];
-      for (const q of r.paperQuestions ?? []) {
-        const questionErrors = q.errorCategories ?? [];
+      const recordErrors = categoriesOf(r);
+      for (const q of Array.isArray(r.paperQuestions) ? r.paperQuestions : []) {
+        if (!q) continue; // 历史数据里分题可能整条是 null
+        const questionErrors = categoriesOf(q);
         const scoreValid =
           typeof q.score === 'number' && Number.isFinite(q.score) &&
           typeof q.fullMark === 'number' && Number.isFinite(q.fullMark) && q.fullMark > 0;
@@ -853,7 +867,7 @@ export function flattenSubjectiveQuestions(records: SubjectiveAnswer[]): Subject
       dims: r.dimensionScores ?? {},
       rated: hasAnyDimension(r.dimensionScores),
       isPaperQuestion: false,
-      errorCategories: r.errorCategories ?? [],
+      errorCategories: categoriesOf(r),
       errorInherited: false,
     });
   }
@@ -1437,7 +1451,7 @@ export function buildStageReport(records: TrainingRecord[], gaps: AbilityGap[], 
 
   const errorMap = new Map<ErrorCategory, number>();
   for (const r of scoped) {
-    for (const c of r.errorCategories) errorMap.set(c, (errorMap.get(c) ?? 0) + 1);
+    for (const c of categoriesOf(r)) errorMap.set(c, (errorMap.get(c) ?? 0) + 1);
   }
   const errorRecurrence = Array.from(errorMap.entries())
     .map(([category, count]) => ({ category, rate: scoped.length === 0 ? 0 : +(count / scoped.length).toFixed(2) }))
@@ -1579,7 +1593,7 @@ export function detectFeedbackLoops(records: TrainingRecord[], gaps: AbilityGap[
   const errorMap = new Map<ErrorCategory, { weeks: Set<string>; count: number }>();
   for (const r of records) {
     if (new Date(r.date).getTime() < eightWeeksAgo) continue;
-    for (const c of r.errorCategories) {
+    for (const c of categoriesOf(r)) {
       const entry = errorMap.get(c) ?? { weeks: new Set(), count: 0 };
       entry.weeks.add(weekKey(r.date));
       entry.count += 1;
