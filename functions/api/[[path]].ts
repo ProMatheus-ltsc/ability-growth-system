@@ -1164,6 +1164,11 @@ async function handle(request: Request, env: Env): Promise<Response> {
     if (segments.length < 2 || !isStore(segments[1])) return fail('未知的数据表', 404);
     const store = segments[1];
 
+    // 尾部斜杠（`/api/stores/trainings/`）会被 pathname 归一化成正斜杠形式，
+    // 于是「取单条」被误判成「列表」并返回数组 —— 客户端把数组当记录用就是渲染期崩溃。
+    // 契约上单条读取必须有 id，这里直接拒绝，不再静默返回整表。
+    if (url.pathname.endsWith('/')) return fail('缺少记录 id', 400);
+
     if (segments.length === 2 && method === 'GET') {
       // 带 since = 增量（首屏全量用 since=1970-01-01，走同一条路径拿水位）
       const since = url.searchParams.get('since');

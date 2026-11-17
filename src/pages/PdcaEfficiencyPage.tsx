@@ -7,15 +7,14 @@ import { Zap, TrendingUp, AlertOctagon, Trophy } from 'lucide-react';
 import { ResponsiveGrid, TableScroll } from '@shared/core';
 import { PageHeader } from '../components/PageHeader';
 import { EmptyState } from '../components/EmptyState';
-import { getAllRecords } from '../services/localDB';
-import { analyzeCycleEfficiency } from '../services/pdca';
+import { analyzeCycleEfficiency, loadProblems } from '../services/pdca';
 import { PDCA_STAGE_LABEL, type PDCAProblem } from '../domain/types';
 
 export function PdcaEfficiencyPage() {
   const [problems, setProblems] = useState<PDCAProblem[]>([]);
 
   useEffect(() => {
-    void getAllRecords('pdcaProblems').then(setProblems);
+    void loadProblems().then(setProblems);
   }, []);
 
   const stats = useMemo(() => analyzeCycleEfficiency(problems), [problems]);

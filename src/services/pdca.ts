@@ -22,7 +22,62 @@ import type {
   SensorySignalMethod,
   WeeklyChecklist,
 } from '../domain/types';
-import { getAllRecords, putRecord } from './localDB';
+import { getAllRecords, getRecord, putRecord } from './localDB';
+
+/**
+ * 历史 PDCA 记录的结构归一化。
+ *
+ * V5.8 之后的版本陆续给问题加了 `rootCauses` / `countermeasures` / `checkEntries`
+ * 等数组字段，但**更早创建的记录里这些字段是 undefined**。读侧只要直接
+ * `for (const c of problem.rootCauses)` 或 `.map()` 就会抛
+ * `TypeError: ... is not iterable`，而这个异常发生在渲染期 →
+ * 整棵 React 树卸载 → **白屏**（刷新、点进详情都白屏，且没有任何可读提示）。
+ *
+ * 所以读入口统一补齐：缺数组补 []，缺标量补默认值。写侧不动，
+ * 保证「读到的老数据能正常展示，用户一保存就自愈成新结构」。
+ */
+export function normalizeProblem(raw: PDCAProblem): PDCAProblem {
+  const asArray = <T,>(value: unknown): T[] => (Array.isArray(value) ? (value as T[]) : []);
+  return {
+    ...raw,
+    currentStage: raw.currentStage ?? 'p1-define',
+    currentCycle: raw.currentCycle ?? 1,
+    status: raw.status ?? 'active',
+    stageEnteredAt: raw.stageEnteredAt ?? raw.createdAt ?? new Date().toISOString(),
+    rootCauses: asArray<PDCARootCause>(raw.rootCauses),
+    countermeasures: asArray<PDCACountermeasure>(raw.countermeasures),
+    checkEntries: asArray<PDCACheckEntry>(raw.checkEntries),
+    archivedLessons: asArray<string>(raw.archivedLessons),
+    cycleHistory: Array.isArray(raw.cycleHistory) ? raw.cycleHistory : [],
+    sensorySignals: asArray<SensorySignalMethod>(raw.sensorySignals),
+  };
+}
+
+/**
+ * 服务层内部的数组访问器：即使调用方绕过了 `normalizeProblem`（例如历史调用点、
+ * 或者别人拼出来的半个对象），也不会再抛「is not iterable」把整个页面打白。
+ */
+function rootCausesOf(problem: PDCAProblem): PDCARootCause[] {
+  return Array.isArray(problem.rootCauses) ? problem.rootCauses : [];
+}
+
+function countermeasuresOf(problem: PDCAProblem): PDCACountermeasure[] {
+  return Array.isArray(problem.countermeasures) ? problem.countermeasures : [];
+}
+
+/** 读单个问题（已归一化）；找不到返回 undefined，不再把异常抛到渲染期 */
+export async function loadProblem(id: string): Promise<PDCAProblem | undefined> {
+  if (!id) return undefined;
+  const raw = await getRecord('pdcaProblems', id);
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  return normalizeProblem(raw);
+}
+
+/** 读全部问题（已归一化） */
+export async function loadProblems(): Promise<PDCAProblem[]> {
+  const list = await getAllRecords('pdcaProblems');
+  return list.map(normalizeProblem);
+}
 
 const STAGE_ORDER: PDCAStage[] = [
   'p1-define',
@@ -33,29 +88,34 @@ const STAGE_ORDER: PDCAStage[] = [
   'a-act',
 ];
 
+/** 历史记录里这些文本字段也可能缺失，统一按空串处理 */
+function text(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
 /** 验证阶段流转合法性 */
 export function canAdvance(problem: PDCAProblem): { ok: boolean; reason?: string } {
   switch (problem.currentStage) {
     case 'p1-define':
-      if (!problem.description.trim() || !problem.targetState.trim() || !problem.successCriteria.trim()) {
+      if (!text(problem.description) || !text(problem.targetState) || !text(problem.successCriteria)) {
         return { ok: false, reason: 'P1 需要填写:问题描述 / 目标状态 / 衡量标准' };
       }
       break;
     case 'p2-root-cause':
-      if (problem.rootCauses.length === 0) {
+      if (rootCausesOf(problem).length === 0) {
         return { ok: false, reason: 'P2 需要至少记录 1 条根因' };
       }
       break;
     case 'p3-countermeasure':
-      if (problem.countermeasures.length === 0) {
+      if (countermeasuresOf(problem).length === 0) {
         return { ok: false, reason: 'P3 需要至少 1 条对策' };
       }
-      if (problem.countermeasures.some((c) => !c.scheduledDate)) {
+      if (countermeasuresOf(problem).some((c) => !c.scheduledDate)) {
         return { ok: false, reason: '所有对策必须指定执行日期' };
       }
       break;
     case 'd-execute':
-      if (problem.countermeasures.every((c) => c.status !== 'done')) {
+      if (countermeasuresOf(problem).every((c) => c.status !== 'done')) {
         return { ok: false, reason: 'D 阶段需要至少一条对策标记完成' };
       }
       break;
@@ -210,7 +270,7 @@ export function addRootCause(
   };
   return {
     ...problem,
-    rootCauses: [...problem.rootCauses, cause],
+    rootCauses: [...rootCausesOf(problem), cause],
     updatedAt: new Date().toISOString(),
   };
 }
@@ -235,7 +295,7 @@ export function validateInformationTypes(problem: PDCAProblem): {
   warnings: string[];
 } {
   const warnings: string[] = [];
-  for (const c of problem.rootCauses) {
+  for (const c of rootCausesOf(problem)) {
     if (c.informationType === 'evaluative' && !c.evaluationCriterion?.trim()) {
       warnings.push(`评价信息 "${c.content.slice(0, 18)}…" 缺少评价标准`);
     }
@@ -252,10 +312,10 @@ export function validateMeceCompleteness(problem: PDCAProblem): {
   warnings: string[];
 } {
   const warnings: string[] = [];
-  if (problem.meceStructure === 'parallel' && problem.rootCauses.length < 2) {
+  if (problem.meceStructure === 'parallel' && rootCausesOf(problem).length < 2) {
     warnings.push('并列结构需要至少 2 条互斥的子根因');
   }
-  if (problem.meceStructure === 'serial' && problem.rootCauses.length > 3) {
+  if (problem.meceStructure === 'serial' && rootCausesOf(problem).length > 3) {
     warnings.push('直列结构一般为单一主因链, 出现多条根因时建议切换为并列型');
   }
   return { ok: warnings.length === 0, warnings };
@@ -357,9 +417,9 @@ export function checkStretchZone(problem: PDCAProblem): {
   status: 'stretch' | 'comfort' | 'panic' | 'unknown';
   message: string;
 } {
-  const total = problem.countermeasures.length;
+  const total = countermeasuresOf(problem).length;
   if (total === 0) return { status: 'unknown', message: '尚无对策' };
-  const done = problem.countermeasures.filter((c) => c.status === 'done').length;
+  const done = countermeasuresOf(problem).filter((c) => c.status === 'done').length;
   const rate = done / total;
   if (rate === 1 && total > 2) return { status: 'comfort', message: '全部对策完成过于顺利, 可能在舒适区, 建议提高挑战性' };
   if (rate === 0 && problem.currentStage === 'd-execute') return { status: 'panic', message: '执行长期未推进, 可能对策难度过大(困难区), 建议拆分或降级' };
@@ -497,7 +557,7 @@ export function canAddMadHatter(problem: PDCAProblem): boolean {
 
 /** V5.11 · 进度统计口径:排除疯帽匠对策 */
 export function getEffectiveCountermeasures(problem: PDCAProblem): PDCACountermeasure[] {
-  return problem.countermeasures.filter((c) => !c.isMadHatter);
+  return countermeasuresOf(problem).filter((c) => !c.isMadHatter);
 }
 
 /* ============================================================

@@ -30,9 +30,9 @@ import clsx from 'clsx';
 import { CalendarDays, ArrowLeft, ChevronLeft, ChevronRight, Filter, Briefcase, X } from 'lucide-react';
 import { PageHeader } from './PageHeader';
 import { EmptyState } from './EmptyState';
-import { getAllRecords, getRecord, putRecord } from '../services/localDB';
+import { getAllRecords, putRecord } from '../services/localDB';
 import { collectExamTargets } from '../services/planner';
-import { rescheduleCountermeasure } from '../services/pdca';
+import { rescheduleCountermeasure, loadProblem, loadProblems } from '../services/pdca';
 import { useToast } from '@shared/core';
 import {
   LIFE_DOMAIN_LABEL,
@@ -160,7 +160,7 @@ export function PdcaCalendarBoard({
 
   const loadData = async () => {
     const [p, r, s, t] = await Promise.all([
-      getAllRecords('pdcaProblems'),
+      loadProblems(),
       getAllRecords('registrations'),
       getAllRecords('stagePlans'),
       getAllRecords('tasks'),
@@ -181,7 +181,7 @@ export function PdcaCalendarBoard({
   const handleDrop = async (targetDate: string) => {
     const drag = dragRef.current;
     if (!drag) return;
-    const problem = await getRecord('pdcaProblems', drag.problemId);
+    const problem = await loadProblem(drag.problemId);
     if (!problem) return;
     const updated = rescheduleCountermeasure(problem, drag.eventId, targetDate);
     await putRecord('pdcaProblems', updated);

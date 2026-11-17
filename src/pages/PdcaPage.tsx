@@ -5,8 +5,8 @@ import { useToast } from '@shared/core';
 import { PageHeader } from '../components/PageHeader';
 import { EmptyState } from '../components/EmptyState';
 import { useAppSession } from '../hooks/useAppSession';
-import { getAllRecords, deleteRecord } from '../services/localDB';
-import { computeStallRisk, createProblem, saveProblem, detectClosureObstacle } from '../services/pdca';
+import { deleteRecord } from '../services/localDB';
+import { computeStallRisk, createProblem, saveProblem, detectClosureObstacle, loadProblems } from '../services/pdca';
 import type { PDCARootCause, InformationType } from '../domain/types';
 import { INFORMATION_TYPE_LABEL, INFORMATION_TYPE_ARGUMENT } from '../domain/types';
 import { v4 as uuid } from 'uuid';
@@ -86,7 +86,7 @@ export function PdcaPage() {
   const [statusFilter, setStatusFilter] = useState<'active' | 'archived' | 'all'>('active');
 
   const refresh = useCallback(async () => {
-    const all = await getAllRecords('pdcaProblems');
+    const all = await loadProblems();
     setList(all.filter((p) => (prefs.currentStudentId ? p.studentId === prefs.currentStudentId : true)));
   }, [prefs.currentStudentId]);
 

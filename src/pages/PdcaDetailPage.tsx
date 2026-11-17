@@ -4,7 +4,6 @@ import { ArrowLeft, X, CheckCircle2, AlertOctagon, ExternalLink, RefreshCw, Spar
 import { useToast } from '@shared/core';
 import { PageHeader } from '../components/PageHeader';
 import { EmptyState } from '../components/EmptyState';
-import { getRecord } from '../services/localDB';
 import {
   addCheckEntry,
   addCountermeasure,
@@ -21,6 +20,7 @@ import {
   saveProblem,
   updateCountermeasureStatus,
   validateInformationTypes,
+  loadProblem,
   canAddMadHatter,
   getEffectiveCountermeasures,
   MAD_HATTER_BUDGET_RATIO,
@@ -61,7 +61,7 @@ export function PdcaDetailPage() {
   const [appendLessonInput, setAppendLessonInput] = useState('');
 
   const refresh = useCallback(async () => {
-    const p = await getRecord('pdcaProblems', id);
+    const p = await loadProblem(id);
     setProblem(p ?? null);
     setArtifacts(await listArtifacts(id));
     setCustomTools(await listCustomTools());

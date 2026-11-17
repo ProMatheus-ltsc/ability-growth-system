@@ -28,6 +28,9 @@ function reportError(message: string): void {
   if (lastError.message === message && now - lastError.at < 3000) return;
   lastError = { message, at: now };
   pendingError = message;
+  // 没有 window（单元测试 / 非浏览器环境）时只留在 pendingError 上；
+  // 否则这里会抛 ReferenceError，把真正的错误盖掉，排查时看到的全是无关异常。
+  if (typeof window === 'undefined') return;
   window.dispatchEvent(new CustomEvent(ERROR_EVENT, { detail: message }));
 }
 
@@ -78,7 +81,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
       // 保留默认消息
     }
     if (response.status === 401 && notifyUnauthorized) {
-      window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT));
+      if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT));
     } else {
       reportError(message);
     }
@@ -175,8 +178,14 @@ export async function listStoreDelta<T>(store: StoreName, since: string): Promis
 }
 
 export async function getRecord<T>(store: StoreName, id: string): Promise<T | undefined> {
+  // 空 id 会拼成 `/api/stores/<store>/`，服务端把它当「列表」处理并返回**数组**。
+  // 这个数组一路走到页面 state 里，页面再读 record.xxx 就是渲染期 TypeError → 白屏。
+  // 单条读取的契约是「记录对象或 undefined」，这里先把两种违约形状挡掉。
+  if (!id) return undefined;
   try {
-    return await request<T>(`/api/stores/${store}/${encodeURIComponent(id)}`);
+    const record = await request<unknown>(`/api/stores/${store}/${encodeURIComponent(id)}`);
+    if (!record || typeof record !== 'object' || Array.isArray(record)) return undefined;
+    return record as T;
   } catch (error) {
     if (error instanceof D1ApiError && error.status === 404) return undefined;
     throw error;

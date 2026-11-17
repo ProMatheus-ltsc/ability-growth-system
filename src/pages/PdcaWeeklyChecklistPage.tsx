@@ -9,7 +9,7 @@ import { useToast } from '@shared/core';
 import { PageHeader } from '../components/PageHeader';
 import { EmptyState } from '../components/EmptyState';
 import { getAllRecords, putRecord } from '../services/localDB';
-import { generateWeeklyChecklist } from '../services/pdca';
+import { generateWeeklyChecklist, loadProblems } from '../services/pdca';
 import { PDCA_STAGE_LABEL, type PDCAProblem, type WeeklyChecklist } from '../domain/types';
 
 export function PdcaWeeklyChecklistPage() {
@@ -19,7 +19,7 @@ export function PdcaWeeklyChecklistPage() {
   const [busy, setBusy] = useState(false);
 
   const refresh = useCallback(async () => {
-    const [wc, ps] = await Promise.all([getAllRecords('weeklyChecklists'), getAllRecords('pdcaProblems')]);
+    const [wc, ps] = await Promise.all([getAllRecords('weeklyChecklists'), loadProblems()]);
     setChecklists(wc.sort((a, b) => b.weekStart.localeCompare(a.weekStart)));
     setProblems(ps.filter((p) => p.status === 'active'));
   }, []);
