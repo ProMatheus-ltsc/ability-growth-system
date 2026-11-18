@@ -969,7 +969,7 @@ export function CareerReportView({ report, assessment, onBack }: Props) {
     <div className="space-y-5 max-w-4xl mx-auto report-print-root">
       <PageHeader
         title={`职业定位报告 v${assessment?.version ?? '1.0'}`}
-        description={`生成时间: ${report.generatedAt.slice(0, 19).replace('T', ' ')} · 主象限 ${CAREER_QUADRANT_LABEL[report.quadrant]}`}
+        description={`生成时间: ${report.generatedAt ? report.generatedAt.slice(0, 19).replace('T', ' ') : '未知'} · 主象限 ${CAREER_QUADRANT_LABEL[report.quadrant]}`}
         actions={
           <div className="flex items-center gap-2" data-print-hide="true">
             <button className="btn-secondary" onClick={exportPdf} title="导出为 PDF(浏览器打印对话框中选择『另存为 PDF』)">

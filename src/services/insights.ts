@@ -20,6 +20,7 @@ import { ERROR_CATEGORY_LABEL, SUBJECT_LABEL, TRAINING_TYPE_LABEL } from '../dom
 import { analyzeTrainingROI, computeMasteryScore, prioritizeGaps, selectAggregationRecords } from './analytics';
 import { ALL_TRANSFERS, findStrongTransferSources, TRANSFER_STRENGTH_LABEL } from '../domain/abilityTransfer';
 import { INFO_INSUFFICIENT } from '../domain/missingInfo';
+import { abilityPathTail } from '../domain/abilityPath';
 
 // ============ 智能训练策略推荐 ============
 
@@ -49,7 +50,8 @@ export function recommendStrategies(records: TrainingRecord[], gaps: AbilityGap[
   const priorityGaps = prioritizeGaps(gaps.filter((g) => g.status === 'unresolved'));
   const seriousGap = priorityGaps.find((g) => g.severity === 'serious');
   if (seriousGap) {
-    const point = seriousGap.abilityPath.split('/').slice(-1)[0];
+    // 历史缺口可能没有 abilityPath（字段是后加的）：给可读文案，而不是崩在 split 上
+    const point = abilityPathTail(seriousGap.abilityPath) ?? '未标注能力';
     recs.push({
       strategy: 'break-loop',
       label: `攻克严重短板: ${point}`,
@@ -72,7 +74,8 @@ export function recommendStrategies(records: TrainingRecord[], gaps: AbilityGap[
 
   // 基于短板寻找强迁移源头
   for (const g of priorityGaps.slice(0, 3)) {
-    const point = g.abilityPath.split('/').slice(-1)[0];
+    const point = abilityPathTail(g.abilityPath);
+    if (!point) continue;
     const sources = findStrongTransferSources(point);
     if (sources.length > 0) {
       recs.push({
@@ -230,8 +233,8 @@ export function buildCausalGraph(records: TrainingRecord[], gaps: AbilityGap[]):
   const priorityGaps = prioritizeGaps(gaps.filter((g) => g.status !== 'verified')).slice(0, 6);
 
   for (const g of priorityGaps) {
-    const abilityId = `ab:${g.abilityPath}`;
-    add(abilityId, g.abilityPath.split('/').slice(-1)[0], 'ability');
+    const abilityId = `ab:${g.abilityPath ?? ''}`;
+    add(abilityId, abilityPathTail(g.abilityPath) ?? '未标注能力', 'ability');
 
     // 错误 → 能力
     const errorId = `er:${g.errorCategory}`;
@@ -348,7 +351,8 @@ export function findLeveragePoints(gaps: AbilityGap[]): Leverage[] {
   const priority = prioritizeGaps(gaps.filter((g) => g.status !== 'verified')).slice(0, 10);
   const leverages: Leverage[] = [];
   for (const g of priority) {
-    const point = g.abilityPath.split('/').slice(-1)[0];
+    const point = abilityPathTail(g.abilityPath);
+    if (!point) continue;
     const outs = ALL_TRANSFERS.filter((e) => e.from.includes(point) && (e.strength === 'strong' || e.strength === 'medium'));
     if (outs.length === 0) continue;
     const totalReach = outs.reduce((s, e) => s + (e.strength === 'strong' ? 2 : 1), 0);

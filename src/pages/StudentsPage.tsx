@@ -6,7 +6,7 @@ import { useAppSession } from '../hooks/useAppSession';
 import { findGaps, findTrainingsByStudent, getAllRecords, putRecord, deleteRecord } from '../services/localDB';
 import { PageHeader } from '../components/PageHeader';
 import { EmptyState } from '../components/EmptyState';
-import { aggregateBySubject, selectAggregationRecords } from '../services/analytics';
+import { aggregateBySubject, errorCountOf, questionCountOf, selectAggregationRecords } from '../services/analytics';
 import { MasteryBar } from '../components/MasteryBar';
 import {
   GRADE_LEVEL_LABEL,
@@ -127,8 +127,8 @@ function StudentCard({
     void Promise.all([findTrainingsByStudent(student.id), findGaps(student.id, 'unresolved')]).then(
       ([trainings, gaps]) => {
         const countable = selectAggregationRecords(trainings);
-        const q = countable.reduce((s, r) => s + r.totalQuestions, 0);
-        const err = countable.reduce((s, r) => s + r.errorCount, 0);
+        const q = countable.reduce((s, r) => s + questionCountOf(r), 0);
+        const err = countable.reduce((s, r) => s + errorCountOf(r), 0);
         setSummary({ questions: q, errors: err, gaps: gaps.length });
       },
     );

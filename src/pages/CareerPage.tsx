@@ -100,14 +100,14 @@ export function CareerPage() {
         <div className="space-y-3">
           <h2 className="text-base font-semibold text-slate-900">历史报告</h2>
           {reports
-            .sort((a, b) => b.generatedAt.localeCompare(a.generatedAt))
+            .sort((a, b) => (b.generatedAt ?? '').localeCompare(a.generatedAt ?? ''))
             .map((r) => (
               <div key={r.id} className="card p-4">
                 <div className="flex items-start justify-between">
                   <div className="flex-1">
                     <div className="flex items-center gap-2">
                       <FileText size={16} className="text-blue-600" />
-                      <span className="font-medium">职业定位报告 · {r.generatedAt.slice(0, 10)}</span>
+                      <span className="font-medium">职业定位报告 · {r.generatedAt ? r.generatedAt.slice(0, 10) : '生成时间未知'}</span>
                       <span className="badge bg-slate-100 text-slate-600">主象限 {r.quadrant}</span>
                     </div>
                     <div className="text-xs text-slate-500 mt-1">

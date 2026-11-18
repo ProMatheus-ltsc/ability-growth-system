@@ -58,7 +58,7 @@ export function StudentDetailPage() {
       </div>
 
       <PageHeader
-        title={`${student.name} · ${GRADE_LEVEL_LABEL[student.gradeLevel]}`}
+        title={`${student.name || '未命名学生'} · ${GRADE_LEVEL_LABEL[student.gradeLevel]}`}
         description={`学科: ${student.subjects.map((s) => SUBJECT_LABEL[s]).join(' / ')}${student.group ? ` · 分组: ${student.group}` : ''}`}
       />
 

@@ -26,7 +26,7 @@ import type {
 } from '../domain/types';
 import { INTERVIEW_QUESTION_TYPES, SHENLUN_QUESTION_TYPES, scoreToLevel, TRAINING_TYPE_LABEL } from '../domain/types';
 import { displayQuestionType, isClassifiedType } from '../domain/subjectiveQuestion';
-import { buildAbilityPath, inferErrorCategories } from '../domain/abilityPath';
+import { abilityPathTail, buildAbilityPath, inferErrorCategories } from '../domain/abilityPath';
 import { validateAbilityPath } from '../domain/abilityPathGuard';
 
 /**
@@ -80,12 +80,13 @@ export function computeMasteryScore(
  * 供 ROI、退步检测等「按时间段比较」的场景使用，避免与学科掌握度出现两套口径。
  */
 export function pooledMasteryScore(records: TrainingRecord[]): number {
-  const q = records.reduce((s, r) => s + r.totalQuestions, 0);
-  const err = records.reduce((s, r) => s + r.errorCount, 0);
+  const measured = records.filter(isMeasured);
+  const q = records.reduce((s, r) => s + questionCountOf(r), 0);
+  const err = measured.reduce((s, r) => s + errorCountOf(r), 0);
   const correctRate = q === 0 ? 0 : (q - err) / q;
-  const unfamiliar = records.filter((r) => r.isUnfamiliar);
-  const uq = unfamiliar.reduce((s, r) => s + r.totalQuestions, 0);
-  const uerr = unfamiliar.reduce((s, r) => s + r.errorCount, 0);
+  const unfamiliar = measured.filter((r) => r.isUnfamiliar);
+  const uq = unfamiliar.reduce((s, r) => s + questionCountOf(r), 0);
+  const uerr = unfamiliar.reduce((s, r) => s + errorCountOf(r), 0);
   return computeMasteryScore(correctRate, uq === 0 ? null : (uq - uerr) / uq);
 }
 
@@ -115,8 +116,8 @@ export function aggregateBySubject(rawRecords: TrainingRecord[]): SubjectStats[]
   }
   const stats: SubjectStats[] = [];
   for (const [subject, list] of bySubject) {
-    const totalQuestions = list.reduce((s, r) => s + r.totalQuestions, 0);
-    const totalErrors = list.reduce((s, r) => s + r.errorCount, 0);
+    const totalQuestions = list.reduce((s, r) => s + questionCountOf(r), 0);
+    const totalErrors = list.reduce((s, r) => s + errorCountOf(r), 0);
     const totalCorrect = totalQuestions - totalErrors;
     const totalDurationMinutes = list.reduce((s, r) => s + (r.durationMinutes ?? 0), 0);
     const correctRate = totalQuestions === 0 ? 0 : totalCorrect / totalQuestions;
@@ -124,8 +125,8 @@ export function aggregateBySubject(rawRecords: TrainingRecord[]): SubjectStats[]
     // V5.11 Bug #007 修复:陌生题正确率严格按 isUnfamiliar 标记的记录计算,
     // 若无陌生题样本则显式返回 null,UI 可显示"暂无陌生题数据",避免与整体正确率混淆。
     const unfamiliar = list.filter((r) => r.isUnfamiliar);
-    const unfamiliarQ = unfamiliar.reduce((s, r) => s + r.totalQuestions, 0);
-    const unfamiliarErr = unfamiliar.reduce((s, r) => s + r.errorCount, 0);
+    const unfamiliarQ = unfamiliar.reduce((s, r) => s + questionCountOf(r), 0);
+    const unfamiliarErr = unfamiliar.reduce((s, r) => s + errorCountOf(r), 0);
     const unfamiliarCorrectRate = unfamiliarQ === 0 ? null : (unfamiliarQ - unfamiliarErr) / unfamiliarQ;
     // 掌握度评分:陌生题占主导 (0.7),缺失时退化为整体正确率 (0.3 权重也归给整体)
     const masteryScore = computeMasteryScore(correctRate, unfamiliarCorrectRate);
@@ -163,11 +164,41 @@ export function aggregateBySubject(rawRecords: TrainingRecord[]): SubjectStats[]
  * 记录有效性：只排除数据质量问题（`duplicate`）与跨日期聚合行（`summary`）。
  * 结构角色全部由 `kind` / `attemptId` 决定；`scope` / `aggregationRole` / id 约定
  * 只在老记录缺 `kind` 时由 `resolveTrainingKind` 降级推导。
+ *
+ * 注意这里**不**按「有没有题量」过滤整条记录：缺题量的经历里往往还有用时、
+ * 日期等信息，整条丢掉会连用时统计一起丢。题量与错题数的取舍统一由
+ * `questionCountOf` / `errorCountOf` 成对处理（都取 0 就既不进分子也不进分母）。
  */
 export function selectValidRecords(records: TrainingRecord[]): TrainingRecord[] {
   return records.filter(
     (r) => r.validity !== 'duplicate' && resolveTrainingKind(r) !== 'summary',
   );
+}
+
+/** 题量与错题数都是有效数字才算统计样本（缺失 = 未知，不当 0） */
+export function isMeasured(record: TrainingRecord): boolean {
+  return (
+    typeof record.totalQuestions === 'number' &&
+    Number.isFinite(record.totalQuestions) &&
+    record.totalQuestions > 0 &&
+    typeof record.errorCount === 'number' &&
+    Number.isFinite(record.errorCount)
+  );
+}
+
+/**
+ * 统计用题量 / 错题数：**成对取值**。
+ *
+ * 不可测的样本两条都是 0，于是既不进分母也不进分子 —— 正确率不会被「未知」污染，
+ * 而它的用时、日期仍然照常参与其它统计（所以不能整条过滤掉记录）。
+ * 与 `tests/dataContract.test.ts` 的契约一致：缺失不当 0 分、不进入加权分母。
+ */
+export function questionCountOf(record: TrainingRecord): number {
+  return isMeasured(record) ? record.totalQuestions : 0;
+}
+
+export function errorCountOf(record: TrainingRecord): number {
+  return isMeasured(record) ? record.errorCount : 0;
 }
 
 function groupByAttempt(records: TrainingRecord[]): TrainingRecord[][] {
@@ -272,8 +303,8 @@ export function deriveExamModuleBreakdown(
     const module = normalizeModule(r.module, r.subject, r.gradeLevel);
     if (!module) continue;
     const group = groups.get(module) ?? { module, total: 0, errors: 0 };
-    group.total += r.totalQuestions;
-    group.errors += r.errorCount;
+    group.total += questionCountOf(r);
+    group.errors += errorCountOf(r);
     groups.set(module, group);
   }
   if (groups.size === 0) return null;
@@ -328,8 +359,8 @@ export function buildModuleStats(records: TrainingRecord[]): ModuleStatsItem[] {
 
   const stats: ModuleStatsItem[] = [];
   for (const { subject, module, list } of groups.values()) {
-    const totalQuestions = list.reduce((s, r) => s + r.totalQuestions, 0);
-    const totalErrors = list.reduce((s, r) => s + r.errorCount, 0);
+    const totalQuestions = list.reduce((s, r) => s + questionCountOf(r), 0);
+    const totalErrors = list.reduce((s, r) => s + errorCountOf(r), 0);
     const totalDurationMinutes = list.reduce((s, r) => s + (r.durationMinutes ?? 0), 0);
     const correctRate =
       totalQuestions === 0 ? null : (totalQuestions - totalErrors) / totalQuestions;
@@ -402,8 +433,8 @@ export function buildWeeklyDelta(records: TrainingRecord[], subject: Subject): W
   const previousWeek = weeks[1] ?? null;
 
   const summarize = (list: TrainingRecord[]) => {
-    const questions = list.reduce((s, r) => s + r.totalQuestions, 0);
-    const errors = list.reduce((s, r) => s + r.errorCount, 0);
+    const questions = list.reduce((s, r) => s + questionCountOf(r), 0);
+    const errors = list.reduce((s, r) => s + errorCountOf(r), 0);
     const duration = list.reduce((s, r) => s + (r.durationMinutes ?? 0), 0);
     const acc = questions === 0 ? 0 : +(((questions - errors) / questions) * 100).toFixed(1);
     return { questions, duration, acc };
@@ -1299,8 +1330,8 @@ export function buildRadarSlices(
       const moduleRecs = scoped.filter(
         (r) => dim.modules.some((m) => normalizeModule(r.module, subject, gradeLevel) === m),
       );
-      const q = moduleRecs.reduce((s, r) => s + r.totalQuestions, 0);
-      const err = moduleRecs.reduce((s, r) => s + r.errorCount, 0);
+      const q = moduleRecs.reduce((s, r) => s + questionCountOf(r), 0);
+      const err = moduleRecs.reduce((s, r) => s + errorCountOf(r), 0);
       score = q === 0 ? 50 : Math.round(((q - err) / q) * 100);
     }
     return {
@@ -1328,12 +1359,12 @@ export function buildGrowthSeries(records: TrainingRecord[], subject: Subject) {
   const raw = Array.from(buckets.entries())
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([week, list]) => {
-      const q = list.reduce((s, r) => s + r.totalQuestions, 0);
-      const err = list.reduce((s, r) => s + r.errorCount, 0);
+      const q = list.reduce((s, r) => s + questionCountOf(r), 0);
+      const err = list.reduce((s, r) => s + errorCountOf(r), 0);
       const score = q === 0 ? 0 : Math.round(((q - err) / q) * 100);
       const unfamiliarList = list.filter((r) => r.isUnfamiliar);
-      const uq = unfamiliarList.reduce((s, r) => s + r.totalQuestions, 0);
-      const ue = unfamiliarList.reduce((s, r) => s + r.errorCount, 0);
+      const uq = unfamiliarList.reduce((s, r) => s + questionCountOf(r), 0);
+      const ue = unfamiliarList.reduce((s, r) => s + errorCountOf(r), 0);
       const unfamiliar = uq === 0 ? score : Math.round(((uq - ue) / uq) * 100);
       return { week, score, unfamiliar, samples: q };
     });
@@ -1424,8 +1455,8 @@ export interface StageReport {
 
 export function buildStageReport(records: TrainingRecord[], gaps: AbilityGap[], fromDate: string, toDate: string): StageReport {
   const scoped = records.filter((r) => r.date >= fromDate && r.date <= toDate);
-  const totalQuestions = scoped.reduce((s, r) => s + r.totalQuestions, 0);
-  const totalErrors = scoped.reduce((s, r) => s + r.errorCount, 0);
+  const totalQuestions = scoped.reduce((s, r) => s + questionCountOf(r), 0);
+  const totalErrors = scoped.reduce((s, r) => s + errorCountOf(r), 0);
   const totalHours = +(scoped.reduce((s, r) => s + (r.durationMinutes ?? 0), 0) / 60).toFixed(1);
 
   const halfDate = new Date(new Date(fromDate).getTime() + (new Date(toDate).getTime() - new Date(fromDate).getTime()) / 2)
@@ -1460,7 +1491,7 @@ export function buildStageReport(records: TrainingRecord[], gaps: AbilityGap[], 
 
   const topBottlenecks = prioritizeGaps(gaps.filter((g) => g.status !== 'verified'))
     .slice(0, 3)
-    .map((g) => g.abilityPath.split('/').slice(-1)[0]);
+    .map((g) => abilityPathTail(g.abilityPath) ?? '未标注能力');
 
   const suggestions: string[] = [];
   if (totalHours < 5) suggestions.push('本阶段训练投入不足 5 小时，建议提高训练频次');

@@ -63,7 +63,7 @@ export function StudentComparePage() {
       const row: Record<string, unknown> = { subject: SUBJECT_LABEL[s] };
       rollups.forEach((r, i) => {
         row[r.student.name] = r.bySubject[s] ?? 0;
-        row[`${r.student.name}-color`] = COLORS[i % COLORS.length];
+        row[`${r.student.name || '未命名学生'}-color`] = COLORS[i % COLORS.length];
       });
       return row;
     });

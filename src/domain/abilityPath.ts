@@ -139,3 +139,16 @@ export function inferErrorCategories(record: TrainingRecord): ErrorCategory[] {
     first !== 'read' && /未定位|看错|审题|忽略/.test(note) ? 'read' : null;
   return second ? [first, second] : [first];
 }
+
+/**
+ * 能力路径的最后一段（"行测/资料分析/增长率" → "增长率"）。
+ *
+ * 历史 gaps 记录的 `abilityPath` 可能整个缺失（字段是后加的），直接 `.split('/')`
+ * 会抛 `Cannot read properties of undefined`。显示层需要的是"未标注能力"，不是崩溃，
+ * 也不是空字符串冒充一个真实能力点 —— 所以统一从这里取，缺失返回 null 由调用方决定文案。
+ */
+export function abilityPathTail(path: unknown): string | null {
+  if (typeof path !== 'string' || path.length === 0) return null;
+  const tail = path.split('/').slice(-1)[0];
+  return tail.length > 0 ? tail : null;
+}

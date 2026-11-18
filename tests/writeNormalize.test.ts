@@ -30,7 +30,7 @@ function fakeDb(writes: unknown[][]) {
 const storedJson = (writes: unknown[][], index = 0) => JSON.parse(writes[index][3] as string) as Record<string, unknown>;
 
 describe('写入边界 · 落库前补齐结构', () => {
-  it('空壳记录（只有 id）写入也会补齐必填字段', () => {
+  it('空壳记录（只有 id）写入：数组补齐，文本/数字保持缺失（不伪造）', () => {
     const writes: unknown[][] = [];
     const db = fakeDb(writes);
 
@@ -41,11 +41,12 @@ describe('写入边界 · 落库前补齐结构', () => {
     expect(data.countermeasures).toEqual([]);
     expect(data.checkEntries).toEqual([]);
     expect(data.cycleHistory).toEqual([]);
-    expect(data.title).toBe('');
-    expect(data.currentStage).toBe('');
+    // 业务上「不知道」的字段不写 0/空串，交给展示层显示「未知」
+    expect('title' in data).toBe(false);
+    expect('currentStage' in data).toBe(false);
   });
 
-  it('trainings 缺错因数组与题量时按读侧同一规则补齐（正确数由题量推导）', () => {
+  it('trainings 只补能验算的 correctCount，缺的 date 不填空串', () => {
     const writes: unknown[][] = [];
     const db = fakeDb(writes);
 
@@ -59,8 +60,9 @@ describe('写入边界 · 落库前补齐结构', () => {
 
     const data = storedJson(writes);
     expect(data.errorCategories).toEqual([]);
+    // 正确数由「总题量 - 错题数」验算，属于真值
     expect(data.correctCount).toBe(7);
-    expect(data.date).toBe('');
+    expect('date' in data).toBe(false);
   });
 
   it('嵌套的分题也补 errorCategories，避免摊平后二次崩溃', () => {

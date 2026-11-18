@@ -248,7 +248,7 @@ export function PdcaCalendarBoard({
           id: `due-${p.id}`,
           date: p.expectedDueAt.slice(0, 10),
           kind: 'milestone',
-          label: `里程碑：${p.title}`,
+          label: `里程碑：${p.title || '未命名问题'}`,
           to: `/pdca/detail?id=${p.id}`,
         });
       }
@@ -257,7 +257,7 @@ export function PdcaCalendarBoard({
           id: `check-${c.id}`,
           date: c.createdAt.slice(0, 10),
           kind: 'check',
-          label: `检查点：${p.title}`,
+          label: `检查点：${p.title || '未命名问题'}`,
           detail: c.nextAction,
           to: `/pdca/detail?id=${p.id}`,
         });
@@ -269,7 +269,7 @@ export function PdcaCalendarBoard({
         id: `task-${t.id}`,
         date: t.dueAt.slice(0, 10),
         kind: 'task',
-        label: `待办：${t.abilityPath}`,
+        label: `待办：${t.abilityPath || '未标注能力'}`,
         detail: t.type === 'fix' ? '修复任务' : '验证任务',
         to: '/problems',
       });

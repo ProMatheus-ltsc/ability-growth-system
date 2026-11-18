@@ -6,6 +6,7 @@ import {
   normalizeSubjectiveAnswer,
   normalizeTrainingRecord,
 } from '../src/services/recordNormalize';
+import { abilityPathTail } from '../src/domain/abilityPath';
 import type { TrainingRecord } from '../src/domain/types';
 
 type Loose<T> = Partial<Record<keyof T, unknown>>;
@@ -84,12 +85,15 @@ describe('读侧归一化规则', () => {
     expect(normalized.totalQuestions).toBe(20);
   });
 
-  it('题量字段缺失时按 0 兜底，避免整科汇总变 NaN', () => {
+  it('题量缺失时不伪造 0：字段保持缺失，统计层把它排除出分母', () => {
     const broken = legacyTraining({ totalQuestions: undefined, errorCount: undefined });
     const normalized = normalizeTrainingRecord(broken as unknown as Record<string, unknown>);
-    expect(normalized.totalQuestions).toBe(0);
-    expect(normalized.errorCount).toBe(0);
-    expect(normalized.correctCount).toBe(0);
+    expect(normalized.totalQuestions).toBeUndefined();
+    expect(normalized.errorCount).toBeUndefined();
+    // 两个输入都缺，correctCount 也推不出来 —— 不猜
+    expect(normalized.correctCount).toBeUndefined();
+    // 统计只认可测样本：这条不进分母，另一条 20 题照常计入
+    expect(aggregateBySubject([broken, currentTraining()])[0].totalQuestions).toBe(20);
   });
 
   it('结构完整的记录原样返回同一个对象（零拷贝）', () => {
@@ -140,12 +144,13 @@ describe('其它表的必填字段补全（极简历史记录扫描发现的白�
     expect((normalized.focusModules as string[]).join('、')).toBe('');
   });
 
-  it('gaps.abilityPath 缺失时 split 不再抛（瓶颈文案、雷达）', () => {
+  it('gaps 缺 abilityPath 时不伪造空串：保持缺失，展示层用 abilityPathTail 兜住', () => {
     const normalized = normalizeStoreRecord('gaps', { id: 'g1' }) as Record<string, unknown>;
-    expect(normalized.abilityPath).toBe('');
-    expect(() => (normalized.abilityPath as string).split('/').slice(-1)[0]).not.toThrow();
+    expect(normalized.abilityPath).toBeUndefined();
+    expect(abilityPathTail(normalized.abilityPath)).toBeNull();
     expect(normalized.sourceRecordIds).toEqual([]);
-    expect(normalized.occurrenceCount).toBe(0);
+    // 缺口至少出现过一次：真值下界是 1，补 0 会让权重归零、从排行里消失
+    expect(normalized.occurrenceCount).toBe(1);
   });
 
   it('interviewRecords.problemTags / weeklyChecklists.entries / customTools.appliesTo 补齐', () => {
@@ -154,10 +159,10 @@ describe('其它表的必填字段补全（极简历史记录扫描发现的白�
     expect((normalizeStoreRecord('customTools', { id: 't1' }) as Record<string, unknown>).appliesTo).toEqual([]);
   });
 
-  it('careerReports.generatedAt 补齐后 slice 不抛', () => {
+  it('careerReports 缺 generatedAt 时保持缺失，数组与 routes 兜住', () => {
     const normalized = normalizeStoreRecord('careerReports', { id: 'r1' }) as Record<string, unknown>;
-    expect(normalized.generatedAt).toBe('');
-    expect(() => (normalized.generatedAt as string).slice(0, 10)).not.toThrow();
+    expect(normalized.generatedAt).toBeUndefined();
+
     expect(normalized.survivors).toEqual([]);
   });
 
