@@ -46,6 +46,7 @@ import { STORE_RESET_TOMBSTONE, SYNC_EPOCH } from '../../src/services/syncMirror
 import { normalizeStoreRecord } from '../../src/services/recordNormalize';
 import {
   describeIssues,
+  MAX_STATEMENT_BYTES,
   validateRecordBatch,
   validateRecordId,
   validateRecordPayload,
@@ -504,11 +505,51 @@ async function claimLegacyWorkspace(db: D1Database, workspace: string): Promise<
 }
 
 /**
+ * 每条 upsert 语句背后的序列化体积。
+ *
+ * D1 的硬限制是**单条 SQL 100,000 B**；绑定参数虽然不计入语句文本，但一行 close to 1MB
+ * 的记录配上几十条语句，batch 内部仍可能撞上别的上限。这里按体积预算切块，
+ * 比单纯「每 50 条一批」稳。用 WeakMap：语句对象用完即弃，不会造成泄漏；
+ * 没登记过的语句按 0 计，退化成只按条数切分。
+ */
+const statementBytes = new WeakMap<object, number>();
+
+/** 按体积预算把语句切成若干组（同时受 BATCH_SIZE 条数上限约束） */
+export function groupStatementsByBudget(
+  statements: D1PreparedStatement[],
+  budget = MAX_STATEMENT_BYTES,
+): D1PreparedStatement[][] {
+  const groups: D1PreparedStatement[][] = [];
+  let current: D1PreparedStatement[] = [];
+  let bytes = 0;
+  for (const statement of statements) {
+    const size = statementBytes.get(statement as unknown as object) ?? 0;
+    const wouldOverflow = current.length > 0 && bytes + size > budget;
+    if (wouldOverflow) {
+      groups.push(current);
+      current = [];
+      bytes = 0;
+    }
+    current.push(statement);
+    bytes += size;
+    if (current.length >= BATCH_SIZE) {
+      groups.push(current);
+      current = [];
+      bytes = 0;
+    }
+  }
+  if (current.length > 0) groups.push(current);
+  return groups;
+}
+
+/**
  * 分批执行（D1 单次 batch 有语句数上限）。
- * 实现收归 @shared/core/server/d1 的 runBatches。
+ * 实现收归 @shared/core/server/d1 的 runBatches，这里只多一层体积切块。
  */
 async function runBatches(db: D1Database, statements: D1PreparedStatement[]): Promise<void> {
-  await sharedRunBatches(db, statements, BATCH_SIZE);
+  for (const group of groupStatementsByBudget(statements)) {
+    await sharedRunBatches(db, group, BATCH_SIZE);
+  }
 }
 
 /**
@@ -551,7 +592,10 @@ export function upsertStatements(
   const sql = upsertSql(store, lastWriteWins);
   return records.map((source) => {
     const record = normalizeRecordTimestamp(normalizeStoreRecord(store, source) as JsonRecord);
-    return db.prepare(sql).bind(workspace, record.id, entityTimestamp(record), JSON.stringify(record));
+    const payload = JSON.stringify(record);
+    const statement = db.prepare(sql).bind(workspace, record.id, entityTimestamp(record), payload);
+    statementBytes.set(statement as unknown as object, payload.length);
+    return statement;
   });
 }
 
@@ -735,6 +779,9 @@ export async function listStoreDelta(
         .all<{ id: string; deleted_at: string }>()
     : { results: [] as { id: string; deleted_at: string }[] };
   const deleted = (tombstones.results ?? []).map((row) => row.id);
+  // '*' 墓碑的时间要单独下发：客户端据此判断「这次重建我已经付过全量代价」，
+  // 否则水位正好等于该墓碑时间 → `>=` 再次命中 → 每次同步都全量重拉
+  const resetTombstone = (tombstones.results ?? []).find((row) => row.id === STORE_RESET_TOMBSTONE);
 
   // 水位取「本次返回的行列值」与「墓碑时间」的最大值；没有任何变化时保持原水位
   let watermark = since;
@@ -749,6 +796,7 @@ export async function listStoreDelta(
     records: gradeLevel ? filterStoreRecordsForGrade(store, records, gradeLevel) : records,
     deleted,
     watermark,
+    ...(resetTombstone ? { resetAt: resetTombstone.deleted_at } : {}),
   };
 }
 
@@ -789,8 +837,12 @@ async function loadTrainingSourceRows(
 /**
  * 训练记录写入口：先按跨请求幂等键比较库内旧行，旧行被替代时删除，再写入胜出行。
  * 删除必须先于写入，避免同一次请求中「先删后写」与批内顺序无关地互相覆盖。
+ *
+ * 被替代掉的旧 id **必须打墓碑**：增量同步只看 `updated_at`，看不到 DELETE；
+ * 少了墓碑，其他设备的镜像里就永远留着那条已被替换的旧行（同一份作答算两遍题量）。
+ * 单条删除（DELETE）、清空、重建都打了墓碑，这里漏掉属于同类路径的不一致。
  */
-async function writeTrainingRecords(
+export async function writeTrainingRecords(
   db: D1Database,
   workspace: string,
   records: JsonRecord[],
@@ -809,6 +861,9 @@ async function writeTrainingRecords(
       .prepare(`DELETE FROM trainings WHERE workspace = ? AND id IN (${placeholders})`)
       .bind(workspace, ...chunk)
       .run();
+  }
+  if (plan.deleteIds.length > 0) {
+    await recordDeletions(db, 'trainings', workspace, plan.deleteIds);
   }
   if (plan.upserts.length > 0) {
     await runBatches(db, upsertStatements(db, 'trainings', workspace, plan.upserts as unknown as JsonRecord[], lastWriteWins));

@@ -39,6 +39,9 @@ describe('examRef 归一化', () => {
     expect(normalizeExamRef('fenbi-exam-4291593113')).toBe('exam-fenbi-exam-4291593113');
     expect(normalizeExamRef('exam-fenbi-exam-4291593113')).toBe('exam-fenbi-exam-4291593113');
     expect(normalizeExamRef('  4291593113  ')).toBe('exam-fenbi-exam-4291593113');
+    // 外部导入可能把 paperId 写成数字：`.trim()` 会抛 TypeError → 整个写入 500
+    expect(normalizeExamRef(4291593113)).toBeUndefined();
+    expect(normalizeExamRef(null)).toBeUndefined();
   });
 
   it('非 paperId 的值原样返回，不臆造引用', () => {

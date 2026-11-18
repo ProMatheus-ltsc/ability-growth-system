@@ -15,7 +15,7 @@ const training = (patch: Record<string, unknown> = {}) => ({
   gradeLevel: 'adult',
   subject: 'xingce',
   module: '资料分析',
-  trainingType: 'module',
+  trainingType: 'topic',
   totalQuestions: 20,
   correctCount: 16,
   errorCount: 4,
@@ -142,10 +142,86 @@ describe('validateRecordPayload：拒非法，不拒残缺', () => {
     expect(validateRecordPayload('trainings', training({ totalQuestions: 3.5 })).ok).toBe(false);
   });
 
-  it('枚举只在新建时强制，存量历史值不拦', () => {
-    const legacyStatus = { id: 'g1', subject: 'xingce', abilityPath: 'xingce/资料分析', status: 'legacy-value' };
-    expect(validateRecordPayload('gaps', legacyStatus, { requireCore: false }).ok).toBe(true);
-    expect(validateRecordPayload('gaps', legacyStatus, { requireCore: true }).ok).toBe(false);
+  it('枚举：有值就必须合法（更新也一样），缺失仍然放行', () => {
+    const badStatus = { id: 'g1', subject: 'xingce', abilityPath: 'xingce/资料分析', status: 'legacy-value' };
+    expect(validateRecordPayload('gaps', badStatus, { requireCore: false }).ok).toBe(false);
+    expect(validateRecordPayload('gaps', { id: 'g1' }, { requireCore: false }).ok).toBe(true);
+  });
+
+  it('枚举：存量里同一个非法值被原样带回来时不拦（避免锁死老记录）', () => {
+    const existing = { id: 'g1', status: 'legacy-value' };
+    const payload = { id: 'g1', note: '只改了备注' };
+    expect(validateRecordPayload('gaps', payload, { existing }).ok).toBe(true);
+    // 换成另一个非法值就要拦
+    expect(validateRecordPayload('gaps', { ...payload, status: 'another-bad' }, { existing }).ok).toBe(false);
+  });
+
+  it('trainings.kind 只接受已知结构角色（未知 kind 会被当成独立记录重复计题量）', () => {
+    expect(validateRecordPayload('trainings', training({ kind: 'module' })).ok).toBe(true);
+    const bad = validateRecordPayload('trainings', training({ kind: 'record' }));
+    expect(bad.ok).toBe(false);
+    expect(bad.issues[0].field).toBe('kind');
+  });
+
+  it('trainingType 历史别名先归一化再校验（full_mock → exam）', () => {
+    const legacy = validateRecordPayload('trainings', training({ trainingType: 'full_mock' }));
+    expect(legacy.ok).toBe(true);
+    expect(legacy.record.trainingType).toBe('exam');
+    expect(validateRecordPayload('trainings', training({ trainingType: 'wrong_review' })).record.trainingType).toBe('review');
+    expect(validateRecordPayload('trainings', training({ trainingType: 'nonsense' })).ok).toBe(false);
+  });
+
+  it('作答树关联字段类型错被拒（examRef / parentId / attemptId）', () => {
+    for (const field of ['examRef', 'parentId', 'attemptId', 'questionType', 'paperType']) {
+      expect(validateRecordPayload('trainings', training({ [field]: 123 })).ok).toBe(false);
+    }
+  });
+
+  it('depth 必须是整数（作答树层数）', () => {
+    expect(validateRecordPayload('trainings', training({ depth: 2 })).ok).toBe(true);
+    expect(validateRecordPayload('trainings', training({ depth: 1.5 })).ok).toBe(false);
+  });
+
+  it('跨字段：错题数不能大于总题量', () => {
+    const result = validateRecordPayload('trainings', training({ totalQuestions: 10, errorCount: 12, correctCount: 0 }));
+    expect(result.ok).toBe(false);
+    expect(result.issues.map((issue) => issue.field)).toContain('errorCount');
+  });
+
+  it('跨字段：正确数 + 错题数 必须等于总题量', () => {
+    const result = validateRecordPayload('trainings', training({ totalQuestions: 20, errorCount: 4, correctCount: 10 }));
+    expect(result.ok).toBe(false);
+    expect(result.issues.map((issue) => issue.field)).toContain('correctCount');
+  });
+
+  it('跨字段：得分不能大于满分', () => {
+    expect(validateRecordPayload('trainings', training({ score: 90, fullMark: 100 })).ok).toBe(true);
+    expect(validateRecordPayload('trainings', training({ score: 120, fullMark: 100 })).ok).toBe(false);
+  });
+
+  it('跨字段：abilities 的置信度必须在 0~1、样本正确数不超过总数', () => {
+    const ability = (patch: Record<string, unknown> = {}) => ({
+      id: 'ab1',
+      subject: 'xingce',
+      abilityPath: 'xingce/资料分析/增长率',
+      confidence: 0.6,
+      sampleTotal: 10,
+      sampleCorrect: 7,
+      ...patch,
+    });
+    expect(validateRecordPayload('abilities', ability()).ok).toBe(true);
+    expect(validateRecordPayload('abilities', ability({ confidence: 1.4 })).ok).toBe(false);
+    expect(validateRecordPayload('abilities', ability({ sampleCorrect: 11 })).ok).toBe(false);
+  });
+
+  it('跨字段：存量已违例的记录不因「改别的字段」被锁死', () => {
+    const existing = { id: 't1', totalQuestions: 10, errorCount: 12 };
+    const unchanged = { id: 't1', totalQuestions: 10, errorCount: 12, note: '改备注' };
+    expect(validateRecordPayload('trainings', unchanged, { existing }).ok).toBe(true);
+
+    // 但换个新的违例值就要拦（说明是这次改坏的）
+    const brokeIt = { id: 't1', totalQuestions: 10, errorCount: 15, note: '改备注' };
+    expect(validateRecordPayload('trainings', brokeIt, { existing }).ok).toBe(false);
   });
 
   it('未知字段透传，不做白名单（表是 schemaless 的）', () => {
@@ -187,6 +263,27 @@ describe('validateRecordBatch：整体失败并定位到条', () => {
     });
     expect(result.ok).toBe(true);
     expect(result.records[0].totalQuestions).toBe(20);
+  });
+
+  it('快照/备份导入只看形状：旧枚举值、旧口径矛盾都放行（否则老备份永远恢复不了）', () => {
+    const legacy = {
+      id: 't9',
+      date: '2024-03-11',
+      subject: 'xingce',
+      kind: 'record',
+      trainingType: 'legacy-type',
+      totalQuestions: 10,
+      errorCount: 12,
+      correctCount: 0,
+    };
+    // 正常写入（新建/更新）要拦
+    expect(validateRecordPayload('trainings', legacy).ok).toBe(false);
+    // 导入放行
+    expect(validateRecordBatch('trainings', [legacy], { assumeExisting: true }).ok).toBe(true);
+    // 但形状错（类型不对）照样拦
+    expect(
+      validateRecordBatch('trainings', [{ ...legacy, errorCategories: 'x' }], { assumeExisting: true }).ok,
+    ).toBe(false);
   });
 
   it('多条不合法时折叠错误数量', () => {

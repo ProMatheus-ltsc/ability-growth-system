@@ -94,6 +94,16 @@ describe('增量列表 · 水位语义', () => {
     const delta = await listStoreDelta(db, 'trainings', 'ws-a', '2026-11-16T09:00:00.000Z');
     expect(delta.deleted).toContain(STORE_RESET_TOMBSTONE);
   });
+
+  it("重建墓碑要带上自身 deleted_at（resetAt），客户端靠它避免每次同步都全量", async () => {
+    const at = '2026-11-16T12:00:00.000Z';
+    const { db } = fakeDb([], [{ id: STORE_RESET_TOMBSTONE, deleted_at: at }]);
+    const delta = await listStoreDelta(db, 'trainings', 'ws-a', at);
+    expect(delta.resetAt).toBe(at);
+    // 普通删除不带 resetAt，避免客户端误判成整表重建
+    const { db: plain } = fakeDb([], [{ id: 't0', deleted_at: at }]);
+    expect((await listStoreDelta(plain, 'trainings', 'ws-a', at)).resetAt).toBeUndefined();
+  });
 });
 
 describe('since 参数归一化', () => {

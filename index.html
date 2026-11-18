@@ -7,7 +7,75 @@
     <title>通用能力增长系统</title>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <!--
+        加载占位：React 挂载时会整棵替换掉它。
+        留在 HTML 里的意义是「脚本根本没跑起来」时有可见反馈——旧版本页面缓存 +
+        新部署里旧哈希资源已删除时，模块脚本会因 MIME 拒绝而不执行，
+        没有这段占位就是一个纯白页面（历史上登录页白屏、连登录请求都没发出就是这个现象）。
+      -->
+      <div
+        id="boot-hint"
+        style="min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:24px;box-sizing:border-box;background:#f8fafc;color:#334155;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;text-align:center"
+      >
+        <div id="boot-hint-title" style="font-size:14px;color:#64748b">正在加载…</div>
+        <p id="boot-hint-detail" style="display:none;margin:0;max-width:420px;font-size:14px;line-height:1.7;color:#475569"></p>
+        <button
+          id="boot-hint-retry"
+          type="button"
+          style="display:none;padding:8px 18px;border:0;border-radius:8px;background:#2563eb;color:#fff;font-size:14px;cursor:pointer"
+        >
+          刷新页面
+        </button>
+      </div>
+    </div>
+    <script>
+      // 资源加载失败的兜底提示。必须写在模块脚本之前，否则脚本失败时这段代码也不会执行。
+      (function () {
+        var root = document.getElementById('root');
+        var hint = document.getElementById('boot-hint');
+        var title = document.getElementById('boot-hint-title');
+        var detail = document.getElementById('boot-hint-detail');
+        var retry = document.getElementById('boot-hint-retry');
+        var shown = false;
+
+        function showBootError(message) {
+          if (shown) return;
+          // React 已接管页面（占位节点被替换/移除）时不再打扰用户
+          if (!root || !hint || hint.parentNode !== root) return;
+          shown = true;
+          if (title) title.textContent = '页面没能加载';
+          if (detail) {
+            detail.textContent = message;
+            detail.style.display = 'block';
+          }
+          if (retry) retry.style.display = 'inline-block';
+        }
+
+        // 资源加载失败（脚本 404 / MIME 被拒）只在捕获阶段抛到 window
+        window.addEventListener(
+          'error',
+          function (event) {
+            var target = event.target;
+            if (target && target.tagName === 'SCRIPT') {
+              showBootError('页面脚本加载失败，通常是版本已更新。刷新即可加载最新版本。');
+            }
+          },
+          true,
+        );
+
+        if (retry) {
+          retry.addEventListener('click', function () {
+            location.reload();
+          });
+        }
+
+        // 脚本静默不执行（被中间层拦截等）时 8 秒后也给提示
+        setTimeout(function () {
+          showBootError('加载超时。请检查网络后刷新页面。');
+        }, 8000);
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

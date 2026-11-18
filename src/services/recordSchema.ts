@@ -30,12 +30,22 @@
  * 这正是「老记录缺后加字段」的合法情形。
  */
 
+import { normalizeTrainingType } from '../domain/trainingSemantics';
+
 type AnyRecord = Record<string, unknown> & { id: string };
 
 /** 记录 id 上限；与 URL 单段长度、D1 主键索引都相容 */
 export const MAX_RECORD_ID_LENGTH = 128;
-/** 单条记录序列化上限；D1 单行本身另有上限，这里只挡明显异常的请求 */
-export const MAX_RECORD_BYTES = 4 * 1024 * 1024;
+/**
+ * 单条记录序列化上限。
+ *
+ * D1 官方限制：**单行 2,000,000 B**、单条 SQL 100,000 B。原先写 4MB 等于没有上限
+ * （超了是 D1 侧报错，用户看到 500 而不是 400「记录太大」）。这里取 1MB：
+ * 训练的套卷分题、PDCA 大复盘都远小于它，留足余量又能挡住明显异常的请求。
+ */
+export const MAX_RECORD_BYTES = 1024 * 1024;
+/** 单次 batch 的保守体积预算：D1 单条 SQL 文本上限 100KB，绑定参数虽不计入，仍留余量 */
+export const MAX_STATEMENT_BYTES = 90 * 1024;
 /** 单个字符串字段上限（正文/备注类字段足够） */
 export const MAX_TEXT_LENGTH = 20000;
 /** 数组字段元素上限（训练错因、模块拆解这类都在几十量级） */
@@ -114,12 +124,34 @@ const COMMON_STRINGS = ['studentId', 'gradeLevel', 'note', 'createdAt', 'updated
 const STORE_SPECS: Record<string, StoreSpec> = {
   trainings: {
     core: ['date', 'subject'],
-    numbers: ['durationMinutes', 'paperYear', 'fullMark', 'score', 'standardMinutes', 'depth'],
-    ints: ['totalQuestions', 'correctCount', 'errorCount'],
-    strings: [...COMMON_STRINGS, 'subject', 'date', 'module', 'modulePath', 'source', 'sourceId', 'kind'],
+    numbers: ['durationMinutes', 'paperYear', 'fullMark', 'score', 'standardMinutes'],
+    // depth 是作答树层数，整数
+    ints: ['totalQuestions', 'correctCount', 'errorCount', 'depth'],
+    strings: [
+      ...COMMON_STRINGS,
+      'subject',
+      'date',
+      'module',
+      'modulePath',
+      'source',
+      'sourceId',
+      // 作答树/试卷关联：以前完全没声明，任何类型都能写进来
+      'examRef',
+      'examId',
+      'attemptId',
+      'parentId',
+      'questionType',
+      'paperType',
+    ],
     stringArrays: ['errorCategories'],
     booleans: ['isUnfamiliar', 'standardMinutesInferred'],
-    enum: { validity: ['valid', 'duplicate'] },
+    enum: {
+      validity: ['valid', 'duplicate'],
+      // kind 决定聚合口径：未知 kind 在 analytics 里会被当成独立记录相加，题量虚增
+      kind: ['exam', 'module', 'label', 'practice', 'review', 'summary'],
+      // 写入前会先用 normalizeTrainingType 把 full_mock/wrong_review 收敛成 exam/review
+      trainingType: ['daily', 'topic', 'review', 'unfamiliar', 'timed', 'experiment', 'exam'],
+    },
   },
   gaps: {
     core: ['subject', 'abilityPath'],
@@ -297,17 +329,96 @@ function typeName(value: unknown): string {
   return typeof value;
 }
 
+interface CrossFieldIssue {
+  field: string;
+  message: string;
+  /** 「存量已违例就不重复拦」的比对键：同一条违例（含数值）才算同一条 */
+  key: string;
+}
+
+const numeric = (value: unknown): number | undefined =>
+  typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+
+/**
+ * 跨字段 / 值域一致性。
+ *
+ * 单字段都合法、组合起来却自相矛盾时，统计口径会直接失真：
+ * - `errorCount > totalQuestions` → 正确率算出负数，整科汇总被拉偏；
+ * - `correctCount + errorCount ≠ totalQuestions` → 掌握度、错题率互相打架；
+ * - `score > fullMark` → 得分率超过 100%；
+ * - `abilities.confidence` 越界 → 加权时把置信度外的能力顶到前面。
+ *
+ * 只做「都在才算」的成对比较：缺字段属于历史残缺，不在这里判（那是归一化的活）。
+ */
+function crossFieldIssues(store: string, record: Record<string, unknown>): CrossFieldIssue[] {
+  const issues: CrossFieldIssue[] = [];
+
+  const atMost = (a: string, b: string, label: string) => {
+    const left = numeric(record[a]);
+    const right = numeric(record[b]);
+    if (left === undefined || right === undefined || left <= right) return;
+    issues.push({
+      field: a,
+      message: `${label}（${a}=${left}，${b}=${right}）`,
+      key: `${a}<=${b}:${left}:${right}`,
+    });
+  };
+
+  const inRange = (field: string, min: number, max: number) => {
+    const value = numeric(record[field]);
+    if (value === undefined || (value >= min && value <= max)) return;
+    issues.push({
+      field,
+      message: `${field} 必须在 ${min}~${max} 之间（收到 ${value}）`,
+      key: `${field}:[${min},${max}]:${value}`,
+    });
+  };
+
+  if (store === 'trainings' || store === 'exams') {
+    // 两张表的错题字段名不同：训练用 errorCount，测验用 totalErrors
+    const errorField = store === 'trainings' ? 'errorCount' : 'totalErrors';
+    const total = numeric(record.totalQuestions);
+    const errors = numeric(record[errorField]);
+    atMost(errorField, 'totalQuestions', '错题数不能大于总题量');
+    if (store === 'trainings') {
+      const correct = numeric(record.correctCount);
+      if (total !== undefined && errors !== undefined && correct !== undefined && correct + errors !== total) {
+        issues.push({
+          field: 'correctCount',
+          message: `正确数 + 错题数 必须等于总题量（correctCount=${correct}，errorCount=${errors}，totalQuestions=${total}）`,
+          key: `sum:correctCount:${correct}:${errors}:${total}`,
+        });
+      }
+      atMost('score', 'fullMark', '得分不能大于满分');
+    } else {
+      atMost('totalScore', 'fullMark', '总分不能大于满分');
+    }
+  }
+
+  if (store === 'abilities') {
+    inRange('confidence', 0, 1);
+    atMost('sampleCorrect', 'sampleTotal', '样本正确数不能大于样本总数');
+  }
+
+  if (store === 'subjectiveAnswers') {
+    atMost('paperScore', 'paperFullMark', '套卷得分不能大于套卷满分');
+  }
+
+  return issues;
+}
+
 /**
  * 校验并收敛一条待写入记录。
  *
  * @param store 表名
  * @param raw 请求里的原始记录
- * @param options.requireCore 是否强制核心字段与枚举（仅「新建」时为 true）
+ * @param options.requireCore 是否强制核心字段（仅「新建」时为 true）
+ * @param options.lenientValues 只看形状不看取值（快照/备份导入用：备份里的旧枚举值不能拦死恢复）
  */
 export function validateRecordPayload(
   store: string,
   raw: unknown,
-  options: { requireCore?: boolean; existing?: Record<string, unknown> } = {},
+  options: { requireCore?: boolean; existing?: Record<string, unknown>; lenientValues?: boolean } = {},
 ): RecordValidation {
   const issues: RecordIssue[] = [];
   if (!isPlainObject(raw)) {
@@ -353,6 +464,11 @@ export function validateRecordPayload(
     const value = record[field];
     if (value === 'true') record[field] = true;
     else if (value === 'false') record[field] = false;
+  }
+  // 训练类型：写入链路上的归一化（withTrainingSemantics）发生在本校验**之后**，
+  // 所以这里必须先把 full_mock / wrong_review 收敛掉，否则历史值会被枚举规则拒绝
+  if (store === 'trainings' && typeof record.trainingType === 'string') {
+    record.trainingType = normalizeTrainingType(record.trainingType);
   }
 
   const missing = (value: unknown) => value === undefined || value === null;
@@ -450,12 +566,30 @@ export function validateRecordPayload(
       const empty = missing(value) || (typeof value === 'string' && value.trim() === '');
       if (empty) issues.push({ field, message: `新建记录缺少必填字段 ${field}` });
     }
-    for (const [field, allowed] of Object.entries(spec.enum ?? {})) {
-      const value = record[field];
-      if (missing(value)) continue;
-      if (typeof value !== 'string' || !allowed.includes(value)) {
-        issues.push({ field, message: `${field} 取值必须是 ${allowed.join(' / ')} 之一（收到 ${String(value)}）` });
-      }
+  }
+
+  // 枚举：**有值就必须合法**，缺失仍然放行。
+  // 以前只在新建时校验，更新时把 status 改成任意字符串也能落库 —— 值域和「残缺」不是一回事，
+  // 残缺是历史包袱（要放行），非法值是新的破坏（要拦住）。
+  const enumRules = options.lenientValues ? {} : (spec.enum ?? {});
+  for (const [field, allowed] of Object.entries(enumRules)) {
+    const value = record[field];
+    if (missing(value)) continue;
+    if (typeof value === 'string' && allowed.includes(value)) continue;
+    // 存量里本来就是同一个非法值：这次编辑没碰它，不要因此把整条记录锁死
+    if (options.existing && options.existing[field] === value) continue;
+    issues.push({ field, message: `${field} 取值必须是 ${allowed.join(' / ')} 之一（收到 ${String(value)}）` });
+  }
+
+  // 跨字段：单字段都合法、组合起来自相矛盾（错题数 > 总题量）同样会把统计口径搞错。
+  // 存量里如果本来就是同一个违例，改别的字段时不再拦（否则等于锁死这条记录）。
+  if (!options.lenientValues) {
+    const priorKeys = options.existing
+      ? new Set(crossFieldIssues(store, options.existing).map((item) => item.key))
+      : new Set<string>();
+    for (const item of crossFieldIssues(store, record)) {
+      if (priorKeys.has(item.key)) continue;
+      issues.push({ field: item.field, message: item.message });
     }
   }
 
@@ -493,9 +627,12 @@ export function validateRecordBatch(
   const problems: string[] = [];
   records.forEach((raw, index) => {
     const id = isPlainObject(raw) && typeof raw.id === 'string' ? raw.id : '';
-    const existing = options.assumeExisting ? {} : options.existingOf?.(id);
+    const existing = options.assumeExisting ? undefined : options.existingOf?.(id);
     const result = validateRecordPayload(store, raw, {
-      requireCore: !existing,
+      requireCore: !options.assumeExisting && !existing,
+      // 备份/快照里可能有历史枚举值或早年的口径矛盾：恢复是救灾路径，
+      // 只校验形状（类型/体积/id），取值一律放行，否则老备份永远恢复不了
+      lenientValues: options.assumeExisting,
       ...(existing ? { existing } : {}),
     });
     if (!result.ok) {

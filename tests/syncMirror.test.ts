@@ -57,6 +57,33 @@ describe('增量同步 · 动作清单', () => {
   });
 });
 
+describe('增量同步 · 重建墓碑不会被反复消费', () => {
+  const resetAt = '2026-11-16T12:00:00.000Z';
+  const resetDelta = (watermark: string) => ({
+    ...delta([], [STORE_RESET_TOMBSTONE], watermark),
+    resetAt,
+  });
+
+  it('第一次见到该重建：清镜像全量', () => {
+    expect(planDeltaApply(resetDelta(resetAt)).reset).toBe(true);
+  });
+
+  it('水位正好等于墓碑时间（reset 之后就是这个状态）：不再全量', () => {
+    const plan = planDeltaApply(resetDelta(resetAt), { resetConsumedAt: resetAt });
+    expect(plan.reset).toBe(false);
+  });
+
+  it('出现更晚的新重建：照常全量', () => {
+    const newer = { ...resetDelta('2026-11-16T15:00:00.000Z'), resetAt: '2026-11-16T15:00:00.000Z' };
+    expect(planDeltaApply(newer, { resetConsumedAt: resetAt }).reset).toBe(true);
+  });
+
+  it('服务端没给 resetAt（旧版本）时宁可多全量一次，也不漏重建', () => {
+    const plan = planDeltaApply(delta([], [STORE_RESET_TOMBSTONE]), { resetConsumedAt: resetAt });
+    expect(plan.reset).toBe(true);
+  });
+});
+
 describe('增量同步 · 水位', () => {
   it('水位只前进不后退（时钟回拨/换库时不重复拉历史）', () => {
     expect(nextWatermark('2026-11-16T10:00:00.000Z', '2026-11-16T09:00:00.000Z', false)).toBe(

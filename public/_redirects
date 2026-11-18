@@ -1,1 +1,7 @@
+# SPA 前端路由兜底：未知路径交给 index.html
+#
+# 注意：这里**不能**用 `/assets/* /index.html 404` 来修「旧哈希资源被重写成 HTML」的问题——
+# Cloudflare Pages 的 _redirects 只支持 200(proxying) 与 301/302/303/307/308，
+# 其他状态码整行忽略（官方文档：Rewrites (other status codes) ❌）。
+# /assets/* 缺失时必须 404 的语义由 functions/assets/[[path]].ts 经 env.ASSETS 实现。
 /* /index.html 200

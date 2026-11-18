@@ -46,6 +46,21 @@ export function StoragePage() {
       showToast(`备份已创建：${result.timestamp.slice(0, 19).replace('T', ' ')}`, 'success');
     });
 
+  /**
+   * 重建本地镜像：清掉 IndexedDB 里的镜像与水位，下次读取从 epoch 全量重拉。
+   *
+   * 用途是修「历史遗留的幽灵行」：P0-1 之前，训练幂等替换没有打墓碑，
+   * 被替换掉的旧 id 在别的设备镜像里一直留着（同一份作答算两遍题量）。
+   * 那些删除没有墓碑可言，只能靠整表重拉对齐云端。
+   */
+  const rebuildMirror = () => {
+    if (!window.confirm('重建本地缓存需要重新从云端拉一遍全量数据（题量大时要十几秒）。继续？')) return;
+    void run('重建本地缓存', async () => {
+      await invalidateSyncedData();
+      showToast('本地缓存已清空，正在从云端重新拉取', 'success');
+    });
+  };
+
   const restore = (timestamp: string) => {
     if (!window.confirm(`确认用 ${timestamp.slice(0, 19).replace('T', ' ')} 的备份覆盖当前账户云端数据？`)) return;
     void run('恢复备份', async () => {
@@ -86,9 +101,17 @@ export function StoragePage() {
         <p className="text-sm text-slate-500">
           备份保存在 D1 的 <code>sync_backups</code> 表，每个账户保留最近 20 个版本。恢复会用备份覆盖当前账户的 27 张业务表。
         </p>
-        <button className="btn-primary" onClick={backupNow} disabled={busy}>
-          <Upload size={16} /> 立即备份
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button className="btn-primary" onClick={backupNow} disabled={busy}>
+            <Upload size={16} /> 立即备份
+          </button>
+          <button className="btn-ghost" onClick={rebuildMirror} disabled={busy}>
+            <Database size={16} /> 重建本地缓存
+          </button>
+        </div>
+        <p className="text-xs text-slate-400">
+          设备上看到「已删除的记录又回来了」或题量明显偏多时，重建本地缓存可从云端整表对齐（不清云端数据）。
+        </p>
 
         {busy && (
           <div className="text-sm text-slate-500 flex items-center gap-2">

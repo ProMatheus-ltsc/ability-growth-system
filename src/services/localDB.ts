@@ -356,6 +356,13 @@ interface MirrorMeta {
   watermark: string;
   /** 本端上次成功同步的时刻，用于 TTL 合并同一轮渲染的多次读取 */
   syncedAt: number;
+  /**
+   * 已经「付过全量代价」的那次整表重建墓碑时间（`'*'` 的 `deleted_at`）。
+   *
+   * reset 之后水位正好停在墓碑时间上，服务端用 `deleted_at >= since` 会把它再发一次；
+   * 靠这个字段把「同一个重建」与「新的重建」区分开，否则每次同步都全量重拉。
+   */
+  resetConsumedAt?: string;
 }
 
 const syncInflight = new Map<StoreName, Promise<void>>();
@@ -402,6 +409,7 @@ async function replaceMirror<S extends StoreName>(
   store: S,
   rows: StoreValue<S>[],
   watermark: string,
+  resetConsumedAt?: string,
 ): Promise<void> {
   const dbi = await db();
   const tx = dbi.transaction(['mirror', 'meta'], 'readwrite');
@@ -414,7 +422,7 @@ async function replaceMirror<S extends StoreName>(
   await Promise.all(puts);
   await tx.objectStore('meta').put({
     key: mirrorMetaKey(store),
-    value: { watermark, syncedAt: Date.now() } satisfies MirrorMeta,
+    value: { watermark, syncedAt: Date.now(), resetConsumedAt } satisfies MirrorMeta,
   });
   await tx.done;
 }
@@ -423,10 +431,10 @@ async function replaceMirror<S extends StoreName>(
 async function applyMirrorDelta<S extends StoreName>(
   store: S,
   delta: StoreDelta<StoreValue<S>>,
-  previousWatermark: string,
+  previous: Pick<MirrorMeta, 'watermark' | 'resetConsumedAt'>,
 ): Promise<void> {
-  const plan = planDeltaApply(delta);
-  const watermark = nextWatermark(previousWatermark, delta.watermark, false);
+  const plan = planDeltaApply(delta, { resetConsumedAt: previous.resetConsumedAt });
+  const watermark = nextWatermark(previous.watermark, delta.watermark, false);
   const dbi = await db();
   const tx = dbi.transaction(['mirror', 'meta'], 'readwrite');
   const mirror = tx.objectStore('mirror');
@@ -439,7 +447,11 @@ async function applyMirrorDelta<S extends StoreName>(
   ]);
   await tx.objectStore('meta').put({
     key: mirrorMetaKey(store),
-    value: { watermark, syncedAt: Date.now() } satisfies MirrorMeta,
+    value: {
+      watermark,
+      syncedAt: Date.now(),
+      resetConsumedAt: previous.resetConsumedAt,
+    } satisfies MirrorMeta,
   });
   await tx.done;
 }
@@ -453,14 +465,21 @@ async function syncMirrorStore<S extends StoreName>(store: S): Promise<void> {
   const run = (async () => {
     const meta = await readMirrorMeta(store);
     const delta = await d1.listStoreDelta<StoreValue<S>>(store, meta?.watermark ?? SYNC_EPOCH);
-    const plan = planDeltaApply(delta);
+    const plan = planDeltaApply(delta, { resetConsumedAt: meta?.resetConsumedAt });
     if (!meta || plan.reset) {
       // 首次同步，或服务端告知「整表被清空/重建」→ 从 epoch 重新全量
       const full = meta ? await d1.listStoreDelta<StoreValue<S>>(store, SYNC_EPOCH) : delta;
-      await replaceMirror(store, full.records, full.watermark);
+      // 记下这次重建已消费的时间点：水位会停在墓碑的 deleted_at 上，
+      // 不记的话下一次同步会用 `>=` 再次命中同一个 '*'，陷入「每次同步都全量」
+      await replaceMirror(
+        store,
+        full.records,
+        full.watermark,
+        full.resetAt ?? delta.resetAt ?? meta?.resetConsumedAt,
+      );
       return;
     }
-    await applyMirrorDelta(store, delta, meta.watermark);
+    await applyMirrorDelta(store, delta, meta);
   })();
 
   syncInflight.set(store, run);

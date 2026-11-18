@@ -59,8 +59,10 @@ export function isPracticeNote(note: string | undefined): boolean {
  *   → `exam-fenbi-exam-4291593113`；
  * - 非 paperId 的历史值原样保留，不臆造引用。
  */
-export function normalizeExamRef(raw: string | null | undefined): string | undefined {
-  const value = (raw ?? '').trim();
+export function normalizeExamRef(raw: unknown): string | undefined {
+  // 外部导入/脏数据里 examRef 可能是数字（`4291593113` 没带引号）：`.trim()` 会抛
+  // TypeError 并让整个写入变成 500。非字符串一律视为缺失，与 trimmedString 的口径一致。
+  const value = typeof raw === 'string' ? raw.trim() : '';
   if (!value) return undefined;
   const bare = value.startsWith('exam-fenbi-exam-')
     ? value.slice('exam-fenbi-exam-'.length)
