@@ -44,6 +44,12 @@ import { runBatches as sharedRunBatches, schemaIsSatisfiedBatched } from '@share
 import { STORE_NAMES, type ExportedSnapshot, type StoreName } from '../../src/services/snapshot';
 import { STORE_RESET_TOMBSTONE, SYNC_EPOCH } from '../../src/services/syncMirror';
 import { normalizeStoreRecord } from '../../src/services/recordNormalize';
+import {
+  describeIssues,
+  validateRecordBatch,
+  validateRecordId,
+  validateRecordPayload,
+} from '../../src/services/recordSchema';
 import { guardTrainingRecords } from '../../src/domains/public-exam';
 import {
   dedupeTrainingRecordsByIdempotencyKey,
@@ -71,6 +77,10 @@ const MIN_BACKUPS = 3;
 const MAX_BACKUPS = 20;
 const MAX_BACKUP_BYTES = 6 * 1024 * 1024;
 const BATCH_SIZE = 50;
+/** 单次请求体上限：批量导入走 bulk，正常同步远低于此值 */
+const MAX_REQUEST_BYTES = 8 * 1024 * 1024;
+/** 单次批量写入条数上限：超过说明客户端在把 bulk 当整库导入用 */
+const MAX_BULK_RECORDS = 1000;
 const SNAPSHOT_VERSION = '2.2.0';
 
 // 会话 Cookie 名、有效期、每用户会话数上限、限流窗口等认证常量
@@ -104,8 +114,88 @@ function json(data: unknown, status = 200, headers: HeadersInit = {}): Response 
   });
 }
 
+/**
+ * 请求参数不合法（而非服务端故障）：想返回 400 又不想层层判返回值时抛它，
+ * 由 onRequest 统一翻译。以前 `request.json()` 的语法错误会冒到最外层变成 500，
+ * 客户端只会看到「服务器内部错误」，分不清是自己发错了还是服务挂了。
+ */
+class BadRequestError extends Error {}
+
 function fail(message: string, status = 400): Response {
   return json({ error: message }, status);
+}
+
+/** 读取并解析 JSON 请求体：体积超限、语法错误一律 400 */
+async function readJsonBody(request: Request): Promise<unknown> {
+  const declared = Number(request.headers.get('content-length') ?? '0');
+  if (Number.isFinite(declared) && declared > MAX_REQUEST_BYTES) {
+    throw new BadRequestError(`请求体过大（${declared} 字节，上限 ${MAX_REQUEST_BYTES}）`);
+  }
+  const text = await request.text();
+  if (text.length > MAX_REQUEST_BYTES) {
+    throw new BadRequestError(`请求体过大（${text.length} 字节，上限 ${MAX_REQUEST_BYTES}）`);
+  }
+  if (text.trim() === '') return null;
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    throw new BadRequestError('请求体不是合法 JSON');
+  }
+}
+
+/**
+ * 取库里已有的那条记录（不存在 / JSON 损坏都返回 null）。
+ *
+ * 两个用途：决定按「新建」还是「更新」校验参数；更新时比对核心字段，
+ * 防止整条覆盖把已有值擦掉。JSON 损坏视为不存在，让这次写入把它覆盖成正常数据。
+ */
+async function loadExistingRecord(
+  db: D1Database,
+  store: StoreName,
+  workspace: string,
+  id: string,
+): Promise<JsonRecord | null> {
+  const row = await db
+    .prepare(`SELECT data FROM ${store} WHERE workspace = ? AND id = ?`)
+    .bind(workspace, id)
+    .first<{ data: string }>();
+  if (!row) return null;
+  try {
+    const parsed = JSON.parse(row.data) as unknown;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as JsonRecord) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 批量取已存在的记录（bulk 用，按 50 个一批，避免超长 IN 列表） */
+async function existingRecordsOf(
+  db: D1Database,
+  store: StoreName,
+  workspace: string,
+  ids: string[],
+): Promise<Map<string, JsonRecord>> {
+  const found = new Map<string, JsonRecord>();
+  const unique = Array.from(new Set(ids));
+  for (let index = 0; index < unique.length; index += BATCH_SIZE) {
+    const chunk = unique.slice(index, index + BATCH_SIZE);
+    const placeholders = chunk.map(() => '?').join(', ');
+    const rows = await db
+      .prepare(`SELECT id, data FROM ${store} WHERE workspace = ? AND id IN (${placeholders})`)
+      .bind(workspace, ...chunk)
+      .all<{ id: string; data: string }>();
+    for (const row of rows.results ?? []) {
+      try {
+        const parsed = JSON.parse(row.data) as unknown;
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          found.set(row.id, parsed as JsonRecord);
+        }
+      } catch {
+        // JSON 损坏：当作不存在，本次写入会覆盖修复
+      }
+    }
+  }
+  return found;
 }
 
 function isStore(value: string): value is StoreName {
@@ -776,7 +866,13 @@ export function prepareSnapshotRecords(
 ): Array<readonly [StoreName, JsonRecord[]]> {
   const prepared: Array<readonly [StoreName, JsonRecord[]]> = [];
   for (const store of STORE_NAMES) {
-    const records = normalizeScopedRecords(store, validRecords(snapshot[store]));
+    // 历史快照一律按「已存在」校验：不强制核心字段（老备份本来就缺后加字段），
+    // 但类型错、id 非法、原形污染这类结构问题仍然拒收
+    const checkedSnapshot = validateRecordBatch(store, validRecords(snapshot[store]), { assumeExisting: true });
+    if (!checkedSnapshot.ok) {
+      throw new SnapshotValidationError(`${store} ${checkedSnapshot.message}`);
+    }
+    const records = normalizeScopedRecords(store, checkedSnapshot.records);
     if (store === 'trainings') {
       const guard = guardTrainingRecords(records);
       if (!guard.ok) {
@@ -1189,8 +1285,29 @@ async function handle(request: Request, env: Env): Promise<Response> {
     }
 
     if (segments.length === 3 && segments[2] === 'bulk' && method === 'POST') {
-      const body = (await request.json()) as { records?: unknown } | unknown[];
-      const records = normalizeScopedRecords(store, validRecords(Array.isArray(body) ? body : body.records));
+      const body = await readJsonBody(request);
+      const list = Array.isArray(body)
+        ? body
+        : body && typeof body === 'object' && Array.isArray((body as { records?: unknown }).records)
+          ? ((body as { records: unknown[] }).records)
+          : null;
+      if (!list) return fail('请求体必须是记录数组，或 { records: [...] }', 400);
+      if (list.length > MAX_BULK_RECORDS) {
+        return fail(`批量写入最多 ${MAX_BULK_RECORDS} 条，本次收到 ${list.length} 条`, 413);
+      }
+
+      // 参数校验：结构/类型不合法直接拒；缺字段只对「新建」强制（存量记录缺字段不能拦，
+      // 否则用户打开一条老记录改个字段就保存失败）
+      const ids = list.map((item) =>
+        item && typeof item === 'object' && typeof (item as { id?: unknown }).id === 'string'
+          ? (item as { id: string }).id
+          : '',
+      );
+      const existing = await existingRecordsOf(env.DB, store, workspace, ids.filter((id) => id.length > 0));
+      const checkedBatch = validateRecordBatch(store, list, { existingOf: (id) => existing.get(id) });
+      if (!checkedBatch.ok) return fail(`记录参数不合法：${checkedBatch.message}`, 400);
+
+      const records = normalizeScopedRecords(store, checkedBatch.records);
       // 口径拦截：申论 / 面试不得写入训练记录（历史记录不受影响，不做迁移与删除）
       if (store === 'trainings') {
         const guard = guardTrainingRecords(records);
@@ -1217,6 +1334,10 @@ async function handle(request: Request, env: Env): Promise<Response> {
 
     const id = segments[2];
     if (!id) return fail('缺少记录 id', 400);
+    // id 会拼进路由并作为主键：含 / ? # % 或空白会把「取单条」变成别的语义，
+    // '*' 被删除墓碑占用。这里统一挡掉，读写删三处口径一致
+    const idError = validateRecordId(id);
+    if (idError) return fail(`记录 id 不合法：${idError}`, 400);
 
     if (method === 'GET') {
       const row = await env.DB.prepare(`SELECT data FROM ${store} WHERE workspace = ? AND id = ?`)
@@ -1231,9 +1352,24 @@ async function handle(request: Request, env: Env): Promise<Response> {
     }
 
     if (method === 'PUT') {
-      const body = (await request.json()) as Partial<JsonRecord>;
-      if (!body || typeof body !== 'object') return fail('请求体必须是记录对象');
-      const record = normalizeScopedRecords(store, [{ ...(body as JsonRecord), id }])[0];
+      const body = await readJsonBody(request);
+      if (!body || typeof body !== 'object' || Array.isArray(body)) {
+        return fail('请求体必须是记录对象', 400);
+      }
+      const bodyId = (body as { id?: unknown }).id;
+      if (bodyId !== undefined && bodyId !== id) {
+        return fail(`请求体 id（${String(bodyId)}）与路径 id（${id}）不一致`, 400);
+      }
+      // 已存在 → 更新：允许缺「历史本来就没有」的字段，但不许把已有核心字段丢掉；
+      // 不存在 → 新建：核心字段必须齐
+      const existing = await loadExistingRecord(env.DB, store, workspace, id);
+      const checked = validateRecordPayload(
+        store,
+        { ...(body as Record<string, unknown>), id },
+        { requireCore: !existing, ...(existing ? { existing } : {}) },
+      );
+      if (!checked.ok) return fail(`记录参数不合法：${describeIssues(checked.issues)}`, 400);
+      const record = normalizeScopedRecords(store, [checked.record])[0];
       // 口径拦截：申论 / 面试不得写入训练记录（历史记录不受影响，不做迁移与删除）
       if (store === 'trainings') {
         const guard = guardTrainingRecords([record]);
@@ -1276,6 +1412,7 @@ export const onRequest: PagesFunction<Env> = async (context) => {
   try {
     return await handle(context.request, context.env);
   } catch (error) {
+    if (error instanceof BadRequestError) return fail(error.message, 400);
     return fail(error instanceof Error ? error.message : '服务器内部错误', 500);
   }
 };
