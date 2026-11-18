@@ -43,6 +43,7 @@ import {
 import { runBatches as sharedRunBatches, schemaIsSatisfiedBatched } from '@shared/core/server/d1';
 import { STORE_NAMES, type ExportedSnapshot, type StoreName } from '../../src/services/snapshot';
 import { STORE_RESET_TOMBSTONE, SYNC_EPOCH } from '../../src/services/syncMirror';
+import { normalizeStoreRecord } from '../../src/services/recordNormalize';
 import { guardTrainingRecords } from '../../src/domains/public-exam';
 import {
   dedupeTrainingRecordsByIdempotencyKey,
@@ -424,7 +425,16 @@ export function upsertSql(store: StoreName, lastWriteWins: boolean): string {
   return `INSERT INTO ${store} (workspace, id, updated_at, data) VALUES (?, ?, ?, ?) ${conflict}`;
 }
 
-function upsertStatements(
+/**
+ * 写入边界：所有落库路径（PUT / bulk / 快照导入 / 备份恢复 / 训练派生行）都从这里出去。
+ *
+ * 入库前先做一次结构归一化（与读侧共用 `src/services/recordNormalize`）：
+ * 老记录缺的必填数组 / 数字字段在这里补齐，而不是等读出来再兜。
+ * 为什么不在写入时「校验后拒绝」：库里已经躺着大量历史残缺记录，且客户端类型是
+ * 编译期承诺（运行期没有 schema）；拒收会让用户「改一个字段就保存失败」。
+ * 补而不拒既让存量自愈（每次编辑写回即补全），也不改变任何合法记录的语义。
+ */
+export function upsertStatements(
   db: D1Database,
   store: StoreName,
   workspace: string,
@@ -433,7 +443,7 @@ function upsertStatements(
 ): D1PreparedStatement[] {
   const sql = upsertSql(store, lastWriteWins);
   return records.map((source) => {
-    const record = normalizeRecordTimestamp(source);
+    const record = normalizeRecordTimestamp(normalizeStoreRecord(store, source) as JsonRecord);
     return db.prepare(sql).bind(workspace, record.id, entityTimestamp(record), JSON.stringify(record));
   });
 }
