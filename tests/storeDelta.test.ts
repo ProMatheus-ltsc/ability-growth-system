@@ -11,7 +11,7 @@ import { listStoreDelta, normalizeSince } from '../functions/api/[[path]]';
 import { STORE_RESET_TOMBSTONE, SYNC_EPOCH } from '../src/services/syncMirror';
 
 function fakeDb(
-  rows: { data: string; updated_at: string }[],
+  rows: { id: string; data: string; updated_at: string }[],
   tombstones: { id: string; deleted_at: string }[],
   options: { tombstoneTableFails?: boolean } = {},
 ) {
@@ -41,7 +41,13 @@ function fakeDb(
 describe('增量列表 · 水位语义', () => {
   it('返回水位之后的行与墓碑，水位取两者最大值', async () => {
     const { db, sqls } = fakeDb(
-      [{ data: JSON.stringify({ id: 't1', updatedAt: '2026-11-16T10:00:00.000Z' }), updated_at: '2026-11-16T10:00:00.000Z' }],
+      [
+        {
+          id: 't1',
+          data: JSON.stringify({ id: 't1', updatedAt: '2026-11-16T10:00:00.000Z' }),
+          updated_at: '2026-11-16T10:00:00.000Z',
+        },
+      ],
       [{ id: 't0', deleted_at: '2026-11-16T11:00:00.000Z' }],
     );
 
@@ -51,6 +57,23 @@ describe('增量列表 · 水位语义', () => {
     expect(delta.deleted).toEqual(['t0']);
     expect(delta.watermark).toBe('2026-11-16T11:00:00.000Z');
     expect(sqls.some((sql) => sql.includes('updated_at >= ?'))).toBe(true);
+  });
+
+  it('单行 JSON 损坏不能拖垮整张表：退化成只有 id 的空壳', async () => {
+    const { db } = fakeDb(
+      [
+        { id: 'bad', data: '{不是 JSON', updated_at: '2026-11-16T10:00:00.000Z' },
+        {
+          id: 'ok',
+          data: JSON.stringify({ id: 'ok', date: '2024-03-11' }),
+          updated_at: '2026-11-16T10:00:00.000Z',
+        },
+      ],
+      [],
+    );
+    const delta = await listStoreDelta(db, 'trainings', 'ws-a', '2026-11-16T09:00:00.000Z');
+    expect(delta.records.map((r) => r.id).sort()).toEqual(['bad', 'ok']);
+    expect(delta.records.find((r) => r.id === 'bad')).toEqual({ id: 'bad' });
   });
 
   it('只有删除没有新行时水位也必须前进（否则墓碑会被反复下发）', async () => {

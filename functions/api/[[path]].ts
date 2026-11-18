@@ -242,8 +242,25 @@ function profileFromRow(row: Pick<UserRow, 'role' | 'gradeLevel' | 'profileIniti
   };
 }
 
-function parseRecord(data: string): JsonRecord {
-  return JSON.parse(data) as JsonRecord;
+/**
+ * 读一行时的容错解析：`parseRecord` 在 JSON 损坏时会抛，而列表接口是
+ * `map(parseRecord)` —— 一行坏数据就能让整张表 500、页面全白。
+ * 这里退化成只有 id 的空壳记录（读侧归一化会补齐必填数组），至少不拖垮整表；
+ * 同时用列上的 id 覆盖 data 里的 id，保证「记录 id == 主键」这一契约。
+ */
+function safeParseRecord(id: string, data: string): JsonRecord {
+  try {
+    const parsed = JSON.parse(data) as unknown;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const record = parsed as Record<string, unknown>;
+      // 列上的 id 优先（主键即真相）；列值异常时退回 data 里的 id
+      const key = id || (typeof record.id === 'string' ? record.id : '');
+      return { ...record, id: key };
+    }
+  } catch {
+    // 落到下面的空壳
+  }
+  return { id };
 }
 
 // ============ 密码与会话 ============
@@ -601,10 +618,10 @@ async function listStore(
   gradeLevel?: GradeLevel,
 ): Promise<JsonRecord[]> {
   const result = await db
-    .prepare(`SELECT data FROM ${store} WHERE workspace = ? ORDER BY updated_at DESC`)
+    .prepare(`SELECT id, data FROM ${store} WHERE workspace = ? ORDER BY updated_at DESC`)
     .bind(workspace)
-    .all<{ data: string }>();
-  const records = (result.results ?? []).map((row) => parseRecord(row.data));
+    .all<{ id: string; data: string }>();
+  const records = (result.results ?? []).map((row) => safeParseRecord(row.id, row.data));
   return gradeLevel ? filterStoreRecordsForGrade(store, records, gradeLevel) : records;
 }
 
@@ -705,10 +722,10 @@ export async function listStoreDelta(
   gradeLevel?: GradeLevel,
 ): Promise<{ records: JsonRecord[]; deleted: string[]; watermark: string }> {
   const rows = await db
-    .prepare(`SELECT data, updated_at FROM ${store} WHERE workspace = ? AND updated_at >= ? ORDER BY updated_at DESC`)
+    .prepare(`SELECT id, data, updated_at FROM ${store} WHERE workspace = ? AND updated_at >= ? ORDER BY updated_at DESC`)
     .bind(workspace, since)
-    .all<{ data: string; updated_at: string }>();
-  const records = (rows.results ?? []).map((row) => parseRecord(row.data));
+    .all<{ id: string; data: string; updated_at: string }>();
+  const records = (rows.results ?? []).map((row) => safeParseRecord(row.id, row.data));
 
   // 墓碑表还不可用（老库、迁移未执行）时降级为「无墓碑」，增量照常工作
   const tombstones = (await ensureTombstoneTable(db))
@@ -755,11 +772,15 @@ async function loadTrainingSourceRows(
     const placeholders = chunk.map(() => '?').join(', ');
     const result = await db
       .prepare(
-        `SELECT data FROM trainings WHERE workspace = ? AND json_extract(data, '$.sourceId') IN (${placeholders})`,
+        `SELECT id, data FROM trainings WHERE workspace = ? AND json_extract(data, '$.sourceId') IN (${placeholders})`,
       )
       .bind(workspace, ...chunk)
-      .all<{ data: string }>();
-    rows.push(...(result.results ?? []).map((row) => parseRecord(row.data) as unknown as TrainingRecord));
+      .all<{ id: string; data: string }>();
+    rows.push(
+      ...(result.results ?? []).map(
+        (row) => safeParseRecord(row.id, row.data) as unknown as TrainingRecord,
+      ),
+    );
   }
   // 学生只能替换本学段记录，避免同 sourceId 跨学段误删
   return gradeLevel ? (filterStoreRecordsForGrade('trainings', rows, gradeLevel) as TrainingRecord[]) : rows;
@@ -1344,7 +1365,7 @@ async function handle(request: Request, env: Env): Promise<Response> {
         .bind(workspace, id)
         .first<{ data: string }>();
       if (!row) return fail('记录不存在', 404);
-      const record = parseRecord(row.data);
+      const record = safeParseRecord(id, row.data);
       if (gradeFilter && filterStoreRecordsForGrade(store, [record], gradeFilter).length === 0) {
         return fail('记录不存在', 404);
       }
@@ -1393,7 +1414,7 @@ async function handle(request: Request, env: Env): Promise<Response> {
           .bind(workspace, id)
           .first<{ data: string }>();
         if (!row) return fail('记录不存在', 404);
-        const record = parseRecord(row.data);
+        const record = safeParseRecord(id, row.data);
         if (filterStoreRecordsForGrade(store, [record], gradeFilter).length === 0) {
           return fail('记录不存在', 404);
         }
