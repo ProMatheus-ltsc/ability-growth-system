@@ -1504,6 +1504,112 @@ export function prioritizeGaps(gaps: AbilityGap[]): AbilityGap[] {
   });
 }
 
+/** ============ 主观题学科（申论 / 面试）的「模块面板」替代口径 ============ */
+
+/**
+ * 申论 / 面试在能力中心里不能复用「各模块正确率」「模块时间分配」两卡：
+ * 它们不写训练记录（没有模块行、没有题量/错题数），所以那两卡对它们是结构性空集。
+ * 这里给出同形状的替代：按题型给得分、按题型给用时。
+ */
+export interface SubjectiveTypeScore {
+  label: string;
+  /** 0-100；四维均值优先，无四维时用卷面得分率，都没有为 null */
+  score: number | null;
+  /** 作答次数（套卷按分题计） */
+  attempts: number;
+}
+
+function meanOfDims(dims: Record<'points' | 'structure' | 'language' | 'logic', number | null>): number | null {
+  const values = DIMENSION_KEYS.map((key) => dims[key]).filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
+  if (values.length === 0) return null;
+  return round1(values.reduce((s, v) => s + v, 0) / values.length);
+}
+
+/** 申论：各题型得分（题型来自作答的 questionType，套卷按分题摊开） */
+export function buildSubjectiveTypeScores(answers: SubjectiveAnswer[]): SubjectiveTypeScore[] {
+  return buildSubjectiveByType(answers).map((row) => ({
+    label: row.questionType,
+    // 四维优先（与掌握度同口径），没有四维才退回卷面得分率
+    score: meanOfDims(row.avgDims) ?? row.avgScoreRate,
+    attempts: row.attempts,
+  }));
+}
+
+/** 面试：各题型得分（复用 interviewScorePercent 的 5 分制折算） */
+export function buildInterviewTypeScores(records: InterviewRecord[]): SubjectiveTypeScore[] {
+  const byType = new Map<string, number[]>();
+  for (const record of records) {
+    const type = record.questionType?.trim();
+    if (!type) continue;
+    const score = interviewScorePercent(record);
+    if (score === null) continue;
+    const list = byType.get(type) ?? [];
+    list.push(score);
+    byType.set(type, list);
+  }
+  return Array.from(byType.entries())
+    .map(([label, scores]) => ({
+      label,
+      score: round1(scores.reduce((s, v) => s + v, 0) / scores.length),
+      attempts: scores.length,
+    }))
+    .sort((a, b) => b.attempts - a.attempts);
+}
+
+export interface SubjectiveUsage {
+  label: string;
+  minutes: number;
+  /** 占比（%） */
+  share: number;
+  sessions: number;
+}
+
+/**
+ * 主观题用时分布：申论读 `durationMinutes`、面试读 `answerSec`。
+ * 只统计填了用时的记录 —— 与训练口径的 `buildTimeAllocation` 一致，不拿 0 冒充「很快」。
+ */
+export function buildSubjectiveTimeAllocation(answers: SubjectiveAnswer[]): SubjectiveUsage[] {
+  const groups = new Map<string, { minutes: number; sessions: number }>();
+  for (const answer of answers) {
+    const minutes = typeof answer.durationMinutes === 'number' && answer.durationMinutes > 0 ? answer.durationMinutes : 0;
+    if (minutes === 0) continue;
+    const label = answer.questionType?.trim() || (answer.mode === 'paper' ? '套卷' : '未分类');
+    const group = groups.get(label) ?? { minutes: 0, sessions: 0 };
+    group.minutes += minutes;
+    group.sessions += 1;
+    groups.set(label, group);
+  }
+  return toUsage(groups);
+}
+
+/** 面试用时分布：answerSec 折分钟（整场作答时长） */
+export function buildInterviewTimeAllocation(records: InterviewRecord[]): SubjectiveUsage[] {
+  const groups = new Map<string, { minutes: number; sessions: number }>();
+  for (const record of records) {
+    const seconds = typeof record.answerSec === 'number' && record.answerSec > 0 ? record.answerSec : 0;
+    if (seconds === 0) continue;
+    const label = record.questionType?.trim() || '未分类';
+    const group = groups.get(label) ?? { minutes: 0, sessions: 0 };
+    group.minutes += seconds / 60;
+    group.sessions += 1;
+    groups.set(label, group);
+  }
+  return toUsage(groups);
+}
+
+function toUsage(groups: Map<string, { minutes: number; sessions: number }>): SubjectiveUsage[] {
+  const total = Array.from(groups.values()).reduce((s, g) => s + g.minutes, 0);
+  if (total === 0) return [];
+  return Array.from(groups.entries())
+    .map(([label, g]) => ({
+      label,
+      minutes: +g.minutes.toFixed(1),
+      share: +((g.minutes / total) * 100).toFixed(1),
+      sessions: g.sessions,
+    }))
+    .sort((a, b) => b.minutes - a.minutes);
+}
+
 // ============ P1 分析 ============
 
 /** 训练收益: 单位时间能力增量 (Northstar Metric) */

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { EmptyState as CoreEmptyState, ResponsiveChart, ResponsiveGrid, TableScroll } from '@shared/core';
 import { BarChart3, Radar as RadarIcon, TrendingUp, ChevronRight, Tags } from 'lucide-react';
@@ -7,10 +8,20 @@ import { findAbilities, findTrainingsByStudent, getAllRecords } from '../service
 import {
   aggregateBySubject,
   buildGrowthSeries,
+  buildInterviewGrowthSeries,
+  buildInterviewStats,
+  buildInterviewTimeAllocation,
+  buildInterviewTypeScores,
   buildModuleStats,
   buildRadarSlices,
+  buildSubjectiveGrowthSeries,
+  buildSubjectiveMastery,
+  buildSubjectiveTimeAllocation,
+  buildSubjectiveTypeScores,
   buildTimeAllocation,
   resolveTargetPlan,
+  type SubjectiveTypeScore,
+  type SubjectiveUsage,
 } from '../services/analytics';
 import {
   DEFAULT_TIME_WINDOW,
@@ -25,18 +36,45 @@ import { EmptyState } from '../components/EmptyState';
 import { AbilityRadar } from '../components/RadarChart';
 import { getAbilityTags, getModules } from '../domain/abilityTags';
 import { normalizeAbilityPath } from '../domain/moduleNormalize';
-import type { AbilitySnapshot, ExamRegistration, Subject, TrainingRecord } from '../domain/types';
+import type { AbilitySnapshot, ExamRegistration, InterviewRecord, Subject, SubjectiveAnswer, TrainingRecord } from '../domain/types';
 import { SUBJECT_LABEL } from '../domain/types';
 import { getAbilityCopy } from '../domain/abilityCopy';
 import { WeaknessPanels } from './WeaknessPage';
 
 const WINDOW_OPTIONS: TimeWindow[] = ['7d', '30d', '90d', 'all'];
 
+/**
+ * 主观题学科（申论 / 面试）在本页的替代面板。
+ *
+ * 本页三张核心卡（增长曲线 / 各模块正确率 / 模块时间分配）都是「题量 + 错题数」口径，
+ * 而申论 / 面试按设计不写训练记录，所以对它们永远为空 —— 空卡不是没数据，是没有数据源。
+ * 这里换成同形状的替代：得分曲线、各题型得分、题型用时分布。
+ */
+interface SubjectivePanel {
+  series: Array<{ week: string; score: number; samples: number }>;
+  typeScores: SubjectiveTypeScore[];
+  usage: SubjectiveUsage[];
+  /** 0-100；无评分时为 null */
+  mastery: number | null;
+  /** 不筛窗口的总数，用于空态说明「全部时间有多少」 */
+  allCount: number;
+  windowCount: number;
+  countLabel: string;
+  entryPath: string;
+  entryLabel: string;
+  /** 图表/表格里的单数单位，用于「每题均时」等文案 */
+  unit: string;
+}
+
 export function AbilityCenterPage() {
   const { prefs } = useAppSession();
   const [trainings, setTrainings] = useState<TrainingRecord[]>([]);
   const [abilities, setAbilities] = useState<AbilitySnapshot[]>([]);
   const [registrations, setRegistrations] = useState<ExamRegistration[]>([]);
+  // 申论 / 面试不写训练记录（见 domains/public-exam 的 TRAINING_EXCLUDED_SUBJECTS），
+  // 它们的得分、题型、用时只存在这两张表里；本页要显示这两个学科就必须单独读。
+  const [subjectiveAnswers, setSubjectiveAnswers] = useState<SubjectiveAnswer[]>([]);
+  const [interviewRecords, setInterviewRecords] = useState<InterviewRecord[]>([]);
   const [subject, setSubject] = useState<Subject>(prefs.subjects[0] ?? 'math');
   // 统一时间窗口（验收缺陷 #6）：全站同一套 TimeWindow，指标标题自动带窗口
   const [windowKey, setWindowKey] = useState<TimeWindow>(DEFAULT_TIME_WINDOW);
@@ -49,9 +87,56 @@ export function AbilityCenterPage() {
         prefs.currentStudentId ? list.filter((r) => r.studentId === prefs.currentStudentId) : list,
       ),
     );
+    void getAllRecords('subjectiveAnswers').then((list) =>
+      setSubjectiveAnswers(
+        prefs.currentStudentId ? list.filter((r) => r.studentId === prefs.currentStudentId) : list,
+      ),
+    );
+    void getAllRecords('interviewRecords').then((list) =>
+      setInterviewRecords(
+        prefs.currentStudentId ? list.filter((r) => r.studentId === prefs.currentStudentId) : list,
+      ),
+    );
   }, [prefs.currentStudentId]);
 
   const windowedTrainings = useMemo(() => filterByWindow(trainings, windowKey), [trainings, windowKey]);
+  /** 该学科的全部训练记录（不筛窗口）：空态要靠它说清「是没录，还是窗口太窄」 */
+  const subjectTrainings = useMemo(() => trainings.filter((r) => r.subject === subject), [trainings, subject]);
+
+  const subjectiveView = useMemo<SubjectivePanel | null>(() => {
+    if (subject === 'shenlun') {
+      const all = subjectiveAnswers.filter((r) => r.subject === 'shenlun');
+      const scoped = filterByWindow(all, windowKey);
+      return {
+        series: buildSubjectiveGrowthSeries(scoped),
+        typeScores: buildSubjectiveTypeScores(scoped),
+        usage: buildSubjectiveTimeAllocation(scoped),
+        mastery: buildSubjectiveMastery(scoped, []).score,
+        allCount: all.length,
+        windowCount: scoped.length,
+        countLabel: '作答次数',
+        entryPath: '/subjective',
+        entryLabel: '去「申论作答」录入',
+        unit: '题',
+      };
+    }
+    if (subject === 'mianshi') {
+      const scoped = filterByWindow(interviewRecords, windowKey);
+      return {
+        series: buildInterviewGrowthSeries(scoped),
+        typeScores: buildInterviewTypeScores(scoped),
+        usage: buildInterviewTimeAllocation(scoped),
+        mastery: buildInterviewStats(scoped).avgScore,
+        allCount: interviewRecords.length,
+        windowCount: scoped.length,
+        countLabel: '作答次数',
+        entryPath: '/interview',
+        entryLabel: '去「面试记录」录入',
+        unit: '题',
+      };
+    }
+    return null;
+  }, [subject, windowKey, subjectiveAnswers, interviewRecords]);
 
   // 目标分：报名表中当前学科的计划（老记录回退到未分科目标分）
   const targetScore = useMemo(
@@ -67,6 +152,31 @@ export function AbilityCenterPage() {
   const growth = useMemo(
     () => buildGrowthSeries(windowedTrainings, subject),
     [windowedTrainings, subject],
+  );
+
+  /** 曲线数据：主观题走作答评分，其余走训练记录（形状对齐，图表只有一条 Line） */
+  const growthCurve = useMemo(
+    () =>
+      subjectiveView
+        ? subjectiveView.series.map((p) => ({
+            week: p.week,
+            score: p.score,
+            samples: p.samples,
+            emergence: false as const,
+          }))
+        : growth,
+    [subjectiveView, growth],
+  );
+
+  /** 雷达：主观题用「各题型得分」当维度 —— 没有模块，但有题型强弱 */
+  const radarData = useMemo(
+    () =>
+      subjectiveView
+        ? subjectiveView.typeScores
+            .filter((t): t is SubjectiveTypeScore & { score: number } => t.score !== null)
+            .map((t) => ({ key: t.label, label: t.label, score: Math.round(t.score) }))
+        : radarSlices,
+    [subjectiveView, radarSlices],
   );
 
   const moduleStats = useMemo(() => buildModuleStats(windowedTrainings), [windowedTrainings]);
@@ -118,6 +228,27 @@ export function AbilityCenterPage() {
   const subjectStats = stats.find((s) => s.subject === subject);
 
   const copy = getAbilityCopy(prefs.gradeLevel);
+  const subjectLabel = SUBJECT_LABEL[subject];
+  /** 该学科在「全部时间」有多少条 —— 空态靠它区分「没录过」和「窗口太窄」 */
+  const totalRecords = subjectiveView ? subjectiveView.allCount : subjectTrainings.length;
+  /** 窗口内有多少条（空态再区分「窗口内有记录但字段缺失」） */
+  const windowRecords = subjectiveView
+    ? subjectiveView.windowCount
+    : filterByWindow(subjectTrainings, windowKey).length;
+  const emptyAction = subjectiveView
+    ? { path: subjectiveView.entryPath, label: subjectiveView.entryLabel }
+    : { path: '/trainings', label: '去「训练记录」录入' };
+  const emptyHint =
+    totalRecords > 0
+      ? `${TIME_WINDOW_LABEL[windowKey]}内没有${subjectLabel}记录；全部时间共有 ${totalRecords} 条，切到「全部时间」即可看到`
+      : subjectiveView
+        ? `${subjectLabel}不写训练记录，本页读的是${subject === 'shenlun' ? '「申论作答」的四维评分 / 套卷得分率' : '「面试记录」的四维评分'}；录一次就会有数据`
+        : `还没有${subjectLabel}训练记录，录入一次即可开始统计`;
+  /** 模块正确率另有「有记录但没模块/题量」这种空法，别把用户往时间窗口上引 */
+  const moduleEmptyHint =
+    windowRecords > 0
+      ? `${TIME_WINDOW_LABEL[windowKey]}内 ${windowRecords} 条记录都缺少模块或题量字段，补全后才能计算正确率`
+      : emptyHint;
   return (
     <div className="space-y-5">
       <PageHeader title={copy.pageTitle} description={copy.pageDescription} />
@@ -154,29 +285,46 @@ export function AbilityCenterPage() {
         </div>
       </div>
 
-      {subjectStats && (
+      {subjectiveView ? (
         <ResponsiveGrid minItemWidth="160px" gap="0.75rem">
           <StatBlock
             label={withWindowLabel('综合掌握度', windowKey)}
-            value={subjectStats.totalQuestions === 0 ? '无数据' : `${subjectStats.masteryScore}%`}
+            value={subjectiveView.mastery === null ? '无数据' : `${Math.round(subjectiveView.mastery)}%`}
             tone="blue"
           />
+          <StatBlock label={withWindowLabel(subjectiveView.countLabel, windowKey)} value={subjectiveView.windowCount} tone="emerald" />
+          <StatBlock label={withWindowLabel('覆盖题型', windowKey)} value={subjectiveView.typeScores.length} tone="slate" />
           <StatBlock
-            label={
-              subjectStats.unfamiliarCorrectRate === null
-                ? withWindowLabel('陌生题正确率(无样本)', windowKey)
-                : withWindowLabel('陌生题正确率', windowKey)
-            }
-            value={
-              subjectStats.unfamiliarCorrectRate === null
-                ? '—'
-                : `${Math.round(subjectStats.unfamiliarCorrectRate * 100)}%`
-            }
-            tone="emerald"
+            label={withWindowLabel('累计用时(小时)', windowKey)}
+            value={+(subjectiveView.usage.reduce((s, u) => s + u.minutes, 0) / 60).toFixed(1)}
+            tone="orange"
           />
-          <StatBlock label={withWindowLabel('累计题量', windowKey)} value={subjectStats.totalQuestions} tone="slate" />
-          <StatBlock label={withWindowLabel('累计错题', windowKey)} value={subjectStats.totalErrors} tone="orange" />
         </ResponsiveGrid>
+      ) : (
+        subjectStats && (
+          <ResponsiveGrid minItemWidth="160px" gap="0.75rem">
+            <StatBlock
+              label={withWindowLabel('综合掌握度', windowKey)}
+              value={subjectStats.totalQuestions === 0 ? '无数据' : `${subjectStats.masteryScore}%`}
+              tone="blue"
+            />
+            <StatBlock
+              label={
+                subjectStats.unfamiliarCorrectRate === null
+                  ? withWindowLabel('陌生题正确率(无样本)', windowKey)
+                  : withWindowLabel('陌生题正确率', windowKey)
+              }
+              value={
+                subjectStats.unfamiliarCorrectRate === null
+                  ? '—'
+                  : `${Math.round(subjectStats.unfamiliarCorrectRate * 100)}%`
+              }
+              tone="emerald"
+            />
+            <StatBlock label={withWindowLabel('累计题量', windowKey)} value={subjectStats.totalQuestions} tone="slate" />
+            <StatBlock label={withWindowLabel('累计错题', windowKey)} value={subjectStats.totalErrors} tone="orange" />
+          </ResponsiveGrid>
+        )
       )}
 
       <p className="text-xs text-slate-400">
@@ -186,18 +334,17 @@ export function AbilityCenterPage() {
 
       {subject === 'shenlun' && (
         <p className="text-xs text-amber-600 leading-relaxed">
-          申论口径：本页的雷达、模块与趋势按训练记录（历史数据）计算，属于「按模块」口径；申论作答的四维评分与
-          「归纳概括 / 综合分析 / 提出对策 / 贯彻执行 / 申发论述」题型强弱在「数据分析 → 申论作答汇总」按题型统计
-          （套卷逐题拆分），两者不混算。申论错因统计只读合并历史申论训练记录的错因（不迁移、不回写），
-          来源构成（新作答 / 历史训练）在申论作答页与数据分析页标注。
+          申论口径：申论不写训练记录（`TRAINING_EXCLUDED_SUBJECTS`），所以本页的雷达、曲线、题型得分与用时
+          全部读「申论作答」的评分，<b>不套用题量 / 正确率那套口径</b>：得分优先取四维评分均值，无四维时用套卷得分率，
+          都没评分就不画点。题型强弱按「归纳概括 / 综合分析 / 提出对策 / 贯彻执行 / 申发论述」聚合（套卷逐题拆分），
+          同题多版本只取最新一版。完整错因构成见「数据分析 → 申论作答汇总」。
         </p>
       )}
 
       {subject === 'mianshi' && (
         <p className="text-xs text-amber-600 leading-relaxed">
-          面试口径：本页雷达、模块与趋势按历史训练记录（含面试学科训练记录）计算；面试的题型、失分原因、
-          自评 / 他评双轨评分与自动版本链在「学科专项 → 面试记录」独立统计，不并入申论四维掌握度，
-          也不复用申论错因枚举。
+          面试口径：面试同样不写训练记录，本页雷达、曲线、题型得分与用时读「面试记录」：综合得分为四维自评/他评
+          取平均后按 5 分制折算百分比，题型强弱与失分原因在「学科专项 → 面试记录」独立统计，不并入申论四维掌握度。
         </p>
       )}
 
@@ -205,34 +352,58 @@ export function AbilityCenterPage() {
         <div className="card p-5">
           <div className="flex items-center gap-2 mb-3">
             <RadarIcon size={16} className="text-blue-600" />
-            <h2 className="font-semibold text-slate-900">{withWindowLabel('能力雷达图', windowKey)}</h2>
-            {targetScore === undefined && <span className="text-xs text-slate-400">未设置目标分</span>}
+            <h2 className="font-semibold text-slate-900">
+              {withWindowLabel(subjectiveView ? '题型得分雷达' : '能力雷达图', windowKey)}
+            </h2>
+            {!subjectiveView && targetScore === undefined && (
+              <span className="text-xs text-slate-400">未设置目标分</span>
+            )}
           </div>
-          {radarSlices.length === 0 ? (
-            <EmptyState icon={RadarIcon} title={copy.radarEmptyTitle} description={copy.radarEmptyDescription} />
+          {radarData.length === 0 ? (
+            <EmptyState
+              icon={RadarIcon}
+              title={subjectiveView ? `暂无${subjectLabel}题型得分` : copy.radarEmptyTitle}
+              description={subjectiveView ? emptyHint : copy.radarEmptyDescription}
+              action={
+                <Link className="btn-primary inline-flex items-center gap-1.5" to={emptyAction.path}>
+                  {emptyAction.label}
+                </Link>
+              }
+            />
           ) : (
-            <AbilityRadar slices={radarSlices} />
+            <AbilityRadar slices={radarData} />
           )}
         </div>
 
         <div className="card p-5">
           <div className="flex items-center gap-2 mb-3">
             <TrendingUp size={16} className="text-emerald-600" />
-            <h2 className="font-semibold text-slate-900">{withWindowLabel('能力增长曲线', windowKey)}</h2>
-            {growth.some((p) => p.emergence) && (
+            <h2 className="font-semibold text-slate-900">
+              {withWindowLabel(subjectiveView ? `${subjectLabel}得分曲线` : '能力增长曲线', windowKey)}
+            </h2>
+            {growthCurve.some((p) => p.emergence) && (
               <span className="badge bg-purple-50 text-purple-700 text-[10px] ml-auto">
-                ✨ 涌现点 {growth.filter((p) => p.emergence).length} 个
+                ✨ 涌现点 {growthCurve.filter((p) => p.emergence).length} 个
               </span>
             )}
           </div>
-          {growth.length === 0 ? (
-            <EmptyState icon={TrendingUp} title={copy.growthEmptyTitle} description={copy.growthEmptyDescription} />
-          ) : growth.length < 2 ? (
+          {growthCurve.length === 0 ? (
+            <EmptyState
+              icon={TrendingUp}
+              title={subjectiveView ? `当前窗口内没有${subjectLabel}得分` : copy.growthEmptyTitle}
+              description={subjectiveView ? emptyHint : copy.growthEmptyDescription}
+              action={
+                <Link className="btn-primary inline-flex items-center gap-1.5" to={emptyAction.path}>
+                  {emptyAction.label}
+                </Link>
+              }
+            />
+          ) : !subjectiveView && growthCurve.length < 2 ? (
             <>
               <EmptyState
                 icon={TrendingUp}
                 title={copy.growthShortTitle}
-                description={copy.growthShortHint(growth.length)}
+                description={copy.growthShortHint(growthCurve.length)}
               />
               {windowKey !== 'all' && (
                 <div className="text-xs text-slate-500 text-center mt-2">
@@ -244,7 +415,7 @@ export function AbilityCenterPage() {
             <>
               <ResponsiveChart minHeight="15rem" maxHeight="17.5rem">
                 <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={growth}>
+                  <LineChart data={growthCurve}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                     <XAxis dataKey="week" tick={{ fontSize: 11 }} />
                     <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} />
@@ -272,7 +443,7 @@ export function AbilityCenterPage() {
                   </LineChart>
                 </ResponsiveContainer>
               </ResponsiveChart>
-              {growth.some((p) => p.emergence) && (
+              {growthCurve.some((p) => p.emergence) && (
                 <div className="text-[10px] text-slate-500 mt-1 leading-relaxed">
                   ✨ <b className="text-purple-700">涌现点</b>:比前 5 周均值跃升 ≥ 12 分——九段心法·涌现的产品挂载, 微小叠加转变成系统力量。 单次循环平淡, 长期坚持会在某刻质变。
                 </div>
@@ -285,11 +456,51 @@ export function AbilityCenterPage() {
       <div className="card p-5">
         <div className="flex items-center gap-2 mb-3">
           <BarChart3 size={16} className="text-purple-600" />
-          <h2 className="font-semibold text-slate-900">{withWindowLabel('各模块正确率', windowKey)}</h2>
-          <span className="text-xs text-slate-400">模块口径：纯正确率，不复用学科加权掌握度公式</span>
+          <h2 className="font-semibold text-slate-900">
+            {withWindowLabel(subjectiveView ? '各题型得分' : '各模块正确率', windowKey)}
+          </h2>
+          <span className="text-xs text-slate-400">
+            {subjectiveView ? '题型口径：四维评分均值优先，无四维时用套卷得分率' : '模块口径：纯正确率，不复用学科加权掌握度公式'}
+          </span>
         </div>
-        {moduleMastery.every((m) => m.score === null) ? (
-          <EmptyState icon={BarChart3} title={copy.moduleEmptyTitle} description={copy.moduleEmptyDescription} />
+        {subjectiveView ? (
+          subjectiveView.typeScores.length === 0 ? (
+            <EmptyState
+              icon={BarChart3}
+              title={`暂无${subjectLabel}题型数据`}
+              description={emptyHint}
+              action={
+                <Link className="btn-primary inline-flex items-center gap-1.5" to={emptyAction.path}>
+                  {emptyAction.label}
+                </Link>
+              }
+            />
+          ) : (
+            <div className="space-y-3">
+              {subjectiveView.typeScores.map((t) => (
+                <div key={t.label} className="flex items-center gap-3">
+                  <div className="w-32 text-sm text-slate-700 shrink-0">{t.label}</div>
+                  {t.score === null ? (
+                    <div className="flex-1 text-xs text-slate-400">暂无评分</div>
+                  ) : (
+                    <MasteryBar score={Math.round(t.score)} className="flex-1" />
+                  )}
+                  <div className="text-xs text-slate-400 w-16 text-right">{t.attempts} 次</div>
+                </div>
+              ))}
+            </div>
+          )
+        ) : moduleMastery.every((m) => m.score === null) ? (
+          <EmptyState
+            icon={BarChart3}
+            title={copy.moduleEmptyTitle}
+            description={moduleEmptyHint}
+            action={
+              <Link className="btn-primary inline-flex items-center gap-1.5" to={emptyAction.path}>
+                {emptyAction.label}
+              </Link>
+            }
+          />
         ) : (
           <div className="space-y-3">
             {moduleMastery.map((m) => (
@@ -310,11 +521,56 @@ export function AbilityCenterPage() {
       <div className="card p-5">
         <div className="flex items-center gap-2 mb-3">
           <BarChart3 size={16} className="text-blue-600" />
-          <h2 className="font-semibold text-slate-900">{withWindowLabel('模块时间分配', windowKey)}</h2>
+          <h2 className="font-semibold text-slate-900">
+            {withWindowLabel(subjectiveView ? '题型用时分布' : '模块时间分配', windowKey)}
+          </h2>
           <span className="text-xs text-slate-400">仅统计有有效用时的记录</span>
         </div>
-        {timeAllocation.length === 0 ? (
-          <CoreEmptyState title="暂无用时数据" description="录入训练时填写用时后，这里会按模块展示时间分配" />
+        {subjectiveView ? (
+          subjectiveView.usage.length === 0 ? (
+            <CoreEmptyState
+              title="暂无用时数据"
+              description={
+                totalRecords === 0
+                  ? `${subjectLabel}记录里还没有填写用时的条目；录入时填上用时后这里会按时长排序`
+                  : `${TIME_WINDOW_LABEL[windowKey]}内的记录都没有填用时，切到「全部时间」或补录用时后再看`
+              }
+            />
+          ) : (
+            <TableScroll label="题型用时分布">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-xs text-slate-500 border-b border-slate-100">
+                    <th className="py-2">题型</th>
+                    <th className="py-2 text-right">累计用时</th>
+                    <th className="py-2 text-right">占比</th>
+                    <th className="py-2 text-right">次数</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {subjectiveView.usage.map((u) => (
+                    <tr key={u.label} className="border-b border-slate-50">
+                      <td className="py-2 text-slate-700">{u.label}</td>
+                      <td className="py-2 text-right text-slate-600">{u.minutes} 分</td>
+                      <td className="py-2 text-right text-slate-600">{u.share}%</td>
+                      <td className="py-2 text-right text-slate-600">{u.sessions}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </TableScroll>
+          )
+        ) : timeAllocation.length === 0 ? (
+          <CoreEmptyState
+            title="暂无用时数据"
+            description={
+              totalRecords === 0
+                ? `${subjectLabel}还没有训练记录；录入训练时填写用时后，这里会按模块展示时间分配`
+                : windowRecords > 0
+                  ? `${TIME_WINDOW_LABEL[windowKey]}内 ${windowRecords} 条训练都没填用时；补录用时后这里会按模块展示分配`
+                  : `${TIME_WINDOW_LABEL[windowKey]}内没有记录；全部时间共 ${totalRecords} 条，切到「全部时间」再看`
+            }
+          />
         ) : (
           <TableScroll label="模块时间分配">
             <table className="w-full text-sm">

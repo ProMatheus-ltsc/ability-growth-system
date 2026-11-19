@@ -2,7 +2,11 @@ import { describe, expect, it } from 'vitest';
 import {
   buildGrowthSeries,
   buildInterviewGrowthSeries,
+  buildInterviewTimeAllocation,
+  buildInterviewTypeScores,
   buildSubjectiveGrowthSeries,
+  buildSubjectiveTimeAllocation,
+  buildSubjectiveTypeScores,
   subjectiveAnswerScore,
 } from '../src/services/analytics';
 import type { InterviewRecord, SubjectiveAnswer, TrainingRecord } from '../src/domain/types';
@@ -180,5 +184,62 @@ describe('面试综合得分曲线', () => {
     ]);
     expect(series).toHaveLength(1);
     expect(series[0].score).toBe(100);
+  });
+});
+
+describe('主观题学科的「模块面板」替代口径', () => {
+  it('申论各题型得分：四维优先，无四维用卷面得分率', () => {
+    const rows = buildSubjectiveTypeScores([
+      answer({ id: 'a', questionType: '归纳概括', dimensionScores: { points: 80, structure: 60 } }),
+      answer({ id: 'b', questionType: '归纳概括', dimensionScores: { points: 70 } }),
+      answer({
+        id: 'c',
+        mode: 'paper',
+        paperTitle: '2023 国考副省级',
+        paperQuestions: [{ content: '对策题', questionType: '提出对策', score: 15, fullMark: 20 }],
+      }),
+    ]);
+    const byType = new Map(rows.map((r) => [r.label, r]));
+    // 先按维度求均值再取维度平均（与 buildSubjectiveMastery 同口径）：
+    // points=(80+70)/2=75，structure=60 → (75+60)/2=67.5
+    expect(byType.get('归纳概括')?.score).toBe(67.5);
+    expect(byType.get('归纳概括')?.attempts).toBe(2);
+    expect(byType.get('提出对策')?.score).toBe(75); // 15/20
+  });
+
+  it('没有评分时题型得分是 null，不是 0', () => {
+    const rows = buildSubjectiveTypeScores([answer({ questionType: '归纳概括' })]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].score).toBeNull();
+  });
+
+  it('申论用时按题型汇总，没填用时的记录不计入', () => {
+    const usage = buildSubjectiveTimeAllocation([
+      answer({ id: 'a', questionType: '归纳概括', durationMinutes: 30 }),
+      answer({ id: 'b', questionType: '归纳概括', durationMinutes: 10 }),
+      answer({ id: 'c', questionType: '提出对策', durationMinutes: 20 }),
+      answer({ id: 'd', questionType: '提出对策' }), // 无用时
+    ]);
+    expect(usage).toHaveLength(2);
+    expect(usage[0]).toMatchObject({ label: '归纳概括', minutes: 40, sessions: 2 });
+    expect(usage[1]).toMatchObject({ label: '提出对策', minutes: 20, sessions: 1 });
+    expect(usage.reduce((s, u) => s + u.share, 0)).toBeCloseTo(100, 0);
+  });
+
+  it('面试题型得分与用时（answerSec 折分钟）', () => {
+    const rows = buildInterviewTypeScores([
+      interview({ id: 'i1', questionType: '综合分析', selfScore: { content: 4, structure: 4, expression: 4, fluency: 4 } }),
+      interview({ id: 'i2', questionType: '综合分析', selfScore: { content: 2, structure: 2, expression: 2, fluency: 2 } }),
+      interview({ id: 'i3', questionType: '组织管理', selfScore: { content: 5, structure: 5, expression: 5, fluency: 5 } }),
+    ]);
+    const byType = new Map(rows.map((r) => [r.label, r]));
+    expect(byType.get('综合分析')?.score).toBe(60); // (80 + 40) / 2
+    expect(byType.get('组织管理')?.score).toBe(100);
+
+    const usage = buildInterviewTimeAllocation([
+      interview({ id: 'i1', questionType: '综合分析', answerSec: 180 }),
+      interview({ id: 'i2', questionType: '综合分析', answerSec: 60 }),
+    ]);
+    expect(usage[0]).toMatchObject({ label: '综合分析', minutes: 4, sessions: 2 });
   });
 });
