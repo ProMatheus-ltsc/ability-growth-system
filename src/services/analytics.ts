@@ -646,6 +646,23 @@ export interface SubjectiveDimensionSummary {
 
 const DIMENSION_KEYS = ['points', 'structure', 'language', 'logic'] as const;
 
+export type SubjectiveDimensionKey = (typeof DIMENSION_KEYS)[number];
+
+/** 申论四维中文名（「四维评分汇总」卡与雷达共用，避免两处文案漂移） */
+export const SUBJECTIVE_DIMENSION_LABEL: Record<SubjectiveDimensionKey, string> = {
+  points: '要点',
+  structure: '结构',
+  language: '语言',
+  logic: '逻辑',
+};
+
+/** 四维雷达：轴就是四维本身，样本数与「四维评分汇总」一致 */
+export interface DimensionRadar {
+  slices: AbilityRadarSlice[];
+  /** 参与平均的样本数（申论=至少填了一维的作答数；面试=至少有一维评分的记录数） */
+  samples: number;
+}
+
 /**
  * 只统计存在 dimensionScores 的作答；每维只对已填值求平均；
  * weakest 为均值最低的维度（键名），无样本时为 null。
@@ -673,6 +690,25 @@ export function buildSubjectiveDimensions(records: SubjectiveAnswer[]): Subjecti
 
   const ranked = DIMENSION_KEYS.filter((k) => avg[k] !== null).sort((a, b) => (avg[a] as number) - (avg[b] as number));
   return { samples: scoped.length, avg, weakest: ranked[0] ?? null };
+}
+
+/**
+ * 申论四维雷达切片：与「四维评分汇总」卡**同源**（buildSubjectiveDimensions）。
+ *
+ * 为什么不是「题型得分雷达」：题型是 5 个（归纳概括 / 综合分析 / …），作答少时轴长短不齐，
+ * 且老记录缺题型会整条不计；四维是每条作答都填的、「四维评分汇总」卡已经在用的口径，
+ * 两个面板对同一批数据必须给出同一组数字，用户才能对照。
+ * 缺失维度不画轴（不补 0）：补 0 会在图上造出「这一维很弱」的假象。
+ */
+export function buildSubjectiveDimensionRadar(records: SubjectiveAnswer[]): DimensionRadar {
+  const summary = buildSubjectiveDimensions(records);
+  const slices = DIMENSION_KEYS.flatMap((key) => {
+    const score = summary.avg[key];
+    return score === null
+      ? []
+      : [{ key, label: SUBJECTIVE_DIMENSION_LABEL[key], score }];
+  });
+  return { slices, samples: summary.samples };
 }
 
 export interface SubjectiveMastery {
@@ -1109,6 +1145,57 @@ export function buildSubjectiveErrorStats(
 
 const INTERVIEW_DIMENSION_KEYS = ['content', 'structure', 'expression', 'fluency'] as const;
 
+export type InterviewDimensionKey = (typeof INTERVIEW_DIMENSION_KEYS)[number];
+
+/** 面试四维中文名（与面试记录页一致：内容 / 结构 / 表达 / 流畅） */
+export const INTERVIEW_DIMENSION_LABEL: Record<InterviewDimensionKey, string> = {
+  content: '内容',
+  structure: '结构',
+  expression: '表达',
+  fluency: '流畅',
+};
+
+/** 单条记录某个维度的有效分：自评/他评都在时取平均，只有一方时取该方，都没有为 null */
+function interviewDimensionValue(record: InterviewRecord, key: InterviewDimensionKey): number | null {
+  const self = record.selfScore?.[key];
+  const teacher = record.teacherScore?.[key];
+  const selfValid = typeof self === 'number' && Number.isFinite(self) && self > 0 ? self : null;
+  const teacherValid = typeof teacher === 'number' && Number.isFinite(teacher) && teacher > 0 ? teacher : null;
+  if (selfValid !== null && teacherValid !== null) return (selfValid + teacherValid) / 2;
+  return selfValid ?? teacherValid;
+}
+
+/**
+ * 面试四维雷达：与 interviewScorePercent 同一取值口径（自评/他评各自取平均后按 5 分制折算），
+ * 区别只是这里不把四维压成一个数，而是保留每一维 —— 综合得分 68 分看不出问题在「内容」还是「流畅」。
+ */
+export function buildInterviewDimensionRadar(records: InterviewRecord[]): DimensionRadar {
+  let samples = 0;
+  const buckets = new Map<InterviewDimensionKey, number[]>();
+
+  for (const record of records) {
+    let rated = false;
+    for (const key of INTERVIEW_DIMENSION_KEYS) {
+      const value = interviewDimensionValue(record, key);
+      if (value === null) continue;
+      rated = true;
+      const bucket = buckets.get(key) ?? [];
+      bucket.push(value);
+      buckets.set(key, bucket);
+    }
+    if (rated) samples += 1;
+  }
+
+  const slices = INTERVIEW_DIMENSION_KEYS.flatMap((key) => {
+    const values = buckets.get(key) ?? [];
+    if (values.length === 0) return [];
+    const percent = round1(((values.reduce((s, v) => s + v, 0) / values.length) / 5) * 100);
+    return [{ key, label: INTERVIEW_DIMENSION_LABEL[key], score: percent }];
+  });
+
+  return { slices, samples };
+}
+
 /** 面试作答时间：优先录入时采集的 answeredAt，老记录退回 createdAt */
 export const interviewAnsweredAt = (r: InterviewRecord): string =>
   r.answeredAt ?? r.createdAt ?? `${r.date}T00:00:00.000Z`;
@@ -1120,12 +1207,7 @@ export const interviewAnsweredAt = (r: InterviewRecord): string =>
 export function interviewScorePercent(record: InterviewRecord): number | null {
   const values: number[] = [];
   for (const key of INTERVIEW_DIMENSION_KEYS) {
-    const self = record.selfScore?.[key];
-    const teacher = record.teacherScore?.[key];
-    const selfValid = typeof self === 'number' && Number.isFinite(self) && self > 0 ? self : null;
-    const teacherValid = typeof teacher === 'number' && Number.isFinite(teacher) && teacher > 0 ? teacher : null;
-    const value =
-      selfValid !== null && teacherValid !== null ? (selfValid + teacherValid) / 2 : (selfValid ?? teacherValid);
+    const value = interviewDimensionValue(record, key);
     if (value !== null) values.push(value);
   }
   if (values.length === 0) return null;

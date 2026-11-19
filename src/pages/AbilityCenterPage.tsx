@@ -8,18 +8,21 @@ import { findAbilities, findTrainingsByStudent, getAllRecords } from '../service
 import {
   aggregateBySubject,
   buildGrowthSeries,
+  buildInterviewDimensionRadar,
   buildInterviewGrowthSeries,
   buildInterviewStats,
   buildInterviewTimeAllocation,
   buildInterviewTypeScores,
   buildModuleStats,
   buildRadarSlices,
+  buildSubjectiveDimensionRadar,
   buildSubjectiveGrowthSeries,
   buildSubjectiveMastery,
   buildSubjectiveTimeAllocation,
   buildSubjectiveTypeScores,
   buildTimeAllocation,
   resolveTargetPlan,
+  type DimensionRadar,
   type SubjectiveTypeScore,
   type SubjectiveUsage,
 } from '../services/analytics';
@@ -46,14 +49,19 @@ const WINDOW_OPTIONS: TimeWindow[] = ['7d', '30d', '90d', 'all'];
 /**
  * 主观题学科（申论 / 面试）在本页的替代面板。
  *
- * 本页三张核心卡（增长曲线 / 各模块正确率 / 模块时间分配）都是「题量 + 错题数」口径，
+ * 本页核心卡（雷达 / 增长曲线 / 各模块正确率 / 模块时间分配）都是「题量 + 错题数」口径，
  * 而申论 / 面试按设计不写训练记录，所以对它们永远为空 —— 空卡不是没数据，是没有数据源。
- * 这里换成同形状的替代：得分曲线、各题型得分、题型用时分布。
+ * 这里换成同形状的替代：四维评分雷达、得分曲线、各题型得分、题型用时分布。
  */
 interface SubjectivePanel {
   series: Array<{ week: string; score: number; samples: number }>;
   typeScores: SubjectiveTypeScore[];
   usage: SubjectiveUsage[];
+  /**
+   * 雷达用四维评分（要点/结构/语言/逻辑；面试是 内容/结构/表达/流畅），
+   * 与「申论作答 → 四维评分汇总」卡同源，两处对同一批数据给出同一组数字。
+   */
+  radar: DimensionRadar;
   /** 0-100；无评分时为 null */
   mastery: number | null;
   /** 不筛窗口的总数，用于空态说明「全部时间有多少」 */
@@ -111,6 +119,7 @@ export function AbilityCenterPage() {
         series: buildSubjectiveGrowthSeries(scoped),
         typeScores: buildSubjectiveTypeScores(scoped),
         usage: buildSubjectiveTimeAllocation(scoped),
+        radar: buildSubjectiveDimensionRadar(scoped),
         mastery: buildSubjectiveMastery(scoped, []).score,
         allCount: all.length,
         windowCount: scoped.length,
@@ -126,6 +135,7 @@ export function AbilityCenterPage() {
         series: buildInterviewGrowthSeries(scoped),
         typeScores: buildInterviewTypeScores(scoped),
         usage: buildInterviewTimeAllocation(scoped),
+        radar: buildInterviewDimensionRadar(scoped),
         mastery: buildInterviewStats(scoped).avgScore,
         allCount: interviewRecords.length,
         windowCount: scoped.length,
@@ -168,14 +178,14 @@ export function AbilityCenterPage() {
     [subjectiveView, growth],
   );
 
-  /** 雷达：主观题用「各题型得分」当维度 —— 没有模块，但有题型强弱 */
+  /**
+   * 雷达：主观题学科用**四维评分**（要点/结构/语言/逻辑、内容/结构/表达/流畅），
+   * 与「四维评分汇总」卡同源；其余学科仍是能力维度 / 模块切片。
+   * 题型得分不画雷达 —— 题型数量随作答变化、老记录缺题型会被整条丢弃，
+   * 拿它当轴会让图随时变形；题型强弱仍在「各题型得分」卡里按条形展示。
+   */
   const radarData = useMemo(
-    () =>
-      subjectiveView
-        ? subjectiveView.typeScores
-            .filter((t): t is SubjectiveTypeScore & { score: number } => t.score !== null)
-            .map((t) => ({ key: t.label, label: t.label, score: Math.round(t.score) }))
-        : radarSlices,
+    () => (subjectiveView ? subjectiveView.radar.slices : radarSlices),
     [subjectiveView, radarSlices],
   );
 
@@ -248,6 +258,16 @@ export function AbilityCenterPage() {
   const moduleEmptyHint =
     windowRecords > 0
       ? `${TIME_WINDOW_LABEL[windowKey]}内 ${windowRecords} 条记录都缺少模块或题量字段，补全后才能计算正确率`
+      : emptyHint;
+  /**
+   * 四维雷达的第二种空法：有记录但一条四维评分都没填。
+   * 这种最容易被当成「功能坏了」，必须写清补哪几个字段。
+   */
+  const radarEmptyHint =
+    subjectiveView && subjectiveView.radar.samples === 0 && subjectiveView.windowCount > 0
+      ? `${TIME_WINDOW_LABEL[windowKey]}内有 ${subjectiveView.windowCount} 条${subjectLabel}记录，但都没填四维评分（${
+          subject === 'shenlun' ? '要点 / 结构 / 语言 / 逻辑' : '内容 / 结构 / 表达 / 流畅'
+        }）；补录评分后这里就会出图`
       : emptyHint;
   return (
     <div className="space-y-5">
@@ -334,17 +354,21 @@ export function AbilityCenterPage() {
 
       {subject === 'shenlun' && (
         <p className="text-xs text-amber-600 leading-relaxed">
-          申论口径：申论不写训练记录（`TRAINING_EXCLUDED_SUBJECTS`），所以本页的雷达、曲线、题型得分与用时
-          全部读「申论作答」的评分，<b>不套用题量 / 正确率那套口径</b>：得分优先取四维评分均值，无四维时用套卷得分率，
-          都没评分就不画点。题型强弱按「归纳概括 / 综合分析 / 提出对策 / 贯彻执行 / 申发论述」聚合（套卷逐题拆分），
-          同题多版本只取最新一版。完整错因构成见「数据分析 → 申论作答汇总」。
+          申论口径：申论不写训练记录（`TRAINING_EXCLUDED_SUBJECTS`），本页的雷达、曲线、题型得分与用时
+          全部读「申论作答」的评分，<b>不套用题量 / 正确率那套口径</b>。四维雷达取
+          <b>要点 / 结构 / 语言 / 逻辑</b>的均值，与「申论作答 → 四维评分汇总」卡同源（缺失维度不画轴，不补 0）；
+          得分曲线按周取四维均值，无四维时用套卷得分率，都没评分就不画点。题型强弱按
+          「归纳概括 / 综合分析 / 提出对策 / 贯彻执行 / 申发论述」聚合（套卷逐题拆分），同题多版本只取最新一版。
+          完整错因构成见「数据分析 → 申论作答汇总」。
         </p>
       )}
 
       {subject === 'mianshi' && (
         <p className="text-xs text-amber-600 leading-relaxed">
-          面试口径：面试同样不写训练记录，本页雷达、曲线、题型得分与用时读「面试记录」：综合得分为四维自评/他评
-          取平均后按 5 分制折算百分比，题型强弱与失分原因在「学科专项 → 面试记录」独立统计，不并入申论四维掌握度。
+          面试口径：面试同样不写训练记录，本页雷达、曲线、题型得分与用时读「面试记录」。四维雷达取
+          <b>内容 / 结构 / 表达 / 流畅</b>的均值（同维度自评与他评都有时取平均，再按 5 分制折算百分比）；
+          综合得分是这四维再取平均。题型强弱与失分原因在「学科专项 → 面试记录」独立统计，
+          不并入申论四维掌握度。
         </p>
       )}
 
@@ -353,17 +377,21 @@ export function AbilityCenterPage() {
           <div className="flex items-center gap-2 mb-3">
             <RadarIcon size={16} className="text-blue-600" />
             <h2 className="font-semibold text-slate-900">
-              {withWindowLabel(subjectiveView ? '题型得分雷达' : '能力雷达图', windowKey)}
+              {withWindowLabel(subjectiveView ? '四维评分雷达' : '能力雷达图', windowKey)}
             </h2>
-            {!subjectiveView && targetScore === undefined && (
-              <span className="text-xs text-slate-400">未设置目标分</span>
+            {subjectiveView ? (
+              <span className="text-xs text-slate-400 ml-auto">
+                样本 {subjectiveView.radar.samples} 条（0-100）
+              </span>
+            ) : (
+              targetScore === undefined && <span className="text-xs text-slate-400">未设置目标分</span>
             )}
           </div>
           {radarData.length === 0 ? (
             <EmptyState
               icon={RadarIcon}
-              title={subjectiveView ? `暂无${subjectLabel}题型得分` : copy.radarEmptyTitle}
-              description={subjectiveView ? emptyHint : copy.radarEmptyDescription}
+              title={subjectiveView ? `暂无${subjectLabel}四维评分` : copy.radarEmptyTitle}
+              description={subjectiveView ? radarEmptyHint : copy.radarEmptyDescription}
               action={
                 <Link className="btn-primary inline-flex items-center gap-1.5" to={emptyAction.path}>
                   {emptyAction.label}
@@ -371,7 +399,15 @@ export function AbilityCenterPage() {
               }
             />
           ) : (
-            <AbilityRadar slices={radarData} />
+            <>
+              <AbilityRadar slices={radarData} />
+              {subjectiveView && radarData.length < 4 && (
+                <p className="text-xs text-slate-500 mt-2 text-center">
+                  只有 {radarData.length} 个维度有评分（{radarData.map((s) => s.label).join(' / ')}），
+                  缺失维度不画轴，补齐其余维度后图形才完整
+                </p>
+              )}
+            </>
           )}
         </div>
 
