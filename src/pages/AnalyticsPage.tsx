@@ -30,12 +30,14 @@ import {
   analyzeTrainingROI,
   analyzeMarginalYield,
   buildGrowthSeries,
+  buildInterviewGrowthSeries,
   buildModuleStats,
   buildStageReport,
   buildSubjectiveByType,
   buildSubjectiveComposition,
   buildSubjectiveDimensions,
   buildSubjectiveErrorStats,
+  buildSubjectiveGrowthSeries,
   buildSubjectiveMastery,
   buildTimeAllocation,
   buildWeeklyDelta,
@@ -57,7 +59,14 @@ import {
 import { CausalTab, ForecastTab, LeverageTab, StrategyTab } from './InsightsPage';
 import { ALL_TRANSFERS, TRANSFER_STRENGTH_LABEL } from '../domain/abilityTransfer';
 import { ERROR_CATEGORY_LABEL, MODULE_VISIBILITY, SUBJECT_LABEL } from '../domain/types';
-import type { AbilityGap, ExamRegistration, Subject, SubjectiveAnswer, TrainingRecord } from '../domain/types';
+import type {
+  AbilityGap,
+  ExamRegistration,
+  InterviewRecord,
+  Subject,
+  SubjectiveAnswer,
+  TrainingRecord,
+} from '../domain/types';
 import { getAnalyticsCopy } from '../domain/analyticsCopy';
 import { getInsightsCopy } from '../domain/insightsCopy';
 import { abilityPointText } from '../domain/missingInfo';
@@ -82,6 +91,15 @@ const SUBJECTIVE_DIM_LABEL: Array<{ key: 'points' | 'structure' | 'language' | '
   { key: 'logic', label: '逻辑' },
 ];
 
+/** 分数曲线的统一点形状：训练曲线多带陌生题与涌现字段，主观题曲线只有周均得分 */
+interface GrowthCurvePoint {
+  week: string;
+  score: number;
+  unfamiliar?: number;
+  samples?: number;
+  emergence?: boolean;
+}
+
 export function AnalyticsPage() {
   const { prefs } = useAppSession();
   const [tab, setTab] = useState<Tab>('overview');
@@ -89,6 +107,8 @@ export function AnalyticsPage() {
   const [gaps, setGaps] = useState<AbilityGap[]>([]);
   const [registrations, setRegistrations] = useState<ExamRegistration[]>([]);
   const [subjectiveAnswers, setSubjectiveAnswers] = useState<SubjectiveAnswer[]>([]);
+  // 面试记录：面试同样不进 trainings，它的得分只存在这里（见下方曲线数据源说明）
+  const [interviewRecords, setInterviewRecords] = useState<InterviewRecord[]>([]);
   const [subject, setSubject] = useState<Subject>(prefs.subjects[0] ?? 'math');
   const [windowKey, setWindowKey] = useState<TimeWindow>(DEFAULT_TIME_WINDOW);
 
@@ -103,6 +123,12 @@ export function AnalyticsPage() {
     // 只读：申论作答版本链，按当前学员过滤，切换学生不串数据
     void getAllRecords('subjectiveAnswers').then((list) =>
       setSubjectiveAnswers(
+        prefs.currentStudentId ? list.filter((r) => r.studentId === prefs.currentStudentId) : list,
+      ),
+    );
+    // 只读：面试记录（申论 / 面试都不进 trainings，得分曲线各自回自己的数据源取）
+    void getAllRecords('interviewRecords').then((list) =>
+      setInterviewRecords(
         prefs.currentStudentId ? list.filter((r) => r.studentId === prefs.currentStudentId) : list,
       ),
     );
@@ -174,7 +200,84 @@ export function AnalyticsPage() {
   const roi = useMemo(() => analyzeTrainingROI(aggregationTrainings), [aggregationTrainings]);
   const marginal = useMemo(() => analyzeMarginalYield(aggregationTrainings, subject), [aggregationTrainings, subject]);
   const feedbackLoops = useMemo(() => detectFeedbackLoops(aggregationTrainings, gaps), [aggregationTrainings, gaps]);
-  const growthSeries = useMemo(() => buildGrowthSeries(windowedTrainings, subject), [windowedTrainings, subject]);
+
+  const windowedInterviews = useMemo(() => filterByWindow(interviewRecords, windowKey), [interviewRecords, windowKey]);
+
+  /**
+   * 分数曲线的数据源按学科分派。
+   *
+   * 申论 / 面试按设计**不写训练记录**（`TRAINING_EXCLUDED_SUBJECTS`：它们的口径是评分，
+   * 不是题量 + 错题数），所以此前统一走 `buildGrowthSeries(trainings, subject)` 时，
+   * 这两个学科的曲线是结构性空集 —— 无论录多少申论作答都不会有点。
+   */
+  const growth = useMemo((): { kind: 'training' | 'subjective'; series: GrowthCurvePoint[]; hasOutsideWindow: boolean } => {
+    // 历史导入数据可能真的带 shenlun / mianshi 的训练行（禁写规则只拦 UI 与同步守卫，不拦导入），
+    // 所以主观题学科先把「作答评分」放第一优先，没有评分时才退回训练正确率曲线（与掌握度的兜底同源）。
+    const trainingFallback = () => ({
+      kind: 'training' as const,
+      series: buildGrowthSeries(windowedTrainings, subject),
+      hasOutsideWindow: trainings.filter((r) => r.subject === subject).length > filterByWindow(
+        trainings.filter((r) => r.subject === subject),
+        windowKey,
+      ).length,
+    });
+
+    if (subject === 'shenlun') {
+      const series = buildSubjectiveGrowthSeries(windowedShenlun);
+      if (series.length > 0) {
+        return {
+          kind: 'subjective',
+          series,
+          hasOutsideWindow: shenlunAnswers.length > windowedShenlun.length,
+        };
+      }
+      return trainingFallback();
+    }
+    if (subject === 'mianshi') {
+      const series = buildInterviewGrowthSeries(windowedInterviews);
+      if (series.length > 0) {
+        return {
+          kind: 'subjective',
+          series,
+          hasOutsideWindow: interviewRecords.length > windowedInterviews.length,
+        };
+      }
+      return trainingFallback();
+    }
+    return trainingFallback();
+  }, [subject, trainings, windowKey, shenlunAnswers, windowedShenlun, interviewRecords, windowedInterviews, windowedTrainings]);
+  const growthSeries = growth.series;
+
+  /**
+   * 空态文案要能自己回答「为什么没有记录」。
+   * 申论 / 面试此前统一显示「训练记录不足」，但这两个学科根本不写训练记录 ——
+   * 用户照着提示去补训练，永远补不出这条曲线。
+   */
+  const growthEmptyCopy = (() => {
+    const windowLabel = TIME_WINDOW_LABEL[windowKey];
+    const subjectLabel = SUBJECT_LABEL[subject];
+    if (growth.kind === 'subjective' || subject === 'shenlun' || subject === 'mianshi') {
+      const store = subject === 'shenlun' ? '申论作答' : '面试记录';
+      const path = subject === 'shenlun' ? '/subjective' : '/interview';
+      return {
+        title: `当前时间窗口内没有可用的${subjectLabel}评分`,
+        description: growth.hasOutsideWindow
+          ? `${windowLabel}内没有可用评分；更早的记录在「全部时间」里。${subjectLabel}不写训练记录，曲线只来自${store}的四维评分${subject === 'shenlun' ? '或套卷得分率' : ''}。`
+          : `${subjectLabel}不写训练记录，这条曲线只来自${store}的评分（${subject === 'shenlun' ? '四维评分优先，无四维时用套卷得分率' : '四维自评/他评取平均'}）；录一次就能看到曲线。`,
+        path,
+        actionLabel: `去「${store}」录入`,
+      };
+    }
+    return {
+      title: `当前时间窗口内暂无${subjectLabel}训练记录`,
+      description:
+        windowKey === 'all'
+          ? '完成两周以上训练后可查看历史分数曲线'
+          : `${windowLabel}内没有该学科训练记录；${growth.hasOutsideWindow ? '更早的记录请切换到「全部时间」查看' : '换到「全部时间」也还没有的话，先录入一次训练'}`,
+      path: '/trainings',
+      actionLabel: '去「训练记录」录入',
+    };
+  })();
   const timeAllocation = useMemo(
     () => buildTimeAllocation(windowedTrainings.filter((r) => r.subject === subject)),
     [windowedTrainings, subject],
@@ -498,7 +601,8 @@ export function AnalyticsPage() {
             同一份套卷同时有四维评分与卷面得分时，以四维评分为准；套卷的题型强弱按「每题」聚合（不是整卷均分），单题与套卷分开计数；
             申论作答汇总只读，不写入训练记录，也不参与非申论学科的掌握度计算；
             申论错因统计包含历史申论训练记录的错因（读取时合并，不改原记录）；面试的评分、题型与失分原因在「学科专项 → 面试记录」独立统计，
-            不并入本页申论口径。
+            不并入本页申论口径。历史分数曲线的数据源按学科分派：申论读 subjectiveAnswers 的评分、面试读 interviewRecords 的综合得分，
+            其余学科读训练记录正确率 —— 因为申论 / 面试按设计不写训练记录，用训练表取它们的分数只会永远是空集。
           </div>
 
           <div className="card p-5">
@@ -514,16 +618,21 @@ export function AnalyticsPage() {
               )}
             </div>
             <p className="text-xs text-slate-500 mb-3">
-              按周汇总真实训练记录的正确率，虚线为陌生题正确率；只统计已录入的数据，不含推算值。
+              {growth.kind === 'training'
+                ? '按周汇总真实训练记录的正确率，虚线为陌生题正确率；只统计已录入的数据，不含推算值。'
+                : subject === 'shenlun'
+                  ? '按周汇总申论作答得分：四维评分均值优先，无四维时用套卷得分率；同题多版本只取最新。'
+                  : '按周汇总面试综合得分：四维自评/他评取平均后折算百分比；同题多版本只取最新。'}
             </p>
             {growthSeries.length === 0 ? (
               <EmptyState
                 icon={TrendingUp}
-                title="当前时间窗口内暂无分数数据"
-                description={
-                  windowKey === 'all'
-                    ? '完成两周以上训练后可查看历史分数曲线'
-                    : `当前只统计${TIME_WINDOW_LABEL[windowKey]}；更早的历史记录请切换到「全部时间」查看`
+                title={growthEmptyCopy.title}
+                description={growthEmptyCopy.description}
+                action={
+                  <Link className="btn-primary inline-flex items-center gap-1.5" to={growthEmptyCopy.path}>
+                    {growthEmptyCopy.actionLabel}
+                  </Link>
                 }
               />
             ) : (
@@ -535,8 +644,22 @@ export function AnalyticsPage() {
                     <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} />
                     <Tooltip />
                     <Legend />
-                    <Line type="monotone" dataKey="score" stroke="#2563eb" name="整体正确率" dot={{ r: 3 }} />
-                    <Line type="monotone" dataKey="unfamiliar" stroke="#f59e0b" name="陌生题正确率" strokeDasharray="4 4" />
+                    <Line
+                      type="monotone"
+                      dataKey="score"
+                      stroke="#2563eb"
+                      name={growth.kind === 'training' ? '整体正确率' : '得分'}
+                      dot={{ r: 3 }}
+                    />
+                    {growth.kind === 'training' && (
+                      <Line
+                        type="monotone"
+                        dataKey="unfamiliar"
+                        stroke="#f59e0b"
+                        name="陌生题正确率"
+                        strokeDasharray="4 4"
+                      />
+                    )}
                   </LineChart>
                 </ResponsiveContainer>
               </ResponsiveChart>

@@ -1389,6 +1389,112 @@ function weekKey(dateISO: string): string {
   return `${d.getFullYear()}-W${String(week).padStart(2, '0')}`;
 }
 
+/** ============ 主观题（申论 / 面试）得分曲线 ============ */
+
+/**
+ * 为什么申论 / 面试不能复用 `buildGrowthSeries`：
+ * 这两个学科按设计**不进 `trainings`**（`TRAINING_EXCLUDED_SUBJECTS`，它们的口径是评分而不是题量+错题数），
+ * 所以按 `subject === 'shenlun'` 去训练表里找，永远是空集。
+ * 它们的得分来源只有两处：申论四维评分 / 套卷得分率（`subjectiveAnswers`）、
+ * 面试四维自评+他评（`interviewRecords`）。
+ */
+export interface SubjectiveGrowthPoint {
+  week: string;
+  /** 0-100 的周均得分 */
+  score: number;
+  /** 参与本周均值的作答条数（版本链已去重） */
+  samples: number;
+}
+
+/**
+ * 申论单条作答的得分（0-100）：
+ * 1. 有四维评分 → 有分维度的均值（与 `buildSubjectiveMastery` 同口径）；
+ * 2. 无四维但有卷面分 → 套卷得分率；
+ * 3. 都没有 → null。未知不当 0：宁可不画这个点，也不拉低整周均分。
+ */
+export function subjectiveAnswerScore(answer: SubjectiveAnswer): number | null {
+  const dims = DIMENSION_KEYS.map((k) => answer.dimensionScores?.[k]).filter(
+    (v): v is number => typeof v === 'number' && Number.isFinite(v),
+  );
+  if (dims.length > 0) return round1(dims.reduce((s, v) => s + v, 0) / dims.length);
+
+  const score = answer.paperScore;
+  const full = answer.paperFullMark;
+  if (
+    typeof score === 'number' &&
+    Number.isFinite(score) &&
+    typeof full === 'number' &&
+    Number.isFinite(full) &&
+    full > 0
+  ) {
+    return round1(Math.max(0, Math.min(1, score / full)) * 100);
+  }
+  return null;
+}
+
+/** 按周求均值；`date` 用记录的业务日期，与训练曲线的周口径一致 */
+function weeklyScoreSeries(entries: Array<{ date: string; score: number }>): SubjectiveGrowthPoint[] {
+  const buckets = new Map<string, number[]>();
+  for (const entry of entries) {
+    const week = weekKey(entry.date);
+    const list = buckets.get(week) ?? [];
+    list.push(entry.score);
+    buckets.set(week, list);
+  }
+  return Array.from(buckets.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([week, scores]) => ({
+      week,
+      score: Math.round(scores.reduce((s, v) => s + v, 0) / scores.length),
+      samples: scores.length,
+    }));
+}
+
+/**
+ * 同一道题的多版本只取最新一条。
+ *
+ * 申论按 `questionKey` 自动成链（老记录没有 key 时退回 `parentId`，都没有就各自独立）。
+ * 不去重的话，同一题反复改稿会把那一天的曲线变成「改了几稿」的计数，而不是得分水平。
+ */
+function latestPerChain<T extends { id: string; parentId?: string; questionKey?: string }>(
+  records: T[],
+  answeredAt: (record: T) => string,
+  version: (record: T) => number,
+): T[] {
+  const latest = new Map<string, T>();
+  const rank = (record: T) => `${answeredAt(record)}#${String(version(record)).padStart(6, '0')}`;
+  for (const record of records) {
+    const key = record.questionKey?.trim() || record.parentId || record.id;
+    const prev = latest.get(key);
+    if (!prev || rank(record) > rank(prev)) latest.set(key, record);
+  }
+  return Array.from(latest.values());
+}
+
+/** 申论得分曲线：四维均值优先，套卷得分率兜底；没有任何评分的作答不画点 */
+export function buildSubjectiveGrowthSeries(answers: SubjectiveAnswer[]): SubjectiveGrowthPoint[] {
+  const scored = latestPerChain(
+    answers,
+    (r) => r.answeredAt ?? r.createdAt ?? r.date,
+    (r) => r.version ?? 0,
+  )
+    .map((r) => ({ date: r.date, score: subjectiveAnswerScore(r) }))
+    .filter((entry): entry is { date: string; score: number } => entry.score !== null);
+  return weeklyScoreSeries(scored);
+}
+
+/** 面试综合得分曲线：复用 `interviewScorePercent`（0-100），版本链同样只取最新 */
+export function buildInterviewGrowthSeries(records: InterviewRecord[]): SubjectiveGrowthPoint[] {
+  const scored = latestPerChain(
+    records,
+    interviewAnsweredAt,
+    (r) => r.version ?? 0,
+  )
+    .map((r) => ({ date: r.date, score: interviewScorePercent(r) }))
+    .filter((entry): entry is { date: string; score: number } => entry.score !== null);
+  return weeklyScoreSeries(scored);
+}
+
 export function prioritizeGaps(gaps: AbilityGap[]): AbilityGap[] {
   const weightSeverity = (s: AbilityGap['severity']) => (s === 'serious' ? 3 : s === 'medium' ? 2 : 1);
   return [...gaps].sort((a, b) => {
