@@ -5,7 +5,7 @@ import { PlusCircle, Trash2, Zap, X, Filter, ArrowRight, FileText } from 'lucide
 import { useToast } from '@shared/core';
 import { useAppSession } from '../hooks/useAppSession';
 import { getTrainingsCopy } from '../domain/trainingsCopy';
-import { findTrainingsByStudent, findGaps, putRecord, deleteRecord, getMeta, setMeta, getAllRecords } from '../services/localDB';
+import { findGaps, putRecord, deleteRecord, getMeta, setMeta, getAllRecords, getWindowRecords } from '../services/localDB';
 import { deriveGapsFromTraining, deriveSnapshotFromTraining, isTimedMet, interviewAnsweredAt, interviewScorePercent } from '../services/analytics';
 import { withTrainingSemantics } from '../domain/trainingSemantics';
 import { getAbilityTags, getModules } from '../domain/abilityTags';
@@ -31,6 +31,9 @@ import { EmptyState } from '../components/EmptyState';
 
 const RECENT_KEY = 'trainings-recent';
 
+/** 每页条数：服务端游标分页的窗口大小 */
+const PAGE_SIZE = 20;
+
 interface RecentDefaults {
   subject: Subject;
   module: string;
@@ -39,22 +42,72 @@ interface RecentDefaults {
   durationMinutes: number;
 }
 
+type SortBy = 'date-desc' | 'date-asc' | 'accuracy-asc' | 'accuracy-desc';
+
 export function TrainingsPage() {
   const { prefs } = useAppSession();
   const { showToast } = useToast();
   const [records, setRecords] = useState<TrainingRecord[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [quickMode, setQuickMode] = useState(false);
-  const [filterSubject, setFilterSubject] = useState<Subject | 'all'>('all');
   const [recent, setRecent] = useState<RecentDefaults | null>(null);
   // 申论 / 面试只在训练记录页只读展示，录入仍走各自唯一入口（不写 trainings）
   const [shenlunAnswers, setShenlunAnswers] = useState<SubjectiveAnswer[]>([]);
   const [interviewRecords, setInterviewRecords] = useState<InterviewRecord[]>([]);
   const [subjectiveFilter, setSubjectiveFilter] = useState<'all' | 'shenlun' | 'mianshi'>('all');
 
-  const refresh = useCallback(async () => {
-    const list = await findTrainingsByStudent(prefs.currentStudentId);
-    setRecords(list);
+  // ---- 筛选 / 排序 / 游标分页 ----
+  //
+  // 分两档（决定了「翻页还有没有效」）：
+  // - 学科 + 时间区间：**下推到服务端**，翻页语义因此是全局正确的；
+  // - 模块 / 题型 / 排序：留在客户端，只作用于已加载的这几页（界面会显式提示）。
+  //   这类细粒度筛选无法在「按日期游标」的分页里保证全局正确——要么改服务端加索引，
+  //   要么就老实说清楚它只管已加载的部分。
+  const [filterSubject, setFilterSubject] = useState<Subject | 'all'>('all');
+  const [filterModule, setFilterModule] = useState<string>('all');
+  const [filterType, setFilterType] = useState<string>('all');
+  const [dateFrom, setDateFrom] = useState<string>('');
+  const [dateTo, setDateTo] = useState<string>('');
+  const [sortBy, setSortBy] = useState<SortBy>('date-desc');
+  const [facets, setFacets] = useState<{ module: string[]; trainingType: string[] }>({
+    module: [],
+    trainingType: [],
+  });
+  const [cursor, setCursor] = useState<{ hasMore: boolean; before?: string; beforeId?: string }>({
+    hasMore: false,
+  });
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+
+  /** 服务端侧筛选（翻页时保持不变，保证游标有效） */
+  const serverQuery = useMemo(
+    () => ({
+      order: 'date' as const,
+      limit: PAGE_SIZE,
+      ...(prefs.currentStudentId ? { studentId: prefs.currentStudentId } : {}),
+      ...(filterSubject !== 'all' ? { subject: filterSubject } : {}),
+      ...(dateFrom ? { dateFrom } : {}),
+      ...(dateTo ? { dateTo } : {}),
+    }),
+    [prefs.currentStudentId, filterSubject, dateFrom, dateTo],
+  );
+
+  const loadFirstPage = useCallback(async (): Promise<TrainingRecord[]> => {
+    setLoading(true);
+    try {
+      // facets 只随首页返回：模块 / 题型下拉的可选值必须覆盖「整段历史」，
+      // 不能只列已加载的那 20 条里的值，否则用户选不到自己的模块。
+      const page = await getWindowRecords('trainings', { ...serverQuery, facets: ['module', 'trainingType'] });
+      setRecords(page.records);
+      setFacets({ module: page.facets?.module ?? [], trainingType: page.facets?.trainingType ?? [] });
+      setCursor({ hasMore: page.hasMore, before: page.nextBefore, beforeId: page.nextBeforeId });
+      return page.records;
+    } finally {
+      setLoading(false);
+    }
+  }, [serverQuery]);
+
+  const loadReadOnlySections = useCallback(async () => {
     const [answers, interviews] = await Promise.all([
       getAllRecords('subjectiveAnswers'),
       getAllRecords('interviewRecords'),
@@ -69,10 +122,35 @@ export function TrainingsPage() {
     setInterviewRecords(scopeInterviews);
   }, [prefs.currentStudentId]);
 
+  const refresh = useCallback(async (): Promise<TrainingRecord[]> => {
+    const [loaded] = await Promise.all([loadFirstPage(), loadReadOnlySections()]);
+    return loaded;
+  }, [loadFirstPage, loadReadOnlySections]);
+
   useEffect(() => {
     void refresh();
     void getMeta<RecentDefaults | null>(RECENT_KEY, null).then(setRecent);
   }, [refresh]);
+
+  const loadMore = useCallback(async () => {
+    if (!cursor.hasMore || cursor.before === undefined || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const page = await getWindowRecords('trainings', {
+        ...serverQuery,
+        before: cursor.before,
+        ...(cursor.beforeId ? { beforeId: cursor.beforeId } : {}),
+      });
+      // 翻页期间可能有新写入把游标位置顶动，按 id 去重比「整段重拉」便宜得多
+      setRecords((prev) => {
+        const seen = new Set(prev.map((record) => record.id));
+        return [...prev, ...page.records.filter((record) => !seen.has(record.id))];
+      });
+      setCursor({ hasMore: page.hasMore, before: page.nextBefore, beforeId: page.nextBeforeId });
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [cursor, loadingMore, serverQuery]);
 
   /** 训练记录只允许客观题学科：申论 / 面试从学科下拉与筛选里一起剔除 */
   const entrySubjects = useMemo(
@@ -80,32 +158,15 @@ export function TrainingsPage() {
     [prefs.subjects, prefs.gradeLevel],
   );
 
-  // ---- 筛选 / 排序 / 分页（2026-11-12 加：记录多时刷屏，默认每页 20 条）----
-  const PAGE_SIZE = 20;
-  const [filterModule, setFilterModule] = useState<string>('all');
-  const [filterType, setFilterType] = useState<string>('all');
-  const [dateFrom, setDateFrom] = useState<string>('');
-  const [dateTo, setDateTo] = useState<string>('');
-  const [sortBy, setSortBy] = useState<'date-desc' | 'date-asc' | 'accuracy-asc' | 'accuracy-desc'>('date-desc');
-  const [page, setPage] = useState(1);
-
-  /** 当前学科筛选下的可选模块与题型，只列出真实存在的，避免下拉里一堆空选项 */
-  const moduleOptions = useMemo(() => {
-    const scoped = filterSubject === 'all' ? records : records.filter((r) => r.subject === filterSubject);
-    return Array.from(new Set(scoped.map((r) => r.module).filter(Boolean))).sort();
-  }, [records, filterSubject]);
-
-  const typeOptions = useMemo(() => {
-    const scoped = filterSubject === 'all' ? records : records.filter((r) => r.subject === filterSubject);
-    return Array.from(new Set(scoped.map((r) => r.trainingType).filter(Boolean))).sort();
-  }, [records, filterSubject]);
+  // ---- 客户端侧筛选 / 排序（只作用于已加载的页）----
+  /** 可选模块与题型来自服务端 facets（覆盖整段历史），不是「已加载 20 条里出现过的值」 */
+  const moduleOptions = facets.module;
+  const typeOptions = facets.trainingType;
 
   const filtered = useMemo(() => {
-    let list = filterSubject === 'all' ? records : records.filter((r) => r.subject === filterSubject);
+    let list = records;
     if (filterModule !== 'all') list = list.filter((r) => r.module === filterModule);
     if (filterType !== 'all') list = list.filter((r) => r.trainingType === filterType);
-    if (dateFrom) list = list.filter((r) => String(r.date ?? '') >= dateFrom);
-    if (dateTo) list = list.filter((r) => String(r.date ?? '') <= dateTo);
 
     const accuracy = (r: TrainingRecord) =>
       r.totalQuestions > 0 ? (r.totalQuestions - r.errorCount) / r.totalQuestions : 0;
@@ -115,21 +176,12 @@ export function TrainingsPage() {
     else if (sortBy === 'accuracy-asc') sorted.sort((a, b) => accuracy(a) - accuracy(b));
     else sorted.sort((a, b) => accuracy(b) - accuracy(a));
     return sorted;
-  }, [records, filterSubject, filterModule, filterType, dateFrom, dateTo, sortBy]);
+  }, [records, filterModule, filterType, sortBy]);
 
-  // 筛选条件变化时回到第一页，避免停在越界页
-  useEffect(() => {
-    setPage(1);
-  }, [filterSubject, filterModule, filterType, dateFrom, dateTo, sortBy]);
-
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  const safePage = Math.min(page, totalPages);
-  const pageItems = useMemo(
-    () => filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE),
-    [filtered, safePage],
-  );
   const hasActiveFilter =
     filterModule !== 'all' || filterType !== 'all' || dateFrom !== '' || dateTo !== '';
+  /** 有更早记录没加载时，客户端筛选/排序只覆盖已加载部分 —— 必须显式告知 */
+  const partialView = cursor.hasMore && (hasActiveFilter || sortBy !== 'date-desc');
 
   const handleSave = async (draft: TrainingRecord) => {
     const record = withTrainingSemantics(draft);
@@ -159,14 +211,17 @@ export function TrainingsPage() {
     setRecent(nextRecent);
     await setMeta(RECENT_KEY, nextRecent);
     setShowForm(false);
-    void refresh();
+    // 首页只有 20 条：补录一条很久以前的日期时它会落在加载范围之外，
+    // 不说清楚的话用户看到「列表没变化」会以为没存上
+    const loaded = await refresh();
+    const hint = loaded.some((item) => item.id === record.id) ? '' : '（日期较早，需点「加载更多」才能看到）';
 
     if (newGapCount > 0) {
-      showToast(`训练已保存,自动归集 ${newGapCount} 个能力缺口到问题中心`, 'success');
+      showToast(`训练已保存,自动归集 ${newGapCount} 个能力缺口到问题中心${hint}`, 'success');
     } else if (derivedGaps.length > 0) {
-      showToast('训练已保存,合并到既有能力缺口', 'success');
+      showToast(`训练已保存,合并到既有能力缺口${hint}`, 'success');
     } else {
-      showToast('训练记录已保存', 'success');
+      showToast(`训练记录已保存${hint}`, 'success');
     }
   };
 
@@ -303,51 +358,54 @@ export function TrainingsPage() {
         )}
 
         <span className="ml-auto text-slate-400">
-          共 {filtered.length} 条
-          {totalPages > 1 && ` · 第 ${safePage}/${totalPages} 页`}
+          已加载 {filtered.length} 条{cursor.hasMore ? '（还有更早记录）' : ''}
         </span>
       </div>
 
+      {partialView && (
+        <div className="text-xs text-amber-600">
+          模块 / 题型筛选与自定义排序只作用于已加载的 {records.length} 条记录；点「加载更多」可继续往前翻。
+        </div>
+      )}
+
       {filtered.length === 0 ? (
-        <EmptyState
-          icon={PlusCircle}
-          title={hasActiveFilter ? '当前筛选没有记录' : copy.emptyTitle}
-          description={hasActiveFilter ? '放宽筛选条件试试，或清空筛选' : copy.emptyDescription}
-          action={
-            <button className="btn-primary" onClick={() => setShowForm(true)}>
-              <PlusCircle size={16} /> {copy.emptyAction}
-            </button>
-          }
-        />
+        loading ? (
+          <div className="card p-6 text-sm text-slate-500">正在加载训练记录…</div>
+        ) : (
+          <EmptyState
+            icon={PlusCircle}
+            title={hasActiveFilter ? '当前筛选没有记录' : copy.emptyTitle}
+            description={hasActiveFilter ? '放宽筛选条件试试，或清空筛选' : copy.emptyDescription}
+            action={
+              hasActiveFilter && cursor.hasMore ? (
+                <button className="btn-secondary" onClick={() => void loadMore()}>
+                  在当前筛选下加载更多
+                </button>
+              ) : (
+                <button className="btn-primary" onClick={() => setShowForm(true)}>
+                  <PlusCircle size={16} /> {copy.emptyAction}
+                </button>
+              )
+            }
+          />
+        )
       ) : (
         <>
           <div className="card divide-y divide-slate-100">
-            {pageItems.map((r) => (
+            {filtered.map((r) => (
               <RecordItem key={r.id} record={r} onDelete={() => handleDelete(r.id)} />
             ))}
           </div>
 
-          {totalPages > 1 && (
-            <div className="flex items-center justify-center gap-2 text-sm">
-              <button
-                className="btn-ghost text-xs disabled:opacity-40"
-                disabled={safePage <= 1}
-                onClick={() => setPage(safePage - 1)}
-              >
-                上一页
+          <div className="flex flex-col items-center gap-2 text-sm">
+            {cursor.hasMore ? (
+              <button className="btn-secondary text-xs disabled:opacity-40" disabled={loadingMore} onClick={() => void loadMore()}>
+                {loadingMore ? '加载中…' : `加载更多（已加载 ${records.length} 条）`}
               </button>
-              <span className="text-slate-500">
-                {safePage} / {totalPages}
-              </span>
-              <button
-                className="btn-ghost text-xs disabled:opacity-40"
-                disabled={safePage >= totalPages}
-                onClick={() => setPage(safePage + 1)}
-              >
-                下一页
-              </button>
-            </div>
-          )}
+            ) : (
+              records.length > 0 && <span className="text-xs text-slate-400">已到最早一条</span>
+            )}
+          </div>
         </>
       )}
 

@@ -5,6 +5,8 @@
  */
 import type { StoreName } from './snapshot';
 import type { StoreDelta } from './syncMirror';
+import type { WindowQuery, StoreWindow } from './recordWindow';
+import { windowSearchParams } from './recordWindow';
 import type { UserProfile } from '../domains/shared/scope';
 
 const ERROR_EVENT = 'ability-growth:data-error';
@@ -159,12 +161,79 @@ export interface StorageStats {
   byStore: Record<StoreName, number>;
 }
 
-export async function getStats(): Promise<StorageStats> {
-  return request<StorageStats>('/api/stats');
+/**
+ * 各表记录数。
+ *
+ * `fresh=true` 时服务端跳过自己的计数缓存（用户手动点「刷新状态」时用），
+ * 平时不带：统计是个概览数字，晚 30-60 秒没有影响，但每次挂载都重算 26 个 COUNT 有影响。
+ */
+export async function getStats(options: { fresh?: boolean } = {}): Promise<StorageStats> {
+  return request<StorageStats>(options.fresh ? '/api/stats?fresh=1' : '/api/stats');
+}
+
+export interface StorageStatus {
+  isOnline: boolean;
+  totalRecords: number;
+  lastSyncAt: string | null;
+}
+
+/**
+ * 存储状态（连通性 + 记录数）在模块级缓存 30s。
+ *
+ * 为什么不是「每次挂载都查一遍」：工作台和存储页各挂一个 useSyncStatus，
+ * 加上 React 严格模式的双次 effect，一次点击就能打出四五个 `/api/stats`，
+ * 而每次统计都是 26 个 COUNT。30 秒内的重复挂载直接复用上一次结果；
+ * 用户点「刷新状态」时传 `fresh` 既绕过这里的缓存，也让服务端跳过它自己的计数缓存。
+ *
+ * 写操作会调 {@link invalidateStorageStatus} 清掉缓存：刚加完记录就看到旧条数，
+ * 看起来就是「没存上」。
+ */
+const STATUS_TTL_MS = 30_000;
+let statusCache: { at: number; value: StorageStatus } | null = null;
+let statusInflight: Promise<StorageStatus> | null = null;
+
+export function invalidateStorageStatus(): void {
+  statusCache = null;
+}
+
+export async function fetchStorageStatus(options: { fresh?: boolean } = {}): Promise<StorageStatus> {
+  if (!options.fresh && statusCache && Date.now() - statusCache.at < STATUS_TTL_MS) return statusCache.value;
+  if (statusInflight) return statusInflight;
+
+  statusInflight = (async () => {
+    const [isOnline, stats] = await Promise.all([
+      checkHealth(),
+      getStats({ fresh: options.fresh === true }).catch(() => null),
+    ]);
+    const value: StorageStatus = { isOnline, totalRecords: stats?.total ?? 0, lastSyncAt: null };
+    statusCache = { at: Date.now(), value };
+    return value;
+  })();
+
+  try {
+    return await statusInflight;
+  } finally {
+    statusInflight = null;
+  }
 }
 
 export async function listRecords<T>(store: StoreName): Promise<T[]> {
   return request<T[]>(`/api/stores/${store}`);
+}
+
+/**
+ * 窗口 / 游标分页读取（契约见 recordWindow.ts）。
+ *
+ * 注意这里**不经过本地镜像**：镜像是「整表 + 水位」语义，回答不了「下一页从哪开始」。
+ * 需要完整历史的页面继续用 listStoreDelta，需要一屏/一段时间的页面用这个。
+ */
+export async function listStoreWindow<T>(
+  store: StoreName,
+  query: Partial<WindowQuery>,
+): Promise<StoreWindow<T>> {
+  const params = windowSearchParams(query);
+  const search = params.toString();
+  return request<StoreWindow<T>>(`/api/stores/${store}${search ? `?${search}` : ''}`);
 }
 
 /**

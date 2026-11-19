@@ -116,6 +116,51 @@ export function filterByGradeLevel<T extends ScopeAwareRecord>(
   return records.filter((record) => recordMatchesGradeLevel(record, gradeLevel));
 }
 
+const quoted = (values: readonly string[]): string => values.map((value) => `'${value}'`).join(', ');
+
+/**
+ * 把 {@link recordMatchesGradeLevel} 编译成 SQL 布尔表达式，供服务端统计直接 `COUNT(*)`。
+ *
+ * 为什么需要：`/api/stats` 以前对学生的做法是「24 张表各整表拉回来再在 JS 里过滤计数」——
+ * 一次统计动辄几百 KB 到几 MB，而它还被挂在界面的定时刷新上。改成一条 SQL 后，
+ * 传输量只剩计数值本身。
+ *
+ * 与 JS 版逐条对齐的三级回落（见 recordMatchesGradeLevel）：
+ * 1. 公考学科 → 恒为 adult；
+ * 2. K12 学科 → 只认显式 K12 学段，缺学段不猜；
+ * 3. 其它 / 无学科 → 用显式学段，连它都没有则按公考兜底。
+ *
+ * 两点实现细节：
+ * - 外层 `json_valid(data)` 守卫：`json_extract` 碰到坏 JSON 会直接报错，
+ *   一行脏数据就能让统计接口 500（读侧 safeParseRecord 也是同样的加固思路）；
+ * - 坏 JSON 走 ELSE 分支按「无学科无学段」处理 = 公考兜底，与 JS 侧
+ *   `safeParseRecord` 退化成 `{id}` 后 `recordMatchesGradeLevel` 的结果一致。
+ *
+ * @param subjectExpr 学科字段的 SQL 表达式（调用方给出，通常是 `json_extract(data,'$.subject')`）
+ * @param gradeExpr   学段字段的 SQL 表达式
+ *
+ * 学段值直接内联成字面量而不是绑定参数：D1 单条语句的绑定参数上限是 100，
+ * 统计接口要对 26 张表各拼一段判定，绑定写法会逼近这个上限（加一张表就可能踩线）。
+ * 内联是安全的——{@link gradeLevel} 的类型是枚举，且这里再做一次运行期校验，
+ * 不满足 {@link isGradeLevel} 直接抛错，不存在把外部输入拼进 SQL 的路径。
+ */
+export function gradeLevelMatchSql(
+  gradeLevel: GradeLevel,
+  subjectExpr: string,
+  gradeExpr: string,
+): string {
+  if (!isGradeLevel(gradeLevel)) throw new Error(`未知学段：${String(gradeLevel)}`);
+  const target = `'${gradeLevel}'`;
+  return `CASE WHEN json_valid(data) THEN (
+      CASE
+        WHEN ${subjectExpr} IN (${quoted(PUBLIC_EXAM_SUBJECTS)}) THEN ('adult' = ${target})
+        WHEN ${subjectExpr} IN (${quoted(K12_SUBJECTS)}) THEN (${gradeExpr} = ${target} AND ${gradeExpr} IN (${quoted(K12_GRADE_LEVELS)}))
+        WHEN ${gradeExpr} IN (${quoted(GRADE_LEVELS)}) THEN (${gradeExpr} = ${target})
+        ELSE (${target} = 'adult')
+      END
+    ) ELSE (${target} = 'adult') END`;
+}
+
 /** 有学科 / 有学段语义、需要按学段隔离的数据表 */
 export const SUBJECT_SCOPED_STORES = new Set([
   'trainings',

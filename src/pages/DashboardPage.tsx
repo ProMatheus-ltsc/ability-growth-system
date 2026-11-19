@@ -4,7 +4,7 @@ import { Sparkles, Target, CheckCircle2, TrendingUp, CalendarClock, RefreshCw, P
 import { ResponsiveGrid } from '@shared/core';
 import { useAppSession } from '../hooks/useAppSession';
 import { useSyncStatus } from '../hooks/useSyncStatus';
-import { findTrainingsByStudent, findGaps, findAbilities, findTasks, getAllRecords } from '../services/localDB';
+import { listRecentTrainings, findGaps, findAbilities, findTasks, getAllRecords } from '../services/localDB';
 import { aggregateBySubject, prioritizeGaps } from '../services/analytics';
 import { DEFAULT_TIME_WINDOW, windowStartDate, withWindowLabel } from '../services/timeWindow';
 import { PageHeader } from '../components/PageHeader';
@@ -90,9 +90,11 @@ export function DashboardPage() {
       const studentId = prefs.currentStudentId;
       const [t, g, a, tk, regs, sp] = await Promise.all([
         // 验收缺陷 #3：此前未传 currentStudentId，多学员数据会混算
-        findTrainingsByStudent(studentId).then((list) =>
-          typeof from === 'string' ? list.filter((x) => x.date >= from) : list,
-        ),
+        // 窗口化（2026-11-19）：工作台只要近 30 天的训练，以前是「镜像整表同步 + JS 过滤」，
+        // 3.5k 行的表每次进首页都要全量搬一遍。现在按写入时间剪枝 + 业务日期收口，
+        // 服务端只回这段时间的行。`since` 走 (workspace, updated_at) 索引，
+        // `dateFrom` 才是「近 30 天」的业务口径（老记录被编辑过时 updated_at 会更新）。
+        listRecentTrainings(studentId, from),
         findGaps(studentId, 'unresolved'),
         findAbilities(studentId),
         findTasks(studentId, 'pending'),
@@ -136,7 +138,7 @@ export function DashboardPage() {
         description={tone.desc}
         actions={
           <>
-            <button className="btn-ghost" onClick={refresh} title="刷新">
+            <button className="btn-ghost" onClick={() => void refresh({ fresh: true })} title="刷新">
               <RefreshCw size={14} />
             </button>
             <Link to="/trainings" className="btn-primary">

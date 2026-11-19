@@ -362,8 +362,8 @@ API 写入训练记录前还会查询库内同 `sourceId` 的旧行，由 `planT
 | `GET  /api/auth/me` | 当前会话用户（含 `profile`） |
 | `GET  /api/profile` | 当前角色 / 学段 / 是否已完成初始化 |
 | `PUT  /api/profile` | 更新角色与学段（写入 `users.role / grade_level`） |
-| `GET  /api/stats` | 当前工作空间各表记录数（学生按本学段统计） |
-| `GET  /api/stores/:store` | 列出记录（**带 `?since=<ISO>` 时走增量**：返回 `{ records, deleted, watermark }`） |
+| `GET  /api/stats` | 当前工作空间各表记录数（学生按本学段统计；30s 计数缓存，`?fresh=1` 穿透） |
+| `GET  /api/stores/:store` | 列出记录。三种模式互不重叠：无参数=整表数组；只有 `?since=<ISO>`=增量 `{ records, deleted, watermark }`；带 `limit`/`before`=窗口游标 `{ records, hasMore, nextBefore, facets? }`（见 5.4） |
 | `GET  /api/stores/:store/:id` | 读取单条 |
 | `PUT  /api/stores/:store/:id` | 新增/覆盖单条 |
 | `DELETE /api/stores/:store/:id` | 删除单条（同时打删除墓碑） |
@@ -383,6 +383,26 @@ API 写入训练记录前还会查询库内同 `sourceId` 的旧行，由 `planT
 - 写操作不走乐观镜像（服务端 PUT/bulk 是 lastWriteWins，更旧的不覆盖），只把该表标记为待同步，下次读立即增量
 - 镜像异常（隐私模式、配额、旧库版本）时自动退回整表拉取，不影响主流程
 - 前后端共用 `src/services/syncMirror.ts` 里的常量与合并规则，避免两边对水位/reset 语义理解不一致
+
+#### 窗口 / 游标分页（镜像之外的第二种读法）
+
+镜像回答「全量是什么」，回答不了「下一页从哪开始」——工作台只要近 30 天、训练记录一屏只显示 20 条，
+整表搬运纯属浪费。同一个端点用新参数显式进入窗口模式（`since` 单独出现仍然是增量协议，老客户端不受影响）：
+
+| 参数 | 作用 |
+|------|------|
+| `limit` | 每页条数，1–200，默认 50 |
+| `since` | 写入时间下界（UTC ISO），走 `(workspace, updated_at)` 索引剪枝 |
+| `before` + `beforeId` | 游标：上一页最后一行的 `(排序值, id)`；只给 `before` 时同值行可能重复下发一次（按 id 幂等） |
+| `order` | `updated`（默认，按写入时间）/ `date`（按记录业务日期，列表顺序与用户看到的一致） |
+| `subject` / `studentId` / `dateFrom` / `dateTo` | 服务端筛选，保证翻页语义全局正确 |
+| `facets` | 首页返回 `module`/`trainingType` 等去重值，供筛选下拉完整列出历史选项 |
+
+- 响应 `{ records, hasMore, nextBefore, nextBeforeId, facets? }`；`hasMore` 由「多查一条」判定，不额外 COUNT
+- 游标必须是 `(排序值, id)` 复合键：批量导入会让多行落在同一时间戳，只用时间比较会在页边界整批跳过
+- 学生端的学段隔离也下推到 SQL（`scope.ts` 的 `gradeLevelMatchSql`），否则「取 20 条再筛掉一半」会得到半空的页
+- 契约与 SQL 构造在 `src/services/recordWindow.ts`，前端经 `localDB.getWindowRecords / getAllWindowRecords` 统一做学段过滤与归一化
+- 备份、导出、`DELETE /api/stores` 等仍在服务端走内部全量路径，不受窗口参数影响
 
 **角色与学段过滤**: 角色是服务端概念（`users.role`），不是前端视图。
 `student` 账号的读写、统计、备份恢复与清空都只作用于 `users.grade_level` 对应的学段；

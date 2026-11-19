@@ -11,8 +11,8 @@
  *   POST   /api/auth/logout                  退出并删除会话
  *   GET    /api/auth/me                      当前登录用户
  *   GET    /api/health                       连通性
- *   GET    /api/stats                        当前工作空间各表记录数
- *   GET    /api/stores/:store                列出记录
+ *   GET    /api/stats                        当前工作空间各表记录数（30s 缓存，fresh=1 穿透）
+ *   GET    /api/stores/:store                列出记录（整表 / 增量 / 窗口三模式，见下）
  *   GET    /api/stores/:store/:id            读取单条
  *   PUT    /api/stores/:store/:id            新增/覆盖单条
  *   DELETE /api/stores/:store/:id            删除单条
@@ -21,6 +21,11 @@
  *   GET    /api/backups                      备份列表
  *   POST   /api/backups                      创建备份
  *   POST   /api/backups/:id/restore          用备份覆盖当前工作空间
+ *
+ * `GET /api/stores/:store` 三种模式（互不重叠，老客户端的 `since` 语义保持不变）：
+ *   无参数        → 整表数组（备份 / 导出 / 内部全量路径）
+ *   只有 since    → 增量同步 `{records, deleted, watermark}`（客户端镜像用）
+ *   limit / before → 窗口 / 游标 `{records, hasMore, nextBefore, facets?}`
  */
 import type { D1Database, D1PreparedStatement, PagesFunction } from '@cloudflare/workers-types';
 import {
@@ -51,6 +56,14 @@ import {
   validateRecordId,
   validateRecordPayload,
 } from '../../src/services/recordSchema';
+import {
+  buildFacetSql,
+  buildWindowSql,
+  parseWindowQuery,
+  type StoreWindow,
+  type WindowFacetField,
+  type WindowQuery,
+} from '../../src/services/recordWindow';
 import { guardTrainingRecords } from '../../src/domains/public-exam';
 import {
   dedupeTrainingRecordsByIdempotencyKey,
@@ -60,10 +73,15 @@ import {
 import type { TrainingRecord } from '../../src/domain/types';
 import {
   filterStoreRecordsForGrade,
+  gradeLevelMatchSql,
   isGradeLevel,
   isScopeManagedStore,
   isUserRole,
+  K12_ONLY_STORES,
   normalizeRecordScope,
+  PUBLIC_EXAM_ONLY_STORES,
+  SUBJECT_SCOPED_STORES,
+  GRADE_SCOPED_STORES,
   validateStoreRecordScope,
   type ScopeAwareRecord,
   type UserProfile,
@@ -83,6 +101,27 @@ const MAX_REQUEST_BYTES = 8 * 1024 * 1024;
 /** 单次批量写入条数上限：超过说明客户端在把 bulk 当整库导入用 */
 const MAX_BULK_RECORDS = 1000;
 const SNAPSHOT_VERSION = '2.2.0';
+
+/**
+ * `/api/stats` 的计数缓存。
+ *
+ * isolate 级（同一实例内共享）+ 浏览器私有缓存 30s：两个页面先后挂载时，
+ * 第二次连网络都不走。写操作不主动失效——概览计数晚 30-60 秒无碍，
+ * 用户点「刷新状态」时客户端带 fresh=1 直接穿透。
+ */
+const STATS_TTL_MS = 30_000;
+const STATS_CACHE_HEADER = 'private, max-age=30';
+const STATS_CACHE_MAX = 200;
+const statsCache = new Map<string, { at: number; value: { total: number; byStore: Record<string, number> } }>();
+
+function rememberStats(key: string, value: { total: number; byStore: Record<string, number> }): void {
+  statsCache.set(key, { at: Date.now(), value });
+  // 简单容量上限：Map 按插入顺序，超限就丢最早那条（不追求严格 LRU）
+  if (statsCache.size > STATS_CACHE_MAX) {
+    const oldest = statsCache.keys().next().value;
+    if (oldest !== undefined) statsCache.delete(oldest);
+  }
+}
 
 // 会话 Cookie 名、有效期、每用户会话数上限、限流窗口等认证常量
 // 统一由 functions/api/auth.ts（@shared/core 统一认证）提供。
@@ -669,6 +708,63 @@ async function listStore(
   return gradeLevel ? filterStoreRecordsForGrade(store, records, gradeLevel) : records;
 }
 
+/**
+ * 窗口 / 游标分页读取（契约见 src/services/recordWindow.ts）。
+ *
+ * 与 {@link listStore} 的区别只在「读到哪一行为止」，解析与学段过滤完全一致：
+ * 因此窗口页里的记录形状、字段补全、坏行降级都与整表读一条不差。
+ *
+ * 只有第一页（没有 before）才聚合 facets：翻页时重复算一遍 DISTINCT 纯属浪费。
+ */
+export async function listStoreWindow(
+  db: D1Database,
+  store: StoreName,
+  workspace: string,
+  query: WindowQuery,
+  gradeLevel?: GradeLevel,
+): Promise<StoreWindow<JsonRecord>> {
+  // 学段隔离下推到 SQL：取 20 条再筛掉一半会让学生看到半空的页，翻页次数也翻倍。
+  // 返回前仍走一次 filterStoreRecordsForGrade（见下），SQL 只是优化，契约以 JS 为准。
+  const scope = gradeLevel ? storeScopePredicate(store, gradeLevel) : null;
+  if (scope === 'none') return { records: [], hasMore: false };
+  const extra = scope ?? undefined;
+
+  const { sql, params } = buildWindowSql(store, query, workspace, extra);
+  const result = await db
+    .prepare(sql)
+    .bind(...params)
+    .all<{ id: string; data: string; cursor_value: string | null }>();
+  const rows = result.results ?? [];
+  // 多查了一条：有富余就说明还有下一页
+  const hasMore = rows.length > query.limit;
+  const page = hasMore ? rows.slice(0, query.limit) : rows;
+  const last = page[page.length - 1];
+  const records = page.map((row) => safeParseRecord(row.id, row.data));
+
+  const window: StoreWindow<JsonRecord> = {
+    records: gradeLevel ? filterStoreRecordsForGrade(store, records, gradeLevel) : records,
+    hasMore,
+    ...(last ? { nextBefore: last.cursor_value ?? '', nextBeforeId: last.id } : {}),
+  };
+
+  if (query.facets.length > 0 && query.before === undefined) {
+    const facets: Partial<Record<WindowFacetField, string[]>> = {};
+    for (const field of query.facets) {
+      const facet = buildFacetSql(store, query, workspace, field, extra);
+      const facetRows = await db
+        .prepare(facet.sql)
+        .bind(...facet.params)
+        .all<{ value: string | null }>();
+      facets[field] = (facetRows.results ?? [])
+        .map((row) => row.value)
+        .filter((value): value is string => typeof value === 'string' && value.length > 0);
+    }
+    window.facets = facets;
+  }
+
+  return window;
+}
+
 // ============ 增量同步（updated_at 水位 + 删除墓碑） ============
 //
 // 前端每次读表都全量拉一遍（trainings 3.5k 行）既慢又费 D1 读配额。
@@ -1009,11 +1105,73 @@ async function importSnapshot(
   return counts;
 }
 
-async function countStores(db: D1Database, workspace: string): Promise<Record<string, number>> {
-  const columns = STORE_NAMES.map((store) => `(SELECT COUNT(*) FROM ${store} WHERE workspace = ?) AS ${store}`).join(', ');
+/**
+ * 统计各表条数的 SQL。
+ *
+ * 两种口径：
+ * - 教师：每张表 `COUNT(*)`，全部拼在一条语句里（26 个子查询，一次往返）；
+ * - 学生：只统计本学段可见的行，学段判定**下推到 SQL**（{@link gradeLevelMatchSql}）。
+ *
+ * 学生口径曾经是「24 张表各整表拉回 JS 再过滤计数」——统计一次能搬几百 KB 到几 MB，
+ * 而它还挂在界面定时刷新上。改成一个 COUNT 后传输量只剩计数值，
+ * 过滤口径仍与 `filterStoreRecordsForGrade` 逐条对齐（tests/statsCount.test.ts 守着）。
+ */
+function storeScopePredicate(
+  store: StoreName,
+  gradeLevel: GradeLevel,
+): { sql: string; params: string[] } | 'none' | null {
+  const domain = gradeLevel === 'adult' ? 'public-exam' : 'k12';
+  if (PUBLIC_EXAM_ONLY_STORES.has(store)) return domain === 'public-exam' ? null : 'none';
+  if (K12_ONLY_STORES.has(store)) return domain === 'public-exam' ? 'none' : subjectGradeMatch(gradeLevel);
+  if (SUBJECT_SCOPED_STORES.has(store) || GRADE_SCOPED_STORES.has(store)) {
+    return subjectGradeMatch(gradeLevel);
+  }
+  return null;
+}
+
+function subjectGradeMatch(gradeLevel: GradeLevel): { sql: string; params: string[] } {
+  return {
+    sql: gradeLevelMatchSql(gradeLevel, "json_extract(data, '$.subject')", "json_extract(data, '$.gradeLevel')"),
+    // 学段值内联进 SQL（见 gradeLevelMatchSql 注释）：D1 单语句绑定参数上限 100
+    params: [],
+  };
+}
+
+export function buildCountStoresSql(
+  workspace: string,
+  gradeLevel?: GradeLevel,
+): { sql: string; params: unknown[] } {
+  const selects: string[] = [];
+  const params: unknown[] = [];
+  for (const store of STORE_NAMES) {
+    if (gradeLevel) {
+      const predicate = storeScopePredicate(store, gradeLevel);
+      // 该表在本学段下不可能有可见行（如 K12 学段看公考专属表）：直接给 0，不发查询
+      if (predicate === 'none') {
+        selects.push(`0 AS ${store}`);
+        continue;
+      }
+      if (predicate) {
+        selects.push(`(SELECT COUNT(*) FROM ${store} WHERE workspace = ? AND (${predicate.sql})) AS ${store}`);
+        params.push(workspace, ...predicate.params);
+        continue;
+      }
+    }
+    selects.push(`(SELECT COUNT(*) FROM ${store} WHERE workspace = ?) AS ${store}`);
+    params.push(workspace);
+  }
+  return { sql: `SELECT ${selects.join(', ')}`, params };
+}
+
+async function countStores(
+  db: D1Database,
+  workspace: string,
+  gradeLevel?: GradeLevel,
+): Promise<Record<string, number>> {
+  const { sql, params } = buildCountStoresSql(workspace, gradeLevel);
   const row = await db
-    .prepare(`SELECT ${columns}`)
-    .bind(...STORE_NAMES.map(() => workspace))
+    .prepare(sql)
+    .bind(...params)
     .first<Record<string, number>>();
   return Object.fromEntries(STORE_NAMES.map((store) => [store, Number(row?.[store] ?? 0)]));
 }
@@ -1249,17 +1407,23 @@ async function handle(request: Request, env: Env): Promise<Response> {
 
   // ============ 统计 ============
   if (segments[0] === 'stats' && segments.length === 1 && method === 'GET') {
-    let byStore: Record<string, number>;
-    if (gradeFilter) {
-      const entries = await Promise.all(
-        STORE_NAMES.map(async (store) => [store, (await listStore(env.DB, store, workspace, gradeFilter)).length] as const),
-      );
-      byStore = Object.fromEntries(entries);
-    } else {
-      byStore = await countStores(env.DB, workspace);
+    // 60s 内存缓存（isolate 级）：`/api/stats` 被 useSyncStatus 在每个页面挂载时调用，
+    // 26 个 COUNT 没必要每挂载一次就重算。写操作不主动失效——30-60 秒的计数陈旧
+    // 对「共 N 条记录」这种概览没有影响，需要即时值时客户端传 fresh=1。
+    const fresh = url.searchParams.get('fresh') === '1';
+    const cacheKey = `${workspace}|${gradeFilter ?? 'all'}`;
+    const cached = statsCache.get(cacheKey);
+    const now = Date.now();
+    if (!fresh && cached && now - cached.at < STATS_TTL_MS) {
+      return json({ workspace, ...cached.value }, 200, { 'Cache-Control': STATS_CACHE_HEADER });
     }
+    const byStore = await countStores(env.DB, workspace, gradeFilter);
     const total = Object.values(byStore).reduce((sum, value) => sum + value, 0);
-    return json({ workspace, total, byStore });
+    rememberStats(cacheKey, { total, byStore });
+    // fresh=1 不写浏览器缓存，否则手动刷新会把自己刷成一份陈旧副本
+    return json({ workspace, total, byStore }, 200, {
+      'Cache-Control': fresh ? 'no-store' : STATS_CACHE_HEADER,
+    });
   }
 
   // ============ 备份 ============
@@ -1352,7 +1516,16 @@ async function handle(request: Request, env: Env): Promise<Response> {
     if (url.pathname.endsWith('/')) return fail('缺少记录 id', 400);
 
     if (segments.length === 2 && method === 'GET') {
-      // 带 since = 增量（首屏全量用 since=1970-01-01，走同一条路径拿水位）
+      // 三种模式，判定顺序不能反（契约见 src/services/recordWindow.ts）：
+      // 1) limit / before → 窗口 / 游标分页
+      // 2) 只有 since      → 增量同步（客户端镜像用）
+      // 3) 都没有          → 整表（备份、导出、后台全量路径）
+      const windowed = url.searchParams.has('limit') || url.searchParams.has('before');
+      if (windowed) {
+        const parsed = parseWindowQuery(url.searchParams);
+        if (!parsed.ok) return fail(parsed.message, 400);
+        return json(await listStoreWindow(env.DB, store, workspace, parsed.query, gradeFilter));
+      }
       const since = url.searchParams.get('since');
       if (since) {
         return json(await listStoreDelta(env.DB, store, workspace, normalizeSince(since), gradeFilter));

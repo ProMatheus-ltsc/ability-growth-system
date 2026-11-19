@@ -47,6 +47,7 @@ import {
 } from '../domains/shared/scope';
 import * as d1 from './d1Client';
 import { normalizeStoreRecord, normalizeStoreRecords } from './recordNormalize';
+import type { StoreWindow, WindowQuery } from './recordWindow';
 import {
   nextWatermark,
   planDeltaApply,
@@ -578,6 +579,8 @@ function filterForActiveScope<S extends StoreName>(store: S, list: StoreValue<S>
 export async function putRecord<S extends StoreName>(store: S, value: StoreValue<S>): Promise<void> {
   await d1.putRecord(store, stampForActiveScope(store, value) as StoreValue<S> & { id: string });
   markStoreStale(store);
+  // 刚加完记录就看到旧的「共 N 条」，用户会以为没存上 —— 状态缓存跟着一起失效
+  d1.invalidateStorageStatus();
 }
 
 export async function getRecord<S extends StoreName>(store: S, id: string): Promise<StoreValue<S> | undefined> {
@@ -593,15 +596,70 @@ export async function getAllRecords<S extends StoreName>(store: S): Promise<Stor
   return normalizeStoreRecords(store, list);
 }
 
+// ============ 窗口 / 游标读取（不经过镜像） ============
+//
+// 镜像回答的是「全量是什么」，回答不了「下一页从哪开始」：
+// 它的水位是同步进度，不是排序游标。所以窗口读直接打服务端，但**出口口径不变**——
+// 仍然在这里统一做学段过滤与记录归一化，页面拿到的形状与 getAllRecords 完全一致。
+
+/**
+ * 读一页窗口数据。
+ *
+ * @param query 见 src/services/recordWindow.ts。`limit` 缺省时服务端按 50 返回。
+ */
+export async function getWindowRecords<S extends StoreName>(
+  store: S,
+  query: Partial<WindowQuery>,
+): Promise<StoreWindow<StoreValue<S>>> {
+  const page = await d1.listStoreWindow<StoreValue<S>>(store, query);
+  const records = normalizeStoreRecords(store, filterForActiveScope(store, page.records));
+  return { ...page, records };
+}
+
+/**
+ * 把窗口读到底（用于「这段窗口内的聚合」场景，如工作台近 30 天）。
+ *
+ * 为什么要循环：聚合结果对「少了一页」是**静默失真**——分母变小、正确率看起来更好，
+ * 页面上没有任何异常可查。所以这里宁可多翻几页，也要拿到 hasMore=false。
+ * `maxPages` 是兜底闸门：真的遇到超大窗口时宁可少算，也不要把首屏拖死
+ * （调用方通过返回值里的 `complete` 自行决定要不要提示）。
+ */
+export async function getAllWindowRecords<S extends StoreName>(
+  store: S,
+  query: Partial<WindowQuery>,
+  options: { maxPages?: number } = {},
+): Promise<{ records: StoreValue<S>[]; complete: boolean }> {
+  const maxPages = Math.max(1, options.maxPages ?? 5);
+  const seen = new Set<string>();
+  const records: StoreValue<S>[] = [];
+  let cursor: { before?: string; beforeId?: string } = {};
+
+  for (let page = 0; page < maxPages; page += 1) {
+    const result = await getWindowRecords(store, { ...query, ...cursor });
+    for (const record of result.records) {
+      const id = recordId(record);
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      records.push(record);
+    }
+    if (!result.hasMore) return { records, complete: true };
+    if (result.nextBefore === undefined) return { records, complete: false };
+    cursor = { before: result.nextBefore, beforeId: result.nextBeforeId };
+  }
+  return { records, complete: false };
+}
+
 export async function deleteRecord<S extends StoreName>(store: S, id: string): Promise<void> {
   await d1.deleteRecord(store, id);
   markStoreStale(store);
+  d1.invalidateStorageStatus();
 }
 
 export async function bulkPut<S extends StoreName>(store: S, records: StoreValue<S>[]): Promise<void> {
   const stamped = records.map((record) => stampForActiveScope(store, record));
   await d1.bulkPut(store, stamped as (StoreValue<S> & { id: string })[]);
   markStoreStale(store);
+  d1.invalidateStorageStatus();
 }
 
 // ============ 领域查询辅助 ============
@@ -615,6 +673,48 @@ export async function findTrainingsByStudent(studentId?: string): Promise<Traini
 export async function findTrainingsInRange(fromDate: string, toDate?: string): Promise<TrainingRecord[]> {
   const list = await getAllRecords('trainings');
   return list.filter((r) => r.date >= fromDate && (toDate ? r.date <= toDate : true));
+}
+
+/**
+ * 某段时间内的训练记录（工作台「近 30 天」等聚合场景）。
+ *
+ * 走窗口读而不是整表镜像：工作台只要近 30 天，却因为读训练表而触发整表同步
+ * （3.5k 行 / 数 MB），首屏大部分流量都花在了它不要的数据上。
+ *
+ * 两个关键参数的分工：
+ * - `since` = 窗口起点（按写入时间）：能走 `(workspace, updated_at)` 索引剪枝；
+ * - `dateFrom` = 同一个起点（按业务日期）：这才是「近 30 天」的口径，
+ *   否则「上周补录的老日期训练」会因为写入时间新而混进来、而「上个月录入但日期在窗口内」
+ *   的行又可能被 since 剪掉。
+ *
+ * 窗口读不全（超过翻页闸门）时**退回整表镜像**：聚合数字算少是静默失真，
+ * 慢一点但准确，比一个对不上的正确率更可取。这条路实际几乎不会走到
+ * （30 天内 2000 条以上训练记录）。
+ */
+export async function listRecentTrainings(
+  studentId: string | undefined,
+  fromDate: string | null,
+): Promise<TrainingRecord[]> {
+  // 剪枝下界要比窗口起点再早一天：`since` 比的是 UTC 写入时间，而用户在本地凌晨
+  // 录入的行，其 UTC 时间会落到窗口起点之前（UTC+8 差 8 小时，最大的时区差 14 小时）。
+  // 精确口径由 `dateFrom` 决定，这里放宽只会多取几条、不会多算。
+  const pruneFrom = fromDate
+    ? new Date(Date.parse(`${fromDate}T00:00:00.000Z`) - 86_400_000).toISOString()
+    : undefined;
+
+  const windowQuery: Partial<WindowQuery> = {
+    order: 'date',
+    limit: 200,
+    ...(studentId ? { studentId } : {}),
+    ...(pruneFrom ? { since: pruneFrom } : {}),
+    ...(fromDate ? { dateFrom: fromDate } : {}),
+  };
+
+  const { records, complete } = await getAllWindowRecords('trainings', windowQuery, { maxPages: 10 });
+  const list = complete ? records : await getAllRecords('trainings');
+  const scoped = studentId ? list.filter((record) => record.studentId === studentId) : list;
+  const bounded = fromDate ? scoped.filter((record) => record.date >= fromDate) : scoped;
+  return [...bounded].sort((a, b) => b.date.localeCompare(a.date));
 }
 
 export async function findGaps(studentId?: string, status?: AbilityGap['status']): Promise<AbilityGap[]> {
@@ -691,4 +791,5 @@ export async function setMeta(key: string, value: unknown): Promise<void> {
 export async function clearAllBusinessData(): Promise<void> {
   await d1.clearWorkspace();
   await invalidateSyncedData();
+  d1.invalidateStorageStatus();
 }

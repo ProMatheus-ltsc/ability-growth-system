@@ -16,8 +16,8 @@ export function StoragePage() {
   const [busy, setBusy] = useState(false);
   const [busyLabel, setBusyLabel] = useState('');
 
-  const refreshCloud = useCallback(async () => {
-    void refresh();
+  const refreshCloud = useCallback(async (options: { fresh?: boolean } = {}) => {
+    void refresh(options);
     const points = await listBackups().catch(() => []);
     setBackups(points);
   }, [refresh]);
@@ -31,7 +31,8 @@ export function StoragePage() {
     setBusyLabel(label);
     try {
       await action();
-      await refreshCloud();
+      // 备份/恢复/重建之后计数一定变了，必须穿透两处缓存（客户端 30s + 服务端 60s）
+      await refreshCloud({ fresh: true });
     } catch (error) {
       showToast(`${label}失败：${error instanceof Error ? error.message : '未知错误'}`, 'error');
     } finally {
@@ -77,7 +78,7 @@ export function StoragePage() {
         title="数据存储 · Cloudflare D1"
         description="业务数据直接存储于 D1，通过 Pages 同域 /api 读写；同一用户名在不同设备自动共享数据。"
         actions={
-          <button className="btn-ghost" onClick={refreshCloud} disabled={refreshing || busy}>
+          <button className="btn-ghost" onClick={() => void refreshCloud({ fresh: true })} disabled={refreshing || busy}>
             <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} /> 刷新状态
           </button>
         }
